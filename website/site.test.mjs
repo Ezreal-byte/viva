@@ -22,8 +22,8 @@ for (const locale of ['zh', 'en']) {
     for (const language of ['zh', 'en']) assert.ok(html.includes(`href="/${language}/"`));
     for (const text of ['1,697,506', 'macOS', 'Windows', 'Linux']) assert.ok(html.includes(text), `missing ${text}`);
     assert.ok(html.includes(`href="/${locale}/docs/getting-started/"`));
-    // The figures that have not reached their report's target belong to the
-    // performance guide, and the landing page has to point at it.
+    // The figures that have not reached their report's target live in the
+    // performance guide; the landing page still has to lead a reader to them.
     assert.ok(html.includes(`href="/${locale}/docs/performance/"`), 'no link to the measurements that are not on the page');
     assert.ok(!html.includes('26.3–26.8 MiB'), 'a figure below its target is on the landing page');
     assert.ok(html.includes('class="preview-canvas"'), 'the live component preview is missing');

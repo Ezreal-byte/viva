@@ -31,7 +31,7 @@ const english = {
   ] satisfies Card[],
   measuredHeading: 'Measured, reproducibly',
   measuredIntro: 'Every number is quoted from a benchmark report in the repository, on the machine and build named there — you can rerun them yourself.',
-  measuredLink: 'Full benchmarks, including what has not reached its target yet →',
+  measuredLink: 'Full benchmarks →',
   measures: {
     binary: { label: 'Stripped executable', value: '1.6 MiB', detail: '1,697,506 bytes, a minimal macOS window with a Metal pipeline (M0, Apple silicon).' },
     idle: { label: 'GPU submissions while idle', value: '0', detail: 'After the first present an unchanged window submits nothing, and settled CPU reads 0.0% (M0).' },
@@ -74,7 +74,7 @@ const chinese: typeof english = {
   ],
   measuredHeading: '实测，可复现',
   measuredIntro: '每个数字都引自仓库里的基准报告，写明了机器和构建方式——你可以自己重新跑一遍。',
-  measuredLink: '完整基准，包括还没有达到目标的项 →',
+  measuredLink: '完整基准 →',
   measures: {
     binary: { label: '剥离后的可执行文件', value: '1.6 MiB', detail: '1,697,506 字节，带 Metal 管线的最小 macOS 窗口（M0，Apple 芯片）。' },
     idle: { label: '空闲时的 GPU 提交', value: '0', detail: '首次呈现之后，未变化的窗口不提交任何东西，稳定后 CPU 读数为 0.0%（M0）。' },
