@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { figures, tiles } from './figures.ts';
+import { figures, homepageTiles, tiles } from './figures.ts';
 import { home } from './home.ts';
 
 const docs = new URL('../../../docs/', import.meta.url);
@@ -36,6 +36,12 @@ test('both languages describe exactly the tiles the page shows', () => {
     for (const measure of Object.values(home[locale].measures)) {
       assert.ok(measure.label.trim() && measure.value.trim() && measure.detail.trim());
     }
+  }
+});
+
+test('the landing page shows no figure its report calls a miss', () => {
+  for (const tile of homepageTiles) {
+    assert.ok(!tile.miss, `${tile.id} is a miss and belongs in the performance guide, not the landing page`);
   }
 });
 

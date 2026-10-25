@@ -6,7 +6,7 @@ import Icon from '../../components/Icon.svelte';
 import { readCatalog } from '../../lib/catalog';
 import { locales, isLocale, localizePage, componentPath, type Locale } from '../../lib/i18n';
 import { homeText } from '../../lib/home';
-import { tiles } from '../../lib/figures';
+import { homepageTiles } from '../../lib/figures';
 import { homePath, docsPath } from '../../lib/routes';
 
 export const getStaticPaths = (() => locales.map(lang => ({ params: { lang } }))) satisfies GetStaticPaths;
@@ -16,8 +16,6 @@ const text = homeText(locale);
 const catalog = readCatalog();
 const button = localizePage(catalog.pages.find(entry => entry.ID === 'button')!, locale);
 const alternates = Object.fromEntries(locales.map(language => [language, homePath(language)])) as Record<Locale, string>;
-const measured = tiles.filter(entry => !entry.miss);
-const misses = tiles.filter(entry => entry.miss);
 ---
 
 <BaseLayout {locale} title={text.title} summary={text.summary} section="home" {alternates}>
@@ -31,12 +29,16 @@ const misses = tiles.filter(entry => entry.miss);
           <a class="home-button home-button-primary" href={docsPath(locale, 'getting-started')}>{text.start}<Icon name="arrow" size={14} /></a>
           <a class="home-button" href={componentPath(locale)}>{text.browse}</a>
         </div>
+        <dl class="home-stats">
+          {text.heroStats.map(stat => <div><dt>{stat.label}</dt><dd>{stat.value}</dd></div>)}
+        </dl>
       </div>
-      <div class="home-hero-preview">
-        <h2>{text.previewHeading}</h2>
-        <p>{text.previewText}</p>
-        <Preview {locale} componentID={button.ID} title={button.Title} example={button.Examples[0]} revision={button.Revision} client:load />
-      </div>
+    </section>
+
+    <section class="home-section" aria-labelledby="preview">
+      <h2 id="preview">{text.previewHeading}</h2>
+      <p class="home-section-intro">{text.previewText}</p>
+      <Preview {locale} componentID={button.ID} title={button.Title} example={button.Examples[0]} revision={button.Revision} client:load />
     </section>
 
     <section class="home-section" aria-labelledby="principles">
@@ -47,14 +49,11 @@ const misses = tiles.filter(entry => entry.miss);
     <section class="home-section" aria-labelledby="measured">
       <h2 id="measured">{text.measuredHeading}</h2>
       <p class="home-section-intro">{text.measuredIntro}</p>
-      <dl class="home-measures">{measured.map(entry => {
+      <dl class="home-measures">{homepageTiles.map(entry => {
         const measure = text.measures[entry.id as keyof typeof text.measures];
         return <div class="home-measure"><dt>{measure.label}</dt><dd><strong>{measure.value}</strong><span>{measure.detail}</span></dd></div>;
       })}</dl>
-      <dl class="home-measures home-misses">{misses.map(entry => {
-        const measure = text.measures[entry.id as keyof typeof text.measures];
-        return <div class="home-measure"><dt>{measure.label}</dt><dd><strong>{measure.value}</strong><span>{measure.detail}</span></dd></div>;
-      })}</dl>
+      <p class="home-note"><a href={docsPath(locale, 'performance')}>{text.measuredLink}</a></p>
     </section>
 
     <section class="home-section" aria-labelledby="platforms">

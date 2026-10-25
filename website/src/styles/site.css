@@ -1,4 +1,5 @@
 @layer base {
+  *, *::before, *::after { box-sizing: border-box; }
   :root {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
     font-size: 16px;
@@ -245,21 +246,23 @@
   .guide-navigation { padding-top: 36px; justify-content: flex-start; }
   .guide-navigation .component-group + .component-group { margin-top: 28px; }
   .home { max-width: 1200px; margin: auto; padding: 0 32px 72px; }
-  .home-hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; align-items: center; padding: 72px 0 56px; }
+  .home-hero { display: block; padding: 88px 0 24px; }
   .home-section { margin-top: 72px; }
 }
 
 @layer components {
   .home-eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .02em; margin-bottom: 18px; }
-  .home h1 { font-size: 52px; line-height: 1.12; letter-spacing: -.035em; }
+  .home h1 { font-size: 52px; line-height: 1.12; letter-spacing: -.035em; overflow-wrap: break-word; word-break: normal; }
   .home-lead { margin-top: 22px; font-size: 18px; line-height: 1.75; max-width: 34em; }
   .home-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
   .home-button { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 18px; border: 1px solid var(--strong-border); border-radius: var(--radius); font-size: 14px; font-weight: 500; color: var(--text); background: var(--background); }
   .home-button:hover { background: var(--surface-hover); }
   .home-button-primary { background: var(--text); color: var(--background); border-color: var(--text); }
   .home-button-primary:hover { background: var(--text); opacity: .86; }
-  .home-hero-preview h2 { font-size: 17px; }
-  .home-hero-preview > p { margin: 8px 0 16px; font-size: 14px; }
+  .home-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; margin: 52px 0 0; padding-top: 30px; border-top: 1px solid var(--border); }
+  .home-stats div { display: flex; flex-direction: column-reverse; gap: 6px; }
+  .home-stats dt { font-size: 13px; color: var(--muted); }
+  .home-stats dd { margin: 0; font-size: 38px; font-weight: 600; letter-spacing: -.03em; line-height: 1.1; }
   .home-section > h2 { font-size: 26px; letter-spacing: -.02em; }
   .home-section-intro { margin: 10px 0 0; font-size: 15px; max-width: 46em; }
   .home-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 24px; }
@@ -268,13 +271,11 @@
   .home-card p { margin-top: 10px; font-size: 14px; line-height: 1.7; }
   .home-card .home-stack { margin-top: 6px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
   .home-measures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 32px; margin: 24px 0 0; padding: 0; border-top: 1px solid var(--border); }
-  .home-misses { margin-top: 28px; }
   .home-measure { padding: 18px 0; border-bottom: 1px solid var(--border); }
   .home-measure dt { font-size: 13px; color: var(--muted); }
   .home-measure dd { margin: 6px 0 0; display: grid; gap: 6px; }
   .home-measure strong { font-size: 26px; font-weight: 600; letter-spacing: -.02em; color: var(--text); }
   .home-measure span { font-size: 13px; line-height: 1.6; color: var(--doc-secondary); }
-  .home-misses .home-measure strong { color: var(--error); }
   .home-note { margin-top: 18px; font-size: 14px; }
   .home-note a, .markdown a { color: var(--text); text-decoration: underline; text-decoration-color: var(--strong-border); text-underline-offset: 3px; }
   .home-note a:hover, .markdown a:hover { text-decoration-color: var(--text); }
@@ -320,7 +321,9 @@
 @layer responsive {
   @media (max-width: 1150px) {
     .docs-grid-guide { grid-template-columns: 220px minmax(0, 1fr); }
-    .home-hero { grid-template-columns: minmax(0, 1fr); gap: 40px; padding-top: 48px; }
+    .home-hero { padding-top: 56px; }
+    .home-stats { grid-template-columns: minmax(0, 1fr); gap: 24px; margin-top: 40px; }
+    .home-stats dd { font-size: 30px; }
     .home h1 { font-size: 44px; }
   }
   @media (max-width: 800px) {
@@ -330,10 +333,14 @@
     .markdown table { display: block; overflow-x: auto; }
     .guide-navigation .component-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
-  @media (max-width: 480px) {
+  @media (max-width: 520px) {
+    .header-inner { padding: 0 16px; gap: 16px; }
+    .header-navigation { gap: 16px; }
+    .header-end { gap: 12px; }
     .home { padding: 0 18px 48px; }
-    .home h1 { font-size: 36px; }
+    .home h1 { font-size: 34px; }
     .home-lead { font-size: 16px; }
+    .home-stats dd { font-size: 30px; }
   }
 }
 

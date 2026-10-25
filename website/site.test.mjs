@@ -16,12 +16,16 @@ test('the root redirects to the Chinese home page', () => {
 });
 
 for (const locale of ['zh', 'en']) {
-  test(`${locale} home page states its numbers, its misses and its platforms`, () => {
+  test(`${locale} home page states its numbers, its platforms and where the rest lives`, () => {
     const html = readPage(`${locale}/`);
     assert.ok(html.includes(`<html lang="${lang(locale)}"`));
     for (const language of ['zh', 'en']) assert.ok(html.includes(`href="/${language}/"`));
-    for (const text of ['1,697,506', '26.3–26.8 MiB', '123–374 ms', 'macOS', 'Windows', 'Linux']) assert.ok(html.includes(text), `missing ${text}`);
+    for (const text of ['1,697,506', 'macOS', 'Windows', 'Linux']) assert.ok(html.includes(text), `missing ${text}`);
     assert.ok(html.includes(`href="/${locale}/docs/getting-started/"`));
+    // The figures that have not reached their report's target belong to the
+    // performance guide, and the landing page has to point at it.
+    assert.ok(html.includes(`href="/${locale}/docs/performance/"`), 'no link to the measurements that are not on the page');
+    assert.ok(!html.includes('26.3–26.8 MiB'), 'a figure below its target is on the landing page');
     assert.ok(html.includes('class="preview-canvas"'), 'the live component preview is missing');
     assert.equal([...html.matchAll(/<h1[ >]/g)].length, 1);
   });
