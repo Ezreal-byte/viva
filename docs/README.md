@@ -24,6 +24,10 @@ can run its programs.
   do.
 - [benchmarks/](benchmarks/) — every measurement, with the machine, the build
   mode, and the method recorded alongside the numbers.
+- [benchmarks/2026-10-25-performance-audit-darwin-arm64.md](benchmarks/2026-10-25-performance-audit-darwin-arm64.md)
+  — where the next performance gains are: hot spots, phase attribution, and a
+  prioritized roadmap, each backed by a measured number. §10 records what was
+  implemented afterwards and re-measures it against the same commit.
 
 ## Writing a document here
 
