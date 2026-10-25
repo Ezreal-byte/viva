@@ -33,9 +33,9 @@ Viva reaches Cocoa and Metal through cgo; on Linux, X11 with the system XCB and
 Vulkan loaders; on Windows, Win32 with Direct3D 11 and DirectWrite. Viva loads
 the system libraries at runtime and bundles none of them.
 
-There is no tagged release yet, so `@latest` resolves to a pseudo-version on the
-main branch. Guides, the API reference, and a component catalog with live
-previews live in [`website/`](website/); run it with `npm run dev` there.
+The current release is `v0.1.0`; name it explicitly (`@v0.1.0`) to pin it. Guides,
+the API reference, and a component catalog with live previews live in
+[`website/`](website/); run it with `npm run dev` there.
 
 Everything below describes this repository: its measurements, its own programs,
 and how to work on the framework rather than with it.
