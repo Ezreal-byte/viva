@@ -55,6 +55,10 @@ import (
 //	                           (a dialog fading in) are played to their end first. With
 //	                           now, write the current frame as it is, so wait MS; shot
 //	                           PATH now catches an animation MS into it
+//	record DIR MS [FPS]        play MS more of animation and write it to DIR as a PNG
+//	                           sequence and manifest.json, sampling FPS frames a second
+//	                           (default 60); frames that did not change are written once
+//	                           with a longer duration, and ok reports the count
 //	find "label"               ok id=7 x=.. y=.. w=.. h=.. label=".."
 //	hits [filter]              one line per control, then ok
 //	texts [filter]             one line per painted text, then ok
@@ -377,6 +381,27 @@ func execute(session *Session, line string) (reply string, quit bool) {
 		}
 		err := session.Screenshot(arguments[0])
 		return finish(err, " "+arguments[0])
+	case "record":
+		if len(arguments) < 2 || len(arguments) > 3 {
+			return finish(fmt.Errorf("record needs a directory and a duration in ms, and optionally fps"), "")
+		}
+		milliseconds, err := strconv.ParseFloat(arguments[1], 64)
+		if err != nil {
+			return finish(fmt.Errorf("record: %q is not a number", arguments[1]), "")
+		}
+		options := RecordOptions{Duration: time.Duration(milliseconds * float64(time.Millisecond))}
+		if len(arguments) == 3 {
+			fps, err := strconv.Atoi(arguments[2])
+			if err != nil {
+				return finish(fmt.Errorf("record: fps %q is not a whole number", arguments[2]), "")
+			}
+			options.FPS = fps
+		}
+		frames, err := session.Record(arguments[0], options)
+		if frames == 1 {
+			return finish(err, " 1 frame")
+		}
+		return finish(err, fmt.Sprintf(" %d frames", frames))
 	case "find":
 		if len(arguments) != 1 {
 			return finish(fmt.Errorf("find needs one label"), "")

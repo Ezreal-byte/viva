@@ -325,6 +325,11 @@ func (session *Session) Screenshot(path string) error {
 	if err != nil {
 		return err
 	}
+	return writePNG(path, picture)
+}
+
+// writePNG writes picture to path as a PNG.
+func writePNG(path string, picture *image.RGBA) error {
 	file, err := os.Create(path)
 	if err != nil {
 		return err

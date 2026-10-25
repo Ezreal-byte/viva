@@ -88,6 +88,7 @@ key tab
 waitfor "Connected" 5000
 texts
 shot /tmp/frame.png
+record /tmp/frames 700
 quit
 ```
 
@@ -95,7 +96,9 @@ quit
 
 `layout` 会检查当前帧里几乎必然是错误的几何，每个问题输出一行：被裁剪截断的文字、超出所在按钮或输入框的文字、同一层上互相覆盖的两行文字、跑出窗口的文字，以及互相交叉而不是一个包含另一个的可聚焦控件。它从不失败，所以每次改完界面都可以运行它；几行文字比一张图更快读完。它按 Viva 布局所用的参考度量判断文字宽度，所以平台把一行画得宽几个百分点不会被报告。
 
-**截图只在 macOS 上可用。** 那里的离屏渲染器使用窗口自己的 Metal 管线，所以截图在构造上就是窗口的像素。在 Windows 和 Linux 上，协议可以操作并回答查询，但截图会返回 `ErrNoRenderer`。
+**截图和录制需要离屏渲染器。** macOS 上它只链接进以 `-tags vivahead` 构建的产物；Windows 和 Linux 上总是可用。它用窗口自己的管线（Metal、Direct3D 11、Vulkan）绘制，所以抓到的就是窗口的像素。没有渲染器时协议仍可操作并回答查询，但 `Image`、`Screenshot` 和 `Record` 返回 `ErrNoRenderer`。
+
+`record DIR MS [FPS]` 再播放 MS 的动画时钟，把像素发生变化的帧写成从 `frame-0000.png` 开始的文件，外加一份记录每帧停留时长的 `manifest.json`，所以一段过渡可以当成视频而不是一张静止图来审查。重复的帧只写一次并延长它的时长，所以静止的应用只会录到一帧。`shot` 仍是单帧版本，会先把动画播放到静止。
 
 ## 平台一致性
 

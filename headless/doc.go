@@ -22,6 +22,17 @@
 //	text := session.Driver().Clipboard()
 //	session.Screenshot("after.png")
 //
+// Record plays the animation clock and writes the frames whose pixels changed,
+// so a transition can be reviewed as a sequence rather than a still:
+//
+//	frames, err := session.Record("run/frames", headless.RecordOptions{
+//		Duration: 700 * time.Millisecond,
+//	})
+//
+// The PNG files and their lengths in manifest.json are what a video tool needs;
+// frames that repeat are written once, so an application at rest records as one
+// still frame. Recording uses the same offscreen renderers as Image.
+//
 // A running application can be driven the same way without any change to its
 // code: link package headless/auto (behind a build tag, so release builds never
 // contain it) and start the process with VIVA_HEADLESS=1. RunCanvas then serves

@@ -88,6 +88,7 @@ key tab
 waitfor "Connected" 5000
 texts
 shot /tmp/frame.png
+record /tmp/frames 700
 quit
 ```
 
@@ -95,7 +96,9 @@ Every request gets zero or more data lines and one final `ok` or `error` line, s
 
 `layout` reads the frame for geometry that is almost surely a mistake and prints one line each: text cut off by a clip, text that runs out of its button or field, one line drawn over another on the same layer, text that leaves the window, and focusable controls that cross without one containing the other. It never fails, so run it after every change to a screen; a few lines of text are quicker to read than a picture. It judges text by the widths the session lays out with, the platform's text engine as in a window, so a line is reported when it is cut or crosses another on that platform.
 
-**Screenshots exist on macOS only.** There the offscreen renderer uses the window's own Metal pipelines, so a capture is the window's pixels by construction. On Windows and Linux the protocol operates and answers queries, but a screenshot returns `ErrNoRenderer`.
+**Screenshots and recordings need the offscreen renderer.** On macOS it is linked only into builds made with `-tags vivahead`; on Windows and Linux it is always there. It draws with the window's own pipelines (Metal, Direct3D 11, Vulkan), so a capture is the window's pixels by construction. Without a renderer the protocol still operates and answers queries, but `Image`, `Screenshot` and `Record` return `ErrNoRenderer`.
+
+`record DIR MS [FPS]` plays MS more of the animation clock and writes the frames whose pixels changed as `frame-0000.png` onwards, with a `manifest.json` that says how long each is on screen, so a transition can be reviewed as a video instead of a still. A frame that repeats is written once with a longer duration, so an application at rest records as one frame. `shot` is still the single-frame version, and plays animations to rest first.
 
 ## Platform conformance
 
