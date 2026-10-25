@@ -42,10 +42,10 @@ func (rectangle Rectangle) VertexColors() [3]scene.Color {
 }
 
 // Update describes the smallest contiguous rectangle range changed by Apply.
-// Count may extend past the previous instance count when shapes were appended:
-// a backend must grow its retained storage for that suffix rather than reject
-// the count change. Rebuild remains the fallback for deletions and non-tail
-// insertions.
+// Count may extend past the previous instance count when shapes were appended
+// or inserted: a backend must grow its retained storage for that suffix rather
+// than reject the count change. Rebuild remains the fallback for deletions,
+// because a backend's retained storage is sized to the old count.
 type Update struct {
 	First   int
 	Count   int
@@ -57,6 +57,11 @@ func (update Update) Empty() bool {
 	return update.Count == 0 && !update.Rebuild
 }
 
+// node is one node of the retained tree. The geometry of a shape lives only in
+// the flattened rectangles, reached through instanceBySlot; the node carries
+// just the links and kind the tree needs. A node inserted by the current batch
+// has no instance yet and is marked by a freshInstance-encoded slot, resolved
+// from the batch's changes when the batch falls back to a rebuild.
 type node struct {
 	id       scene.ID
 	parent   scene.ID
@@ -64,24 +69,26 @@ type node struct {
 	last     scene.ID
 	previous scene.ID
 	next     scene.ID
-	bounds   scene.Rect
-	color    scene.Color
-	radius   float32
-	points   [3]scene.Point
-	edgeMask uint8
-	shade    scene.Shade
-	shadow   scene.Shadow
 	kind     scene.Kind
 	alive    bool
 }
 
 // Store retains renderer-owned nodes and a flat rectangle instance list.
+// freshInstance marks an instanceBySlot entry that names a change in the batch
+// being applied rather than a rectangle in the store: the node was inserted by
+// this batch and has no instance until the batch finishes flattening it.
+const freshInstance = uint32(1) << 31
+
 type Store struct {
 	nodes          []node
 	instanceBySlot []uint32
 	rectangles     []Rectangle
-	scratch        []scene.ID
-	root           scene.ID
+	// order is the paint order one rebuild computes for the new batch; scratch
+	// is the walk stack. Both are reused, so their capacity tracks the largest
+	// page rather than the number of rebuilds.
+	order   []scene.ID
+	scratch []scene.ID
+	root    scene.ID
 }
 
 // Rectangles returns the current ordered rectangle instances. The result is
@@ -98,10 +105,15 @@ func (store *Store) Apply(changes []scene.Change) (Update, error) {
 
 	oldCount := len(store.rectangles)
 	structureChanged := false
+	deleted := false
 	// appended collects new shape nodes whose insertion may be a pure append
 	// after the last instance. If the chain holds, the store can append them
 	// without rebuilding (and re-uploading) the whole instance list.
 	var appended []scene.Change
+	// inserted indexes the changes that create a shape, in insertion order. A
+	// rebuild resolves their geometry from this batch instead of the rectangles
+	// the store already holds.
+	var inserted []uint32
 	appendOnly := oldCount > 0
 
 	// Deletes are applied before upserts. The scene relinks a deleted node's
@@ -117,6 +129,7 @@ func (store *Store) Apply(changes []scene.Change) (Update, error) {
 				return Update{}, err
 			}
 			structureChanged = true
+			deleted = true
 			appendOnly = false
 		case scene.OperationUpsert:
 		default:
@@ -128,12 +141,17 @@ func (store *Store) Apply(changes []scene.Change) (Update, error) {
 	// node's current neighbours, so an existing node's upsert queued before the
 	// insert of its new predecessor already names that predecessor, which the
 	// store only learns of when it reaches the insert.
-	for _, change := range changes {
+	for index, change := range changes {
 		if change.Operation != scene.OperationUpsert || store.exists(change.ID) {
 			continue
 		}
 		if _, _, err := store.upsert(change); err != nil {
 			return Update{}, err
+		}
+		if change.Kind != scene.KindGroup {
+			slot, _ := change.ID.Slot()
+			store.instanceBySlot[slot] = freshInstance | uint32(len(inserted))
+			inserted = append(inserted, uint32(index))
 		}
 		structureChanged = true
 		if change.Kind == scene.KindGroup || change.Parent != store.root {
@@ -178,7 +196,8 @@ func (store *Store) Apply(changes []scene.Change) (Update, error) {
 				previous = change.ID
 			}
 		}
-		if appendOnly && len(appended) > 0 {
+		switch {
+		case appendOnly && len(appended) > 0:
 			for _, change := range appended {
 				slot, _ := change.ID.Slot()
 				store.instanceBySlot[slot] = uint32(len(store.rectangles) + 1)
@@ -190,8 +209,39 @@ func (store *Store) Apply(changes []scene.Change) (Update, error) {
 			if first > oldCount {
 				first = oldCount
 			}
-		} else {
-			if err := store.rebuild(); err != nil {
+		case !deleted && len(appended) > 0 && oldCount > 0:
+			// Insertions in the middle of the page move the tail of paint
+			// order, but the scene's neighbour links say exactly where each
+			// new shape goes. Splicing it in and renumbering the slots after
+			// it costs one shift of the instance list instead of re-flattening
+			// and re-uploading the whole page. Deletions still rebuild,
+			// because every backend's retained store is sized to the count.
+			for _, change := range appended {
+				at := 0
+				if change.PreviousSibling != 0 {
+					slot, _ := change.PreviousSibling.Slot()
+					instance := store.instanceIndex(slot, change.PreviousSibling)
+					if instance < 0 {
+						if err := store.rebuild(changes, inserted); err != nil {
+							return Update{}, err
+						}
+						return Update{Count: len(store.rectangles), Rebuild: true}, nil
+					}
+					at = instance + 1
+				}
+				store.rectangles = append(store.rectangles, Rectangle{})
+				copy(store.rectangles[at+1:], store.rectangles[at:])
+				store.rectangles[at] = rectangleOf(change)
+				store.reindexFrom(at)
+				if first > at {
+					first = at
+				}
+			}
+			if last < len(store.rectangles)-1 {
+				last = len(store.rectangles) - 1
+			}
+		default:
+			if err := store.rebuild(changes, inserted); err != nil {
 				return Update{}, err
 			}
 			return Update{Count: len(store.rectangles), Rebuild: true}, nil
@@ -215,6 +265,16 @@ func rectangleOf(change scene.Change) Rectangle {
 		EdgeMask: change.EdgeMask,
 		Shade:    change.Shade,
 		Shadow:   change.Shadow,
+	}
+}
+
+// reindexFrom repoints every slot whose instance is at or after index,
+// after an insertion shifted the tail of the instance list.
+func (store *Store) reindexFrom(index int) {
+	for position := index; position < len(store.rectangles); position++ {
+		if slot, ok := store.rectangles[position].ID.Slot(); ok {
+			store.instanceBySlot[slot] = uint32(position + 1)
+		}
 	}
 }
 
@@ -242,23 +302,19 @@ func (store *Store) upsert(change scene.Change) (bool, int, error) {
 			return false, -1, fmt.Errorf("render: structural mutation requires delete and insert for node %d", change.ID)
 		}
 		current.kind = change.Kind
-		current.bounds = change.Bounds
-		current.color = change.Color
-		current.radius = change.Radius
-		current.points = change.Points
-		current.edgeMask = change.EdgeMask
-		current.shade = change.Shade
-		current.shadow = change.Shadow
 		instance := store.instanceIndex(slot, change.ID)
 		if instance >= 0 {
-			store.rectangles[instance].Kind = change.Kind
-			store.rectangles[instance].Bounds = change.Bounds
-			store.rectangles[instance].Color = change.Color
-			store.rectangles[instance].Radius = change.Radius
-			store.rectangles[instance].Points = change.Points
-			store.rectangles[instance].EdgeMask = change.EdgeMask
-			store.rectangles[instance].Shade = change.Shade
-			store.rectangles[instance].Shadow = change.Shadow
+			// Update the drawn geometry in place, leaving Layer, Clipped and
+			// Clip for the application layer to stamp.
+			rectangle := &store.rectangles[instance]
+			rectangle.Kind = change.Kind
+			rectangle.Bounds = change.Bounds
+			rectangle.Color = change.Color
+			rectangle.Radius = change.Radius
+			rectangle.Points = change.Points
+			rectangle.EdgeMask = change.EdgeMask
+			rectangle.Shade = change.Shade
+			rectangle.Shadow = change.Shadow
 		}
 		return false, instance, nil
 	}
@@ -267,13 +323,6 @@ func (store *Store) upsert(change scene.Change) (bool, int, error) {
 	current.parent = change.Parent
 	current.previous = change.PreviousSibling
 	current.kind = change.Kind
-	current.bounds = change.Bounds
-	current.color = change.Color
-	current.radius = change.Radius
-	current.points = change.Points
-	current.edgeMask = change.EdgeMask
-	current.shade = change.Shade
-	current.shadow = change.Shadow
 	current.alive = true
 
 	if change.Parent == 0 {
@@ -372,15 +421,67 @@ func (store *Store) remove(id scene.ID) error {
 	return nil
 }
 
-func (store *Store) rebuild() error {
-	clear(store.instanceBySlot)
-	store.rectangles = store.rectangles[:0]
-	store.scratch = store.scratch[:0]
-	if store.root == 0 {
+// rebuild re-flattens the instance list after a structural change the
+// incremental paths cannot express: a deletion, or a shape inserted somewhere
+// other than the root's tail.
+//
+// Geometry lives only in the flattened rectangles. A live shape reaches its
+// rectangle through instanceBySlot; a shape this batch inserted carries the
+// freshInstance marker and is taken from changes instead. Deletions compact the
+// list in place. Insertions first compute the new paint order from the retained
+// tree, then rewrite the list from the back: an existing instance only ever
+// moves to a later position, so a descending write cannot overwrite an instance
+// it has not read yet.
+func (store *Store) rebuild(changes []scene.Change, inserted []uint32) error {
+	kept := store.rectangles[:0]
+	for _, rectangle := range store.rectangles {
+		slot, ok := rectangle.ID.Slot()
+		if !ok {
+			continue
+		}
+		current := &store.nodes[slot]
+		if current.alive && current.id == rectangle.ID {
+			kept = append(kept, rectangle)
+			store.instanceBySlot[slot] = uint32(len(kept))
+		}
+	}
+	store.rectangles = kept
+	if len(inserted) == 0 {
 		return nil
 	}
-	store.scratch = append(store.scratch, store.root)
+	if store.root == 0 {
+		return fmt.Errorf("render: inserted shapes without a root")
+	}
 
+	// A batch that deleted something and then appended at the root's tail is
+	// still an append once the deletions are compacted, which is the common
+	// shape of a delete: skip the walk and the descending rewrite entirely.
+	last := scene.ID(0)
+	if count := len(store.rectangles); count > 0 {
+		last = store.rectangles[count-1].ID
+	}
+	tail := true
+	for _, index := range inserted {
+		change := changes[index]
+		if change.Parent != store.root || change.PreviousSibling != last {
+			tail = false
+			break
+		}
+		last = change.ID
+	}
+	if tail {
+		for _, index := range inserted {
+			change := changes[index]
+			slot, _ := change.ID.Slot()
+			store.instanceBySlot[slot] = uint32(len(store.rectangles) + 1)
+			store.rectangles = append(store.rectangles, rectangleOf(change))
+		}
+		return nil
+	}
+
+	store.order = store.order[:0]
+	store.scratch = store.scratch[:0]
+	store.scratch = append(store.scratch, store.root)
 	for len(store.scratch) > 0 {
 		last := len(store.scratch) - 1
 		id := store.scratch[last]
@@ -389,23 +490,9 @@ func (store *Store) rebuild() error {
 		if err != nil {
 			return err
 		}
-
 		if current.kind == scene.KindRectangle || current.kind == scene.KindTriangle || current.kind == scene.KindShadow {
-			slot, _ := id.Slot()
-			store.instanceBySlot[slot] = uint32(len(store.rectangles) + 1)
-			store.rectangles = append(store.rectangles, Rectangle{
-				ID:       id,
-				Kind:     current.kind,
-				Bounds:   current.bounds,
-				Color:    current.color,
-				Radius:   current.radius,
-				Points:   current.points,
-				EdgeMask: current.edgeMask,
-				Shade:    current.shade,
-				Shadow:   current.shadow,
-			})
+			store.order = append(store.order, id)
 		}
-
 		for child := current.last; child != 0; {
 			store.scratch = append(store.scratch, child)
 			childNode, err := store.live(child)
@@ -415,7 +502,43 @@ func (store *Store) rebuild() error {
 			child = childNode.previous
 		}
 	}
+
+	count := len(store.order)
+	if count < len(store.rectangles) {
+		store.rectangles = store.rectangles[:count]
+	}
+	for len(store.rectangles) < count {
+		store.rectangles = append(store.rectangles, Rectangle{})
+	}
+	for position := count - 1; position >= 0; position-- {
+		id := store.order[position]
+		slot, _ := id.Slot()
+		rectangle, err := store.rectangleFor(slot, id, changes, inserted)
+		if err != nil {
+			return err
+		}
+		store.rectangles[position] = rectangle
+		store.instanceBySlot[slot] = uint32(position + 1)
+	}
+	store.rectangles = store.rectangles[:count]
 	return nil
+}
+
+// rectangleFor is the geometry of one shape during a rebuild: the instance the
+// store already held, or the batch change that inserted it.
+func (store *Store) rectangleFor(slot uint32, id scene.ID, changes []scene.Change, inserted []uint32) (Rectangle, error) {
+	encoded := store.instanceBySlot[slot]
+	if encoded&freshInstance != 0 {
+		index := encoded &^ freshInstance
+		if int(index) >= len(inserted) {
+			return Rectangle{}, fmt.Errorf("render: shape %d has no insert record", id)
+		}
+		return rectangleOf(changes[inserted[index]]), nil
+	}
+	if index := int(encoded - 1); index >= 0 && index < len(store.rectangles) && store.rectangles[index].ID == id {
+		return store.rectangles[index], nil
+	}
+	return Rectangle{}, fmt.Errorf("render: shape %d lost its geometry", id)
 }
 
 func (store *Store) ensureSlots(slot uint32) {

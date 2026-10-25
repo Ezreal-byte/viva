@@ -216,7 +216,9 @@ func TestStoreInsertsInTheMiddleAlongsideAChangeToItsSuccessor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !update.Rebuild || update.Count != 4 {
+	// The insert splices its tail into place instead of re-flattening the
+	// page, so the update runs from the inserted instance to the end.
+	if update.Rebuild || update.First != 1 || update.First+update.Count != 4 {
 		t.Fatalf("insert update = %+v", update)
 	}
 	want := []scene.ID{first, inserted, second, third}
@@ -310,5 +312,95 @@ func TestStoreHandlesAnUpdateAndAnAppendInOneBatch(t *testing.T) {
 	}
 	if store.Rectangles()[5].Bounds.X != 42 || store.Rectangles()[100].ID != added {
 		t.Fatalf("rectangles = %+v / %+v", store.Rectangles()[5], store.Rectangles()[100])
+	}
+}
+
+func TestStoreInsertsInsideAGroupRebuildsInPaintOrder(t *testing.T) {
+	graph := scene.New()
+	first, _ := graph.AddRectangle(graph.Root(), scene.Rect{X: 1}, scene.Color{})
+	group, _ := graph.AddGroup(graph.Root())
+	inside, _ := graph.AddRectangle(group, scene.Rect{X: 2}, scene.Color{})
+	last, _ := graph.AddRectangle(graph.Root(), scene.Rect{X: 3}, scene.Color{})
+	var store Store
+	if _, err := store.Apply(graph.DrainChanges(nil)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A new first child of the group is neither a root append nor a splice the
+	// previous-sibling path can place without walking the tree.
+	inserted, ok := graph.InsertRoundedRectangle(group, 0, scene.Rect{X: 4}, scene.Color{Red: 1}, 2)
+	if !ok {
+		t.Fatal("insert failed")
+	}
+	update, err := store.Apply(graph.DrainChanges(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !update.Rebuild || update.Count != 4 {
+		t.Fatalf("group insert update = %+v", update)
+	}
+	rectangles := store.Rectangles()
+	want := []scene.ID{first, inserted, inside, last}
+	if len(rectangles) != len(want) {
+		t.Fatalf("rectangles = %+v", rectangles)
+	}
+	for index, id := range want {
+		if rectangles[index].ID != id {
+			t.Fatalf("rectangles[%d].ID = %d, want %d", index, rectangles[index].ID, id)
+		}
+	}
+	if got := rectangles[1]; got.Bounds.X != 4 || got.Radius != 2 || got.Color.Red != 1 {
+		t.Fatalf("inserted rectangle = %+v", got)
+	}
+}
+
+func TestStoreDeletesOneShapeAndInsertsAnotherBeforeIt(t *testing.T) {
+	graph := scene.New()
+	first, _ := graph.AddRectangle(graph.Root(), scene.Rect{X: 1}, scene.Color{})
+	second, _ := graph.AddRectangle(graph.Root(), scene.Rect{X: 2}, scene.Color{})
+	third, _ := graph.AddRectangle(graph.Root(), scene.Rect{X: 3}, scene.Color{})
+	var store Store
+	if _, err := store.Apply(graph.DrainChanges(nil)); err != nil {
+		t.Fatal(err)
+	}
+
+	if !graph.Remove(second) {
+		t.Fatal("remove failed")
+	}
+	inserted, ok := graph.InsertRoundedRectangle(graph.Root(), first, scene.Rect{X: 4}, scene.Color{}, 0)
+	if !ok {
+		t.Fatal("insert failed")
+	}
+	update, err := store.Apply(graph.DrainChanges(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !update.Rebuild {
+		t.Fatalf("delete plus insert update = %+v", update)
+	}
+	rectangles := store.Rectangles()
+	want := []scene.ID{first, inserted, third}
+	for index, id := range want {
+		if index >= len(rectangles) || rectangles[index].ID != id {
+			t.Fatalf("rectangles = %+v, want IDs %v", rectangles, want)
+		}
+	}
+	if len(rectangles) != len(want) {
+		t.Fatalf("rectangles = %+v", rectangles)
+	}
+
+	// The renumbered slots must let the next localized update find the instance.
+	if !graph.SetRectangle(inserted, scene.Rect{X: 9}, scene.Color{}) {
+		t.Fatal("update failed")
+	}
+	update, err = store.Apply(graph.DrainChanges(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if update != (Update{First: 1, Count: 1}) {
+		t.Fatalf("follow-up update = %+v", update)
+	}
+	if got := store.Rectangles()[1]; got.ID != inserted || got.Bounds.X != 9 {
+		t.Fatalf("updated rectangle = %+v", got)
 	}
 }
