@@ -41,27 +41,35 @@ func (editor *Editor) visualStep(caret, direction int) (int, bool) {
 	for lineEnd < len(editor.runes) && editor.runes[lineEnd] != '\n' {
 		lineEnd++
 	}
-	line := string(editor.runes[lineStart:lineEnd])
-	if !bidi.NeedsBidi(line) && bidi.BaseDirection(line) == bidi.LTR {
+	lineRunes := editor.runes[lineStart:lineEnd]
+	if !bidi.NeedsBidiRunes(lineRunes) {
 		return 0, false
 	}
+	line := string(lineRunes)
 	var resolver bidi.Resolver
 	paragraph := resolver.Resolve(line, bidi.Auto)
 	runs := resolver.LineRuns(paragraph, 0, len(line), nil)
 
 	// The clusters in logical order, with where each is on the screen and whether it reads
-	// from right to left.
-	var starts []int // byte offset of every cluster, then the length of the line
+	// from right to left. The scratch belongs to the editor; a step reuses it instead of
+	// allocating three slices on every arrow key.
+	starts := editor.visualStarts[:0] // byte offset of every cluster, then the length of the line
 	for at := 0; at < len(line); at = grapheme.Next(line, at) {
 		starts = append(starts, at)
 	}
 	starts = append(starts, len(line))
+	editor.visualStarts = starts
 	n := len(starts) - 1
 	if n == 0 {
 		return 0, false
 	}
-	visual := make([]int, n) // the index of each cluster along the screen
-	odd := make([]bool, n)
+	visual := editor.visualOrder[:0] // the index of each cluster along the screen
+	odd := editor.visualOdd[:0]      // whether each cluster reads from right to left
+	for index := 0; index < n; index++ {
+		visual = append(visual, 0)
+		odd = append(odd, false)
+	}
+	editor.visualOrder, editor.visualOdd = visual, odd
 	index := func(offset int) int { // the cluster that starts at offset
 		lo, hi := 0, n
 		for lo < hi {

@@ -25,10 +25,26 @@ type prop struct {
 const invalid rune = -1
 
 func propOf(r rune) prop {
-	if r < 0 || r > utf8.MaxRune || (r >= 0xd800 && r < 0xe000) {
+	// ASCII is the common case in every text path, and a letter there takes
+	// three Unicode table lookups for three known answers. Answer it here.
+	if r < utf8.RuneSelf {
+		switch {
+		case r < 0:
+			return prop{gb: uniprops.GBControl}
+		case r == '\r':
+			return prop{gb: uniprops.GBCR}
+		case r == '\n':
+			return prop{gb: uniprops.GBLF}
+		case r < 0x20 || r == 0x7f:
+			return prop{gb: uniprops.GBControl}
+		}
+		return prop{}
+	}
+	if r > utf8.MaxRune || (r >= 0xd800 && r < 0xe000) {
 		return prop{gb: uniprops.GBControl}
 	}
-	return prop{gb: uniprops.Grapheme(r), incb: uniprops.ConjunctBreak(r), pict: uniprops.ExtendedPictographic(r)}
+	gb, incb, pict := uniprops.GraphemeProps(r)
+	return prop{gb: gb, incb: incb, pict: pict}
 }
 
 // text abstracts a string or a rune slice; at and before return the rune

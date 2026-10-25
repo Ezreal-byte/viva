@@ -352,3 +352,16 @@ func FuzzResolve(f *testing.F) {
 		}
 	})
 }
+
+func TestNeedsBidiRunesAgreesWithNeedsBidi(t *testing.T) {
+	for _, s := range []string{
+		"", "hello world", "café 中文 123", "1 + 2 = 3", "a⁧b", "א", "ا", "x١",
+		"tab\there\n", "‏", "‪", "﷽", "\U00010800", "ééé", "a⁩", "👩‍💻",
+		"😀中A", "line\nעברית", "\u202eabc", "\ufeff",
+	} {
+		runes := []rune(s)
+		if got, want := NeedsBidiRunes(runes), NeedsBidi(s); got != want {
+			t.Errorf("%q: NeedsBidiRunes=%v NeedsBidi=%v", s, got, want)
+		}
+	}
+}

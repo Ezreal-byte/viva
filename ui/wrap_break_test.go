@@ -220,3 +220,16 @@ func opensLine(r rune) bool {
 	}
 	return false
 }
+
+// WrapRows is the higher-level entry point applications use; it must share the
+// wrap cost of WrapLines rather than add its own.
+func BenchmarkWrapRowsCJKAndPath(b *testing.B) {
+	canvas := clusterWrapper()
+	rows := make([]TextRow, 0, 64)
+	text := strings.Repeat("连接服务器失败，请检查网络。/var/log/system/very-long-name.log ", 6)
+	b.ReportAllocs()
+	for range b.N {
+		rows = canvas.WrapRows(rows[:0], text, 1, 0, 30)
+	}
+	_ = rows
+}

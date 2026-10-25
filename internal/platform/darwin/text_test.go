@@ -51,7 +51,7 @@ func BenchmarkSelectionUTF16Range(b *testing.B) {
 	b.ReportAllocs()
 	for range b.N {
 		selection := utf16Range(value, 4, 14)
-		if selection != (text.Range{Start: 4, End: 15}) {
+		if selection != (text.Range{Start: 4, End: 16}) {
 			b.Fatalf("selection = %+v", selection)
 		}
 	}

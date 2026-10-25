@@ -67,6 +67,12 @@ type Editor struct {
 	historyIndex int
 	historyRunes int
 	coalescing   editKind
+
+	// visualStarts, visualOrder and visualOdd are the bidi caret walk's scratch,
+	// reused by every arrow key on a line that needs reordering.
+	visualStarts []int
+	visualOrder  []int
+	visualOdd    []bool
 }
 
 // NewEditor creates an editor with its caret at the end of initial text.

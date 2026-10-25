@@ -62,6 +62,13 @@ func Joining(r rune) JoiningType { return JoiningType(tuple(r)[4]) }
 
 func flags(r rune) uint8 { return tuple(r)[3] }
 
+// GraphemeProps returns the three properties grapheme segmentation needs from
+// one tuple read, instead of one table lookup per property.
+func GraphemeProps(r rune) (GraphemeClass, InCB, bool) {
+	t := tuple(r)
+	return GraphemeClass(t[2]), InCB(t[3] >> 1 & 3), t[3]&flagPictographic != 0
+}
+
 // ExtendedPictographic reports the Extended_Pictographic property of r.
 func ExtendedPictographic(r rune) bool { return flags(r)&flagPictographic != 0 }
 

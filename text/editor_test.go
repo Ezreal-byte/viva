@@ -530,6 +530,19 @@ func TestDeleteAfterEmptiedCompositionEndsTheComposition(t *testing.T) {
 	}
 }
 
+// A left-to-right line must not convert itself to a string or allocate scratch
+// just to discover that it needs no bidi walk: cursor movement is per-keystroke.
+func TestArrowKeysOnALeftToRightLineDoNotAllocate(t *testing.T) {
+	editor := NewEditor("Go中文👩‍💻🇨🇳e\u0301")
+	editor.SetSelection(Range{Start: 0, End: 0})
+	if allocs := testing.AllocsPerRun(50, func() {
+		editor.MoveRight(false)
+		editor.MoveLeft(false)
+	}); allocs != 0 {
+		t.Fatalf("a cursor move on a left-to-right line allocated %v times", allocs)
+	}
+}
+
 // The Left key moves the caret to the left on the screen, also through right-to-left text.
 func TestArrowKeysMoveVisuallyThroughRightToLeftText(t *testing.T) {
 	editor := NewEditor("אבג")
