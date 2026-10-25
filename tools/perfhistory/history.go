@@ -261,11 +261,32 @@ type Finding struct {
 // 3 ns becoming 4 ns is a 33% change that means nothing.
 const minimumSlowdownNs = 20
 
+// compareRuns checks candidate results against base results measured on the same
+// machine. It refuses results from different environments, because a number from
+// another CPU, OS or kind of machine is not a baseline.
+func compareRuns(base []Result, baseMachine Machine, candidate []Result, candidateMachine Machine, threshold, minimumNs float64) ([]Finding, error) {
+	if baseMachine.GOOS != candidateMachine.GOOS || baseMachine.GOARCH != candidateMachine.GOARCH || baseMachine.CPU != candidateMachine.CPU {
+		return nil, fmt.Errorf("base was measured on %s/%s %q, the candidate on %s/%s %q",
+			baseMachine.GOOS, baseMachine.GOARCH, baseMachine.CPU,
+			candidateMachine.GOOS, candidateMachine.GOARCH, candidateMachine.CPU)
+	}
+	baseline := Run{Machine: candidateMachine, Results: base}
+	return checkRunWithMinimum([]Run{baseline}, Run{Machine: candidateMachine, Results: candidate}, threshold, 1, minimumNs), nil
+}
+
 // checkRun compares a new run with the comparable history: a time more than
 // threshold above the median of the last window runs (and more than
 // minimumSlowdownNs above it), or any increase in allocations, is a finding. A
 // benchmark with no history is not.
 func checkRun(history []Run, candidate Run, threshold float64, window int) []Finding {
+	return checkRunWithMinimum(history, candidate, threshold, window, minimumSlowdownNs)
+}
+
+// checkRunWithMinimum is checkRun with a caller-chosen absolute floor. A shared
+// CI runner needs it higher than a quiet machine: a 280 ns benchmark moving by
+// 40 ns is 15% and means nothing, while a real slowdown of that path adds
+// hundreds of nanoseconds.
+func checkRunWithMinimum(history []Run, candidate Run, threshold float64, window int, minimumNs float64) []Finding {
 	var findings []Finding
 	for _, result := range candidate.Results {
 		past := seriesOf(history, candidate.Machine, result.Name)
@@ -274,7 +295,7 @@ func checkRun(history []Run, candidate Run, threshold float64, window int) []Fin
 		}
 		recent := past.ns[max(0, len(past.ns)-window):]
 		base := median(recent)
-		if base > 0 && result.NsPerOp > base*(1+threshold) && result.NsPerOp-base >= minimumSlowdownNs {
+		if base > 0 && result.NsPerOp > base*(1+threshold) && result.NsPerOp-base >= minimumNs {
 			findings = append(findings, Finding{result.Name, fmt.Sprintf("%.0f ns/op, %.0f%% above the median %.0f of the last %d runs", result.NsPerOp, (result.NsPerOp/base-1)*100, base, len(recent))})
 		}
 		lastAllocs := past.allocs[len(past.allocs)-1]

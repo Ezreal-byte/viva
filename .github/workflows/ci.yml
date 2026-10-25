@@ -77,3 +77,29 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y nsis
       - name: test
         run: go test ./cmd/... ./tools/... ./text/... ./flex/... ./markdown/... ./ui/... -count=1
+
+  # A noise-tolerant benchmark regression gate for the pure-Go paths: the base
+  # revision and the pull request run the same benchmarks on the same runner,
+  # and a slowdown above benchmarks/history.sh's threshold (15% and at least
+  # 20 ns) or any new allocation fails. Platform, GPU and window benchmarks are
+  # deliberately out: they are not reproducible on a shared runner.
+  benchmarks:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: checkout the base revision
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          git worktree add --detach ../base FETCH_HEAD
+      - name: benchmark base
+        run: VIVA_ROOT=../base ./benchmarks/ci.sh /tmp/base.txt
+      - name: benchmark candidate
+        run: ./benchmarks/ci.sh /tmp/head.txt
+      - name: compare
+        run: go run ./tools/perfhistory compare -threshold 0.20 -min-ns 100 /tmp/base.txt < /tmp/head.txt

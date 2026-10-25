@@ -13,6 +13,23 @@ MOTTY=../motty benchmarks/history.sh check m2-pro-darwin physical   # adds the w
 go run ./tools/perfhistory steps -machine m2-pro-darwin -kind physical  # lasting changes in a history
 ```
 
+Two runs on the same machine can also be compared without a history file, which
+is how `.github/workflows/ci.yml` guards a pull request against its base
+revision:
+
+```sh
+VIVA_ROOT=../base ./benchmarks/ci.sh /tmp/base.txt   # base worktree
+./benchmarks/ci.sh /tmp/head.txt                     # candidate
+go run ./tools/perfhistory compare -threshold 0.20 -min-ns 100 /tmp/base.txt < /tmp/head.txt
+```
+
+`compare` applies the same rule as `check` (a slowdown above the threshold and
+above the absolute floor, or any new allocation; the CI runner uses 20% and
+100 ns because it is shared and noisier than a quiet machine) and refuses to compare results from different CPUs, operating
+systems or architectures. `benchmarks/ci.sh` runs the pure-Go scene, render,
+input, text, wrap and painter benchmarks that are reproducible on a shared
+runner; platform, GPU and window benchmarks stay out of this gate.
+
 Rules the tool enforces:
 
 - A result is compared only with results of the same machine label, kind (`physical`,

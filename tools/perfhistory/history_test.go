@@ -115,3 +115,46 @@ func TestHistoryRoundTripsThroughItsFile(t *testing.T) {
 		t.Fatalf("a missing history = %v, %v; want empty", missing, err)
 	}
 }
+
+func TestCompareRunsFlagsARegressionAgainstAnotherRunOnTheSameMachine(t *testing.T) {
+	machine := Machine{Label: "ci", Kind: "physical", GOOS: "linux", GOARCH: "amd64", CPU: "runner"}
+	base := []Result{{Name: "BenchmarkX", NsPerOp: 100, AllocsPerOp: 0, Samples: 5}}
+	candidate := []Result{{Name: "BenchmarkX", NsPerOp: 140, AllocsPerOp: 0, Samples: 5}}
+	findings, err := compareRuns(base, machine, candidate, machine, 0.15, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || findings[0].Name != "BenchmarkX" {
+		t.Fatalf("findings = %+v", findings)
+	}
+
+	candidate[0].NsPerOp = 105
+	if findings, err = compareRuns(base, machine, candidate, machine, 0.15, 20); err != nil || len(findings) != 0 {
+		t.Fatalf("a change inside the threshold was flagged: %+v, %v", findings, err)
+	}
+
+	candidate[0].NsPerOp = 100
+	candidate[0].AllocsPerOp = 1
+	if findings, err = compareRuns(base, machine, candidate, machine, 0.15, 20); err != nil || len(findings) != 1 {
+		t.Fatalf("a new allocation was not flagged: %+v, %v", findings, err)
+	}
+}
+
+func TestCompareRunsRefusesDifferentMachinesAndSkipsNewBenchmarks(t *testing.T) {
+	base := Machine{GOOS: "linux", GOARCH: "amd64", CPU: "runner-a"}
+	other := Machine{GOOS: "linux", GOARCH: "amd64", CPU: "runner-b"}
+	if _, err := compareRuns(nil, base, nil, other, 0.15, 20); err == nil {
+		t.Fatal("results from different machines were compared")
+	}
+
+	same := base
+	baseResults := []Result{{Name: "BenchmarkOld", NsPerOp: 100}}
+	candidate := []Result{{Name: "BenchmarkNew", NsPerOp: 10_000}}
+	findings, err := compareRuns(baseResults, base, candidate, same, 0.15, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("a benchmark with no base result was flagged: %+v", findings)
+	}
+}

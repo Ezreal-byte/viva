@@ -22,6 +22,8 @@ func main() {
 		err = check(os.Args[2:])
 	case "steps":
 		err = steps(os.Args[2:])
+	case "compare":
+		err = compare(os.Args[2:])
 	default:
 		usage()
 	}
@@ -35,7 +37,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   perfhistory record -machine LABEL -kind physical|vm|software-gpu [-binary PATH] [-dir DIR] < go-test-bench-output
   perfhistory check  -machine LABEL -kind KIND [-threshold 0.15] [-window 5] [-dir DIR] < go-test-bench-output
-  perfhistory steps  -machine LABEL -kind KIND -cpu CPU [-width 3] [-threshold 0.25] [-dir DIR]`)
+  perfhistory steps  -machine LABEL -kind KIND -cpu CPU [-width 3] [-threshold 0.25] [-dir DIR]
+  perfhistory compare [-threshold 0.15] [-min-ns 20] BASE-OUTPUT < CANDIDATE-OUTPUT`)
 	os.Exit(2)
 }
 
@@ -125,6 +128,56 @@ func check(args []string) error {
 		}
 	}
 	fmt.Printf("%d of %d benchmarks have comparable history on %s\n", compared, len(results), *label)
+	for _, finding := range findings {
+		fmt.Printf("REGRESSION %s: %s\n", finding.Name, finding.Detail)
+	}
+	if len(findings) > 0 {
+		return fmt.Errorf("%d regressions", len(findings))
+	}
+	return nil
+}
+
+// compare checks one benchmark run against another taken on the same machine,
+// with the same threshold rules as check: no history file is involved, so it can
+// guard a pull request by comparing the base revision with the candidate.
+func compare(args []string) error {
+	flags := flag.NewFlagSet("compare", flag.ExitOnError)
+	threshold := flags.Float64("threshold", 0.15, "fractional slowdown that is a finding")
+	minimumNs := flags.Float64("min-ns", 20, "least absolute slowdown a finding needs, in nanoseconds")
+	flags.Parse(args)
+	if flags.NArg() != 1 {
+		return fmt.Errorf("compare takes one file with the base benchmark output; the candidate run is on standard input")
+	}
+	file, err := os.Open(flags.Arg(0))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	base, baseMachine, err := parseBenchmarks(file)
+	if err != nil {
+		return err
+	}
+	candidate, candidateMachine, err := parseBenchmarks(os.Stdin)
+	if err != nil {
+		return err
+	}
+	if len(base) == 0 || len(candidate) == 0 {
+		return fmt.Errorf("no benchmark results in the base or the candidate output")
+	}
+	findings, err := compareRuns(base, baseMachine, candidate, candidateMachine, *threshold, *minimumNs)
+	if err != nil {
+		return err
+	}
+	compared := 0
+	for _, result := range candidate {
+		for _, earlier := range base {
+			if earlier.Name == result.Name {
+				compared++
+				break
+			}
+		}
+	}
+	fmt.Printf("%d of %d benchmarks have a base result\n", compared, len(candidate))
 	for _, finding := range findings {
 		fmt.Printf("REGRESSION %s: %s\n", finding.Name, finding.Detail)
 	}
