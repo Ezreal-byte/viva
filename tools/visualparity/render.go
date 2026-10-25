@@ -58,8 +58,8 @@ func runCommand(options runOptions) error {
 			for index, scale := range options.scales {
 				wantImage := imagesWanted
 				facts, picture, err := renderScene(sc, dark, scale, wantImage, true, measure)
-				if err != nil && errors.Is(err, headless.ErrNoRenderer) {
-					fmt.Fprintln(os.Stderr, "no offscreen renderer in this build (macOS needs -tags vivahead): layout facts only")
+				if err != nil && noRenderer(err) {
+					fmt.Fprintln(os.Stderr, "no offscreen renderer here (macOS needs -tags vivahead, Linux needs a Vulkan driver): layout facts only")
 					imagesWanted = false
 					facts, picture, err = renderScene(sc, dark, scale, false, true, measure)
 				}
@@ -85,6 +85,13 @@ func runCommand(options runOptions) error {
 
 func appColor(c ui.Color) app.Color {
 	return app.Color{Red: float64(c.Red), Green: float64(c.Green), Blue: float64(c.Blue), Alpha: float64(c.Alpha)}
+}
+
+// noRenderer reports whether err means this machine cannot produce pixels: a build
+// without an offscreen renderer, or one whose graphics driver is missing (Linux
+// without Vulkan). The layout facts need neither.
+func noRenderer(err error) bool {
+	return errors.Is(err, headless.ErrNoRenderer) || errors.Is(err, app.ErrNoGraphics)
 }
 
 // renderScene opens the scene in a headless session, captures its layout facts

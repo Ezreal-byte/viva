@@ -168,10 +168,12 @@ metrics, for the golden), every rectangle, triangle and hit region. The facts ar
   `go test ./tools/visualparity -run LayoutIsTheSame -update`;
 - the dark theme moves nothing;
 - the ink of a line drawn at 11 to 20 px in four weights (Latin, and digits before CJK) starts
-  and ends within 0.2 em of the width the platform's text engine reports for it: layout and
-  drawing use the same shaped line, so a font that does not scale with the size, a semibold
-  emboldened from regular, or a draw path that shapes differently from the measuring one
-  leaves the band;
+  within 0.2 em of where the platform's text engine puts it, and ends inside the advance box
+  of its last glyph: how far short of the engine's width the ink stops is that glyph's side
+  bearing, which the font decides (Noto Sans's `1` carries a quarter em), but the ink may not
+  stop before the glyph begins. Layout and drawing use the same shaped line, so a font that
+  does not scale with the size, a semibold emboldened from regular, or a draw path that shapes
+  differently from the measuring one leaves the band;
 - each platform draws its specimens through the label rasterizer and as a platform
   application does, in one native call, and the label's edge energy per ink and its share of
   solid pixels stay at the native drawing's (`internal/textsharp`, the sharpness and

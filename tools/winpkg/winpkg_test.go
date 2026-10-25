@@ -387,27 +387,44 @@ func TestBuildFailureCarriesMakensisOutput(t *testing.T) {
 	}
 }
 
+// buildable is sample() pointed at files that exist: NSIS opens the program and the
+// icon while compiling, so a test that really builds an installer needs both on disk.
+func buildable(t *testing.T, dir string) Script {
+	t.Helper()
+	program := filepath.Join(dir, "program")
+	if err := os.WriteFile(program, append([]byte("MZ"), bytes.Repeat([]byte{7}, 4096)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buffer bytes.Buffer
+	if err := png.Encode(&buffer, square(256)); err != nil {
+		t.Fatal(err)
+	}
+	pngPath := filepath.Join(dir, "icon.png")
+	if err := os.WriteFile(pngPath, buffer.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ico, _, err := LoadIcon(pngPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	icon := filepath.Join(dir, "icon.ico")
+	if err := os.WriteFile(icon, ico, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := sample()
+	script.Program, script.Icon = program, icon
+	return script
+}
+
 func TestBuildMakesAnInstaller(t *testing.T) {
 	if _, err := Find(); err != nil {
 		t.Skip("NSIS is not installed")
 	}
 	dir := t.TempDir()
-	program := filepath.Join(dir, "program")
-	os.WriteFile(program, append([]byte("MZ"), bytes.Repeat([]byte{7}, 4096)...), 0o644)
-	var buffer bytes.Buffer
-	png.Encode(&buffer, square(256))
-	iconPath := filepath.Join(dir, "icon.png")
-	os.WriteFile(iconPath, buffer.Bytes(), 0o644)
-	ico, _, err := LoadIcon(iconPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(filepath.Join(dir, "icon.ico"), ico, 0o644)
-
+	script := buildable(t, dir)
 	for _, arch := range []string{"amd64", "arm64"} {
 		for _, scope := range []string{ScopeUser, ScopeMachine} {
-			script := sample()
-			script.Program, script.Icon, script.Arch, script.Scope = program, filepath.Join(dir, "icon.ico"), arch, scope
+			script.Arch, script.Scope = arch, scope
 			script.Output = filepath.Join(dir, arch+"-"+scope+"-setup.exe")
 			result, err := Build(script)
 			skipIfBroken(t, err)
@@ -542,10 +559,8 @@ func TestBuildWithFileTypesAndLinks(t *testing.T) {
 		t.Skip("NSIS is not installed")
 	}
 	dir := t.TempDir()
-	program := filepath.Join(dir, "program")
-	os.WriteFile(program, append([]byte("MZ"), bytes.Repeat([]byte{7}, 4096)...), 0o644)
-	script := sample()
-	script.Program, script.Arch, script.Output = program, "amd64", filepath.Join(dir, "setup.exe")
+	script := buildable(t, dir)
+	script.Arch, script.Output = "amd64", filepath.Join(dir, "setup.exe")
 	script.URLSchemes = []string{"ssh"}
 	script.FileTypes = []FileType{{Name: "Notes document", Extensions: []string{"note", "nt"}}}
 	for _, scope := range []string{ScopeUser, ScopeMachine} {

@@ -3,7 +3,6 @@ package main
 import (
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"flag"
 	"math"
 	"os"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/flex"
-	"github.com/vivaui/viva/headless"
 	"github.com/vivaui/viva/ui"
 )
 
@@ -152,10 +150,12 @@ func TestDarkThemeLaysOutLikeLight(t *testing.T) {
 }
 
 // A label is as wide as the platform's text engine says it is: layout, caret and hit-testing
-// come from the same shaped line that is drawn, so the ink of a line ends where
-// the engine's width does, to within the side bearing of its last glyph. A font that does
-// not scale with the size, a semibold emboldened from regular, or a draw path that shapes
-// the line differently from the measuring one would leave the band.
+// come from the same shaped line that is drawn, so the ink of a line starts where
+// the engine says it starts and ends inside the advance box of its last glyph: it may stop
+// short of the engine's width by that glyph's side bearing, which is the font's, but not by
+// more, and it may not stop before the glyph begins. A font that does not scale with the
+// size, a semibold emboldened from regular, or a draw path that shapes the line differently
+// from the measuring one would leave the band.
 func TestLabelInkEndsWhereTheEngineSaysTheLineEnds(t *testing.T) {
 	engine := app.PlatformTextEngine()
 	if engine == nil {
@@ -172,8 +172,8 @@ func TestLabelInkEndsWhereTheEngineSaysTheLineEnds(t *testing.T) {
 		})
 	}}
 	facts, picture, err := renderScene(sc, false, 1, true, false, nil)
-	if errors.Is(err, headless.ErrNoRenderer) {
-		t.Skip("no offscreen renderer in this build (macOS needs -tags vivahead)")
+	if noRenderer(err) {
+		t.Skip("no offscreen renderer on this machine or in this build (macOS needs -tags vivahead, Linux needs a Vulkan driver)")
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -187,9 +187,23 @@ func TestLabelInkEndsWhereTheEngineSaysTheLineEnds(t *testing.T) {
 			t.Errorf("%q at %g: nothing was drawn", text.Value, text.Size)
 			continue
 		}
-		slack := float64(text.Size) * 0.2 // the side bearings of the first and last glyph
-		if left > slack || width-right > slack || right > width+slack {
-			t.Errorf("%q at %g weight %g: ink from %.1f to %.1f, engine width %.1f", text.Value, text.Size, text.Weight, left, right, width)
+		slack := float64(text.Size) * 0.2 // the side bearing of the first glyph
+		last := lastClusterOrigin(engine, text)
+		if left > slack || float64(right) < last || right > width+slack {
+			t.Errorf("%q at %g weight %g: ink from %.1f to %.1f, engine width %.1f, last glyph at %.1f", text.Value, text.Size, text.Weight, left, right, width, last)
 		}
 	}
+}
+
+// lastClusterOrigin is the x where the last cluster of text begins, as the engine's own
+// caret reports it. The ink has to reach it; how far past it the ink stops short of the
+// line's width is the last glyph's side bearing, and that is the font's to decide.
+func lastClusterOrigin(engine ui.TextEngine, text TextFact) float64 {
+	width := float64(engine.Width(text.Value, text.Size, text.Weight))
+	for offset := len(text.Value) - 1; offset > 0; offset-- {
+		if x := float64(engine.Caret(text.Value, text.Size, text.Weight, offset)); x < width {
+			return x
+		}
+	}
+	return 0
 }
