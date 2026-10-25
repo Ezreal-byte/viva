@@ -1,0 +1,4 @@
+:root { color-scheme: light dark; font: 13px/1.5 ui-sans-serif, system-ui, sans-serif; }
+body { margin: 0; background: #fafafa; color: #252525; }
+#preview-status { padding: 28px; margin: 0; }
+noscript { display: block; padding: 28px; }

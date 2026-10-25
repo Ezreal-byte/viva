@@ -1,0 +1,132 @@
+package componentdemo
+
+import (
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/vivaui/viva/ui"
+)
+
+func TestGroupBCatalogOrder(t *testing.T) {
+	expected := [...]string{
+		"command", "context-menu", "drawer", "dropdown-menu", "empty",
+		"field", "form", "hover-card", "input-group", "input-otp",
+		"item", "kbd", "label", "markdown", "marker", "menubar", "message",
+		"message-scroller", "metric-card", "native-select",
+	}
+	if len(groupBComponents) != len(expected) {
+		t.Fatalf("group B contains %d components, want %d", len(groupBComponents), len(expected))
+	}
+	for index, id := range expected {
+		component := groupBComponents[index]
+		if component.ID != id {
+			t.Fatalf("group B component %d = %q, want %q", index, component.ID, id)
+		}
+		if component.Title == "" || component.Category == "" || component.Summary == "" || component.paint == nil {
+			t.Fatalf("group B component %q has incomplete metadata", component.ID)
+		}
+		if len(component.Examples) == 0 {
+			t.Fatalf("group B component %q has no examples", component.ID)
+		}
+	}
+}
+
+func TestGroupBPaintsThemesResponsivelyAndDeterministically(t *testing.T) {
+	sizes := [...]ui.Size{{Width: 320, Height: 340}, {Width: 760, Height: 380}}
+	for componentIndex := range groupBComponents {
+		component := &groupBComponents[componentIndex]
+		for _, example := range component.Examples {
+			for _, dark := range [...]bool{false, true} {
+				for _, size := range sizes {
+					name := fmt.Sprintf("%s/%s/dark=%t/%.0fx%.0f", component.ID, example.ID, dark, size.Width, size.Height)
+					t.Run(name, func(t *testing.T) {
+						state := newGroupBState(component, example.ID)
+						var canvas ui.Canvas
+						paintGroupBFrame(&canvas, state, component, size, dark)
+						if len(canvas.Texts()) == 0 && len(canvas.Rectangles()) <= 1 {
+							t.Fatal("example emitted no visible component commands")
+						}
+						expected := snapshot(&canvas)
+						paintGroupBFrame(&canvas, state, component, size, dark)
+						assertSamePaint(t, expected, &canvas)
+						if canvas.Animating() {
+							t.Fatal("static example requested another frame")
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestGroupBStaticWarmPaintAllocations(t *testing.T) {
+	for componentIndex := range groupBComponents {
+		component := &groupBComponents[componentIndex]
+		for _, example := range component.Examples {
+			t.Run(component.ID+"/"+example.ID, func(t *testing.T) {
+				state := newGroupBState(component, example.ID)
+				var canvas ui.Canvas
+				paint := func() {
+					paintGroupBFrame(&canvas, state, component, ui.Size{Width: 760, Height: 380}, false)
+				}
+				paint()
+				if allocations := testing.AllocsPerRun(100, paint); allocations != 0 {
+					t.Fatalf("static warm paint allocated %v times", allocations)
+				}
+			})
+		}
+	}
+}
+
+func newGroupBState(component *Component, exampleID string) *State {
+	state := bareState(component.ID, exampleID)
+	if component.initialize != nil {
+		component.initialize(state)
+	}
+	return state
+}
+
+func paintGroupBFrame(canvas *ui.Canvas, state *State, component *Component, size ui.Size, dark bool) {
+	canvas.SetReduceMotion(true)
+	canvas.SetClock(func() time.Duration { return time.Second })
+	canvas.BeginFrame()
+	canvas.Reset()
+	theme := ui.LightTheme()
+	if dark {
+		theme = ui.DarkTheme()
+	}
+	viewport := ui.Rect{Width: size.Width, Height: size.Height}
+	canvas.Clip(viewport)
+	canvas.Fill(viewport, theme.Background)
+	component.paint(state, canvas, theme, size)
+	canvas.Unclip()
+	canvas.EndFrame()
+}
+
+// The group B controls change their demo's state through Clicked, in the event pass.
+func TestGroupBClicksChangeState(t *testing.T) {
+	var canvas ui.Canvas
+	for _, test := range []struct {
+		component, example string
+		id                 ui.ID
+		changed            func(*State) bool
+	}{
+		{"command", "default", commandItem.At(2), func(s *State) bool { return s.values[0] == 2 }},
+		{"dropdown-menu", "default", dropdownMenuToggle, func(s *State) bool { return s.flags&1 != 0 }},
+		{"item", "default", itemRow.At(0), func(s *State) bool { return s.flags&1 != 0 }},
+		{"native-select", "default", nativeSelectTrigger.At(0), func(s *State) bool { return s.flags&1 != 0 }},
+		{"message-scroller", "default", messageScrollerEnd, func(s *State) bool { return s.values[0] == 72 }},
+		{"menubar", "default", menubarFile, func(s *State) bool { return s.flags&1 != 0 }},
+		{"input-otp", "default", inputOTPField, func(s *State) bool { return s.values[0] == 4 }},
+		{"input-group", "default", inputGroupClear, func(s *State) bool { return s.flags&1 == 0 }},
+		{"drawer", "default", drawerClose, func(s *State) bool { return s.flags&1 == 0 }},
+	} {
+		state := newTestState(t, test.component, test.example)
+		paintFrame(&canvas, state, testSize, time.Second, true)
+		click(&canvas, state, test.id)
+		if !test.changed(state) {
+			t.Errorf("%s: clicking its control did not change the state", test.component)
+		}
+	}
+}

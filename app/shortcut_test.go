@@ -1,0 +1,149 @@
+//go:build darwin || windows || linux
+
+package app
+
+import (
+	"testing"
+
+	"github.com/vivaui/viva/internal/input"
+	"github.com/vivaui/viva/internal/platform"
+	"github.com/vivaui/viva/ui"
+)
+
+func TestDriverOffersGlobalShortcutsBeforeTerminalAndTextPaths(t *testing.T) {
+	var shortcuts []ui.KeyEvent
+	config := Config{
+		Width: 320, Height: 180,
+		Paint: func(canvas *ui.Canvas, _ ui.Size) {
+			canvas.HitWithOptions(ui.Item(1), ui.Rect{X: 10, Y: 10, Width: 200, Height: 32}, "Field", ui.HitOptions{Role: ui.RoleTextField})
+		},
+		OnShortcut: func(event ui.KeyEvent) ui.EventResult {
+			shortcuts = append(shortcuts, event)
+			return ui.EventResult{Handled: event.Text == "k", Repaint: event.Text == "k"}
+		},
+	}
+	driver, err := NewDriver(config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer driver.Close()
+
+	if err := driver.Chord(ui.ModifierControl, "K"); err != nil {
+		t.Fatal(err)
+	}
+	if len(shortcuts) != 1 || shortcuts[0].Text != "k" || shortcuts[0].Modifiers != ui.ModifierControl {
+		t.Fatalf("shortcuts = %+v", shortcuts)
+	}
+
+	if handled, err := driver.Shortcut('c'); err != nil || handled {
+		t.Fatalf("unfocused native editing shortcut = %t, %v", handled, err)
+	}
+	if len(shortcuts) != 2 || shortcuts[1].Text != "c" || shortcuts[1].Modifiers != ui.ModifierMeta {
+		t.Fatalf("fallback shortcuts = %+v", shortcuts)
+	}
+}
+
+func TestDriverShortcutChordPreservesEveryModifier(t *testing.T) {
+	want := ui.ModifierMeta | ui.ModifierAlt | ui.ModifierShift
+	var got ui.KeyEvent
+	driver, err := NewDriver(Config{
+		Width: 320, Height: 180,
+		Paint: func(*ui.Canvas, ui.Size) {},
+		OnShortcut: func(event ui.KeyEvent) ui.EventResult {
+			got = event
+			return ui.EventResult{Handled: true}
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer driver.Close()
+
+	handled, err := driver.ShortcutChord(want, 'X')
+	if err != nil || !handled {
+		t.Fatalf("shortcut handled=%t err=%v", handled, err)
+	}
+	if got.Modifiers != want || got.Text != "x" {
+		t.Fatalf("shortcut = %+v, want modifiers=%d text=x", got, want)
+	}
+}
+
+func TestShortcutTextNormalizationIsPlatformIndependent(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{{"P", "p"}, {"7", "7"}, {"é", "é"}} {
+		if got := normalizeShortcutText(test.input); got != test.want {
+			t.Fatalf("normalizeShortcutText(%q) = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
+// RunApplication opens its windows through prepareNativeWindow, not through the
+// single-window path, and once handed the platform no shortcut handler: every
+// application shortcut was dead in a real window while the headless driver, which
+// calls the handler directly, still passed. Both paths take the handler from the
+// painter now, and this is what they take.
+func TestWindowsDeliverShortcutsToTheApplication(t *testing.T) {
+	var got []ui.KeyEvent
+	config := Config{
+		Width: 320, Height: 180,
+		OnShortcut: func(event ui.KeyEvent) ui.EventResult {
+			got = append(got, event)
+			return ui.EventResult{Handled: event.Text == "w"}
+		},
+	}
+	normalized, err := config.normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	painter, err := newPainter(&ui.Canvas{}, &normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := painter.shortcutHandler(&normalized)
+	if handler == nil {
+		t.Fatal("the window was given no shortcut handler")
+	}
+	_, handled, err := handler(platform.KeyEvent{Modifiers: input.ModifierControl, Text: "W"})
+	if err != nil || !handled {
+		t.Fatalf("handled = %t, err = %v", handled, err)
+	}
+	if _, handled, _ := handler(platform.KeyEvent{Modifiers: input.ModifierControl, Text: "x"}); handled {
+		t.Fatal("a chord the application did not take was reported handled")
+	}
+	if len(got) != 2 || got[0].Text != "w" || got[0].Modifiers != ui.ModifierControl {
+		t.Fatalf("the application saw %+v", got)
+	}
+	// A window with no shortcut handler of its own does not claim chords.
+	bare := Config{Width: 320, Height: 180}
+	bareNormalized, err := bare.normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if painter.shortcutHandler(&bareNormalized) != nil {
+		t.Fatal("a window without OnShortcut was given a handler")
+	}
+}
+
+func BenchmarkDriverShortcutChord(b *testing.B) {
+	driver, err := NewDriver(Config{
+		Width: 320, Height: 180,
+		Paint: func(*ui.Canvas, ui.Size) {},
+		OnShortcut: func(ui.KeyEvent) ui.EventResult {
+			return ui.EventResult{Handled: true}
+		},
+	}, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer driver.Close()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		handled, err := driver.ShortcutChord(ui.ModifierMeta|ui.ModifierAlt, 'x')
+		if err != nil || !handled {
+			b.Fatalf("shortcut handled=%t err=%v", handled, err)
+		}
+	}
+}

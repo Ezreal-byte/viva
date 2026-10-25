@@ -1,0 +1,25 @@
+---
+import type { GetStaticPaths } from 'astro';
+import DocPageLayout from '../../../layouts/DocPageLayout.astro';
+import { locales, isLocale, type Locale } from '../../../lib/i18n';
+import { siteText } from '../../../lib/site';
+import { docsPath } from '../../../lib/routes';
+import { guidesFor, guideSlug, guideNavigation } from '../../../lib/content';
+
+export const getStaticPaths = (() => locales.map(lang => ({ params: { lang } }))) satisfies GetStaticPaths;
+const locale = Astro.params.lang;
+if (!isLocale(locale)) throw new Error('Unsupported locale');
+const text = siteText(locale);
+const guides = await guidesFor(locale);
+const alternates = Object.fromEntries(locales.map(language => [language, docsPath(language)])) as Record<Locale, string>;
+const navigation = guideNavigation(guides, locale);
+const groups = navigation.map(group => ({ heading: group.heading, cards: group.links.map(link => guides.find(entry => docsPath(locale, guideSlug(entry)) === link.href)!) }));
+---
+
+<DocPageLayout {locale} title={text.docsTitle} summary={text.docsSummary} section="docs" {alternates} {navigation}>
+  <div class="page-heading"><h1>{text.docsTitle}</h1><p class="page-summary">{text.docsSummary}</p></div>
+  {groups.map(group => <section>
+    <h2 class="list-heading">{group.heading}</h2>
+    <div class="guide-cards">{group.cards.map(entry => <a class="guide-card" href={docsPath(locale, guideSlug(entry))}><h3>{entry.data.title}</h3><p>{entry.data.summary}</p></a>)}</div>
+  </section>)}
+</DocPageLayout>

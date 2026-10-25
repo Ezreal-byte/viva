@@ -1,0 +1,95 @@
+package instance
+
+import (
+	"os"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestSecondLaunchHandsItsArgumentsToTheFirst(t *testing.T) {
+	isolate(t)
+	got := make(chan []string, 4)
+	first, primary, err := Claim("dev.test.one", []string{"first"}, func(args []string) { got <- args })
+	if err != nil || !primary {
+		t.Fatalf("first claim: primary %v, err %v", primary, err)
+	}
+	defer first.Close()
+	want := []string{"ssh://user@host:2222/", "", "ünï cödé", "with space"}
+	second, primary, err := Claim("dev.test.one", want, func([]string) { t.Error("the second process must not serve") })
+	if err != nil || primary || second != nil {
+		t.Fatalf("second claim: primary %v, err %v", primary, err)
+	}
+	select {
+	case args := <-got:
+		if !reflect.DeepEqual(args, want) {
+			t.Fatalf("handler got %q, want %q", args, want)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the arguments never arrived")
+	}
+}
+
+func TestDifferentIDsDoNotMeetAndEmptyArgumentsWork(t *testing.T) {
+	isolate(t)
+	a, primaryA, _ := Claim("dev.test.a", nil, func([]string) {})
+	b, primaryB, _ := Claim("dev.test.b", nil, func([]string) {})
+	if !primaryA || !primaryB {
+		t.Fatal("two applications should both be primary")
+	}
+	a.Close()
+	b.Close()
+	got := make(chan []string, 1)
+	c, primary, _ := Claim("dev.test.a", nil, func(args []string) { got <- args })
+	if !primary {
+		t.Fatal("a closed instance left its claim behind")
+	}
+	defer c.Close()
+	Claim("dev.test.a", nil, nil)
+	if args := <-got; len(args) != 0 {
+		t.Fatalf("args = %q", args)
+	}
+}
+
+func TestAStaleSocketIsReplaced(t *testing.T) {
+	isolate(t)
+	first, primary, _ := Claim("dev.test.stale", nil, func([]string) {})
+	if !primary {
+		t.Fatal("not primary")
+	}
+	// A process that died leaves its socket file: close the listener only.
+	first.listener.Close()
+	<-first.done
+	second, primary, err := Claim("dev.test.stale", nil, func([]string) {})
+	if err != nil || !primary {
+		t.Fatalf("after a crash: primary %v, err %v", primary, err)
+	}
+	second.Close()
+}
+
+func TestOversizeAndMalformedMessagesAreRefused(t *testing.T) {
+	if err := writeArgs(&strings.Builder{}, []string{strings.Repeat("x", maxMessage)}); err == nil {
+		t.Fatal("an oversize message was written")
+	}
+	if err := writeArgs(&strings.Builder{}, []string{"a\x00b"}); err == nil {
+		t.Fatal("NUL in an argument was written")
+	}
+	if _, primary, err := Claim("", nil, nil); err == nil || primary {
+		t.Fatal("an empty id was accepted")
+	}
+}
+
+// isolate gives a test its own short runtime directory.
+func isolate(t *testing.T) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "gi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+	t.Setenv("TMPDIR", dir)
+	t.Setenv("TEMP", dir)
+	t.Setenv("TMP", dir)
+}

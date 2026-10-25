@@ -1,0 +1,27 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import Sidebar from '../components/Sidebar.svelte';
+import type { Nav } from '../lib/types';
+import { locales, languagePath, type Locale } from '../lib/i18n';
+
+// The layout of the component catalog: a searchable sidebar, the page, and its table of contents.
+interface Props {
+  title: string;
+  summary: string;
+  navigation: Nav[];
+  currentID: string;
+  wide?: boolean;
+  locale: Locale;
+}
+
+const { title, summary, navigation, currentID, wide = false, locale } = Astro.props;
+const alternates = Object.fromEntries(locales.map(language => [language, languagePath(language, currentID)])) as Record<Locale, string>;
+---
+
+<BaseLayout {locale} {title} {summary} section="components" {alternates}>
+  <div class:list={['docs-grid', { 'docs-grid-wide': wide }]}>
+    <aside class="sidebar"><Sidebar items={navigation} {currentID} {locale} client:load /></aside>
+    <main class="main-content" id="main-content" tabindex="-1"><slot /></main>
+    {!wide && <aside class="on-this-page"><slot name="toc" /></aside>}
+  </div>
+</BaseLayout>

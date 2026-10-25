@@ -1,0 +1,19 @@
+/build/
+*.dxvk-cache
+/website/node_modules/
+/website/.astro/
+
+# Local agent instructions and machine-specific settings, not part of the project.
+/AGENTS.md
+/CLAUDE.md
+/.claude/
+
+# Addresses and passwords of your own test machines, kept out of the repository.
+/tools/testenv/local.*
+
+# Local research notes, not part of the published tree.
+/private/
+
+# Binaries built inside the tool modules by `go build`.
+/tools/complexgen/complexgen
+/tools/ffi-cost/ffi-cost

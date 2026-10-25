@@ -1,0 +1,174 @@
+package components
+
+import "github.com/vivaui/viva/ui"
+
+// BubbleAlignment mirrors Base UI's start/end alignment.
+type BubbleAlignment uint8
+
+const (
+	BubbleStart BubbleAlignment = iota
+	BubbleEnd
+)
+
+// BubbleVariant mirrors the official content variants.
+type BubbleVariant uint8
+
+const (
+	BubbleDefault BubbleVariant = iota
+	BubbleSecondary
+	BubbleMuted
+	BubbleTinted
+	BubbleOutline
+	BubbleGhost
+	BubbleDestructive
+)
+
+// bubbleMaxLines bounds how many lines one bubble wraps to; a longer text ends
+// its last line with an ellipsis. A chat message that long belongs in Markdown.
+const bubbleMaxLines = 64
+
+// bubbleLayout is how one bubble's text sits: the bubble's size and its wrapped lines.
+type bubbleLayout struct {
+	size       ui.Size
+	lines      []string
+	lineHeight float32
+	padX, padY float32 // text inset from the bubble's edge, border included
+}
+
+// layoutBubble wraps text into a bubble that fits inside rowWidth. The official
+// Bubble is w-fit with max-w-[80%] (a ghost bubble max-w-full): it shrinks to a
+// text that fits on one line and otherwise fills the maximum and wraps.
+func layoutBubble(canvas *ui.Canvas, theme ui.Theme, rowWidth float32, variant BubbleVariant, text string, scratch []string) bubbleLayout {
+	metrics := theme.Metrics
+	layout := bubbleLayout{lineHeight: metrics.FontSizeM * 1.625}
+	layout.padX, layout.padY = metrics.PadControlX+1, metrics.GapItem+1
+	maxWidth := rowWidth * 0.80
+	if variant == BubbleGhost {
+		layout.padX, layout.padY = 0, 0
+		maxWidth = rowWidth
+	}
+	if maxWidth <= 0 {
+		return layout
+	}
+	layout.lines = canvas.WrapLines(scratch[:0], text, metrics.FontSizeM, ui.WeightRegular, max(maxWidth-layout.padX*2, 1), bubbleMaxLines)
+	if len(layout.lines) == 0 {
+		layout.lines = append(layout.lines, "")
+	}
+	layout.size.Width = maxWidth
+	if len(layout.lines) == 1 {
+		layout.size.Width = min(maxWidth, canvas.TextWidthWeight(layout.lines[0], metrics.FontSizeM, ui.WeightRegular)+layout.padX*2)
+	}
+	layout.size.Height = float32(len(layout.lines))*layout.lineHeight + layout.padY*2
+	return layout
+}
+
+// MeasureBubble reports the size Bubble gives text in a row rowWidth wide, for
+// laying out a list of messages before painting it.
+func MeasureBubble(canvas *ui.Canvas, theme ui.Theme, rowWidth float32, variant BubbleVariant, text string) ui.Size {
+	var scratch [8]string
+	return layoutBubble(canvas, theme, rowWidth, variant, text, scratch[:0]).size
+}
+
+// Bubble paints one retained content surface and returns its rectangle. The
+// official component has no speech tail, so alignment only positions content
+// inside the row bounds; the bubble is as wide as its text needs, up to 80% of
+// the row (a ghost bubble: all of it), wraps beyond that, and is as tall as its
+// lines. bounds.Height is not used; BubbleReaction takes the returned rectangle.
+func Bubble(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, alignment BubbleAlignment, variant BubbleVariant, text string) ui.Rect {
+	metrics := theme.Metrics
+	var scratch [8]string
+	layout := layoutBubble(canvas, theme, bounds.Width, variant, text, scratch[:0])
+	content := ui.Rect{X: bounds.X, Y: bounds.Y, Width: layout.size.Width, Height: layout.size.Height}
+	if alignment == BubbleEnd {
+		content.X = bounds.X + bounds.Width - content.Width
+	}
+	fill := theme.Primary
+	foreground := theme.PrimaryForeground
+	border := ui.Color{}
+	paintSurface := true
+	paintBorder := false
+	switch variant {
+	case BubbleSecondary:
+		fill = theme.Secondary
+		foreground = theme.SecondaryForeground
+	case BubbleMuted:
+		fill = theme.Muted
+		foreground = theme.Foreground
+	case BubbleTinted:
+		fill = bubbleTint(theme)
+		foreground = theme.Foreground
+	case BubbleOutline:
+		fill = theme.Background
+		foreground = theme.Foreground
+		border = theme.Border
+		paintBorder = true
+	case BubbleGhost:
+		foreground = theme.Foreground
+		paintSurface = false
+	case BubbleDestructive:
+		fill = theme.Danger
+		fill.Alpha = 0.10
+		if theme.Background.Red < 0.5 {
+			fill.Alpha = 0.20
+		}
+		foreground = theme.Danger
+	}
+	if paintSurface {
+		if paintBorder {
+			canvas.RoundedBorder(content, radiusXL(metrics), 1, border, fill)
+		} else {
+			canvas.Rounded(content, radiusXL(metrics), fill)
+		}
+	}
+	for index, line := range layout.lines {
+		canvas.Label(line, ui.Rect{
+			X: content.X + layout.padX, Y: content.Y + layout.padY + float32(index)*layout.lineHeight,
+			Width: max(content.Width-layout.padX*2, 0), Height: layout.lineHeight,
+		}, ui.TextStyle{Size: metrics.FontSizeM, Weight: ui.WeightRegular, Color: foreground})
+	}
+	return content
+}
+
+// bubbleTint is the tinted variant's surface: the primary color washed out toward
+// the page, the official oklch(from primary 0.93 c*0.4 h) in a light theme and
+// the 0.3 lightness in a dark one.
+func bubbleTint(theme ui.Theme) ui.Color {
+	if theme.Background.Red < 0.5 {
+		return blend(theme.Primary, theme.Background, 0.45)
+	}
+	return blend(theme.Primary, theme.Background, 0.86)
+}
+
+// radiusXL is the corner radius of the official rounded-xl surfaces, the one
+// Card uses.
+func radiusXL(metrics ui.Metrics) float32 { return metrics.RadiusSurface + 4 }
+
+// BubbleReactionSide selects whether a reaction capsule overlaps the top or
+// bottom edge of a bubble.
+type BubbleReactionSide uint8
+
+const (
+	BubbleReactionBottom BubbleReactionSide = iota
+	BubbleReactionTop
+)
+
+// BubbleReaction paints the official reaction capsule slot. A non-zero ID
+// makes the capsule interactive without introducing reaction state.
+func BubbleReaction(canvas *ui.Canvas, theme ui.Theme, id ui.ID, bounds ui.Rect, side BubbleReactionSide, alignment BubbleAlignment, label string) {
+	height := theme.Metrics.ControlHeight * 0.62
+	width := canvas.TextWidthWeight(label, theme.Metrics.FontSizeS, ui.WeightMedium) + theme.Metrics.PadControlX
+	x := bounds.X + 12
+	if alignment == BubbleEnd {
+		x = bounds.X + bounds.Width - width - 12
+	}
+	y := bounds.Y + bounds.Height - height/4
+	if side == BubbleReactionTop {
+		y = bounds.Y - height*0.75
+	}
+	capsule := ui.Rect{X: x, Y: y, Width: width, Height: height}
+	canvas.RoundedBorder(capsule, height/2, 2, theme.Card, theme.Muted)
+	canvas.LabelCenter(label, capsule, ui.TextStyle{Size: theme.Metrics.FontSizeS, Weight: ui.WeightMedium, Color: theme.Foreground})
+	if !id.IsZero() {
+		canvas.HitWithLabel(id, capsule, label)
+	}
+}

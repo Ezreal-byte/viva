@@ -1,0 +1,125 @@
+package componentdemo
+
+import (
+	"fmt"
+	"slices"
+	"testing"
+
+	"github.com/vivaui/viva/ui"
+)
+
+type groupCPaintSnapshot struct {
+	rectangles []ui.Rectangle
+	texts      []ui.Text
+	hits       []ui.Hit
+	scope      ui.ID
+	escape     ui.ID
+}
+
+func TestGroupCCatalogOrder(t *testing.T) {
+	expected := [...]string{
+		"navigation-menu", "pagination", "popover", "progress", "questionnaire",
+		"radio-group", "resizable", "scroll-area", "segmented-control", "select", "separator",
+		"sheet", "sidebar", "skeleton", "slider", "sonner", "spinner", "table", "tabs",
+		"textarea", "toast", "toggle", "toggle-group", "tooltip", "tree", "typography",
+	}
+	if len(groupCComponents) != len(expected) {
+		t.Fatalf("group C has %d components, want %d", len(groupCComponents), len(expected))
+	}
+	for index, component := range groupCComponents {
+		if component.ID != expected[index] {
+			t.Fatalf("component %d = %q, want %q", index, component.ID, expected[index])
+		}
+		if component.Title == "" || component.Category == "" || component.Summary == "" || component.paint == nil {
+			t.Fatalf("incomplete metadata for %q: %+v", component.ID, component)
+		}
+		if len(component.Examples) == 0 {
+			t.Fatalf("component %q has no examples", component.ID)
+		}
+		seen := make([]string, 0, len(component.Examples))
+		for _, example := range component.Examples {
+			if example.ID == "" || example.Title == "" || example.Description == "" {
+				t.Fatalf("incomplete example metadata for %q: %+v", component.ID, example)
+			}
+			if slices.Contains(seen, example.ID) {
+				t.Fatalf("duplicate example %q for %q", example.ID, component.ID)
+			}
+			seen = append(seen, example.ID)
+		}
+	}
+}
+
+func TestGroupCPaintLightDarkVisibleAndDeterministic(t *testing.T) {
+	sizes := [...]ui.Size{{Width: 320, Height: 340}, {Width: 760, Height: 380}}
+	for _, component := range groupCComponents {
+		component := component
+		for _, example := range component.Examples {
+			example := example
+			for _, dark := range []bool{false, true} {
+				for _, size := range sizes {
+					name := fmt.Sprintf("%s/%s/dark=%t/%dx%d", component.ID, example.ID, dark, int(size.Width), int(size.Height))
+					t.Run(name, func(t *testing.T) {
+						state := bareState(component.ID, example.ID)
+						state.dark = dark
+						if component.initialize != nil {
+							component.initialize(state)
+						}
+						before := *state
+						var canvas ui.Canvas
+						canvas.SetMeasurer(measureTestText)
+						paintGroupCFrame(&canvas, &component, state, size, dark)
+						if len(canvas.Rectangles()) == 0 && len(canvas.Texts()) == 0 {
+							t.Fatal("paint produced no visible commands")
+						}
+						if canvas.Animating() {
+							t.Fatal("static reduced-motion paint remained animated")
+						}
+						if *state != before {
+							t.Fatal("paint mutated component state")
+						}
+						for _, hit := range canvas.Hits() {
+							if hit.ID.IsZero() {
+								t.Fatal("interactive hit used reserved ID 0")
+							}
+						}
+						expected := groupCSnapshot(&canvas)
+						paintGroupCFrame(&canvas, &component, state, size, dark)
+						assertSameGroupCPaint(t, expected, &canvas)
+					})
+				}
+			}
+		}
+	}
+}
+
+func paintGroupCFrame(canvas *ui.Canvas, component *Component, state *State, size ui.Size, dark bool) {
+	theme := ui.LightTheme()
+	if dark {
+		theme = ui.DarkTheme()
+	}
+	canvas.SetReduceMotion(true)
+	canvas.BeginFrame()
+	canvas.Reset()
+	component.paint(state, canvas, theme, size)
+	canvas.EndFrame()
+}
+
+func groupCSnapshot(canvas *ui.Canvas) groupCPaintSnapshot {
+	return groupCPaintSnapshot{
+		rectangles: slices.Clone(canvas.Rectangles()),
+		texts:      slices.Clone(canvas.Texts()),
+		hits:       slices.Clone(canvas.Hits()),
+		scope:      canvas.TrappedFocusScope(),
+		escape:     canvas.EscapeTarget(),
+	}
+}
+
+func assertSameGroupCPaint(t testing.TB, expected groupCPaintSnapshot, canvas *ui.Canvas) {
+	t.Helper()
+	if !slices.Equal(expected.rectangles, canvas.Rectangles()) ||
+		!slices.Equal(expected.texts, canvas.Texts()) ||
+		!slices.Equal(expected.hits, canvas.Hits()) ||
+		expected.scope != canvas.TrappedFocusScope() || expected.escape != canvas.EscapeTarget() {
+		t.Fatal("identical state produced different paint or interaction streams")
+	}
+}

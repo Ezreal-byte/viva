@@ -1,0 +1,721 @@
+package components
+
+import (
+	"sort"
+
+	"github.com/vivaui/viva/ui"
+)
+
+// TextareaCommand is a request for the caller-owned editor. The component
+// never applies commands or retains editor state itself.
+type TextareaCommand uint8
+
+const (
+	TextareaCommandNone TextareaCommand = iota
+	TextareaCommandInsertNewline
+)
+
+// TextareaSemantics is the typed semantic projection of a textarea snapshot.
+// Selection and composition remain UTF-8 byte ranges matching the paint API.
+type TextareaSemantics struct {
+	ID               ui.ID
+	Label            string
+	Value            string
+	Hint             string
+	Focused          bool
+	Disabled         bool
+	ReadOnly         bool
+	Invalid          bool
+	SelectionStart   int
+	SelectionEnd     int
+	CompositionStart int
+	CompositionEnd   int
+}
+
+// TextareaSnapshot is a caller-owned multiline editor presentation. Long lines
+// wrap at the width of the box, as in shadcn's textarea, and a newline in
+// DisplayValue starts a row; scrolling follows the caret when Layout is set.
+// Editing and IME state remain owned by the application/runtime.
+type TextareaSnapshot struct {
+	ID            ui.ID
+	Label         string
+	Value         string
+	DisplayValue  string
+	Placeholder   string
+	Hint          string
+	Disabled      bool
+	ReadOnly      bool
+	Invalid       bool
+	Focused       bool
+	NativeEditing bool
+	ShowCaret     bool
+	// HideEditorText makes the platform editor behind a focused textarea
+	// invisible: the component paints the text, selection, composition and caret
+	// itself and the editor is only where input arrives (set NativeEditing
+	// false, ShowCaret true). A platform editor draws one line, centered in its
+	// box, which is right for an input and wrong for a box of several rows, where
+	// the caret would sit in the middle instead of on the first line.
+	HideEditorText bool
+	// NoWrap keeps every line on one row, clipped at the edge of the box, as
+	// `white-space: pre` does. The default wraps.
+	NoWrap bool
+	// InsetBottom keeps that much more of the bottom of the box free of text, for
+	// controls the caller lays over it, such as an input group's block-end addon:
+	// the rows scroll above them rather than behind.
+	InsetBottom float32
+	// Layout makes the rows the application's to move through: it keeps them from
+	// one frame to the next (so a steady paint allocates nothing), scrolls to the
+	// caret and, held by the application's key and pointer handlers, moves the
+	// caret by visual row (see TextareaLayout). Without it the box wraps and
+	// paints from its first row, which suits a box that shows what is in it.
+	// With it, DisplayValue must be empty or the text of Value, whose byte
+	// offsets Layout reports.
+	Layout           *TextareaLayout
+	Caret            int
+	SelectionStart   int
+	SelectionEnd     int
+	CompositionStart int
+	CompositionEnd   int
+}
+
+// Semantics returns a normalized, allocation-free semantic snapshot. It does
+// not claim that a platform bridge exposes selection or invalid state yet.
+func (snapshot TextareaSnapshot) Semantics() TextareaSemantics {
+	display := snapshot.DisplayValue
+	if display == "" {
+		display = snapshot.Value
+	}
+	selectionStart, selectionEnd := textareaRange(display, snapshot.SelectionStart, snapshot.SelectionEnd)
+	compositionStart, compositionEnd := textareaRange(display, snapshot.CompositionStart, snapshot.CompositionEnd)
+	return TextareaSemantics{
+		ID: snapshot.ID, Label: snapshot.Label, Value: snapshot.Value, Hint: snapshot.Hint,
+		Focused: snapshot.Focused && !snapshot.Disabled, Disabled: snapshot.Disabled,
+		ReadOnly: snapshot.ReadOnly, Invalid: snapshot.Invalid,
+		SelectionStart: selectionStart, SelectionEnd: selectionEnd,
+		CompositionStart: compositionStart, CompositionEnd: compositionEnd,
+	}
+}
+
+// TextareaCommandForKey maps only keys owned by a multiline editor. Text
+// insertion, deletion, movement, selection extension, and IME remain platform
+// or application editor responsibilities.
+func TextareaCommandForKey(snapshot TextareaSnapshot, key ui.Key) (TextareaCommand, bool) {
+	if snapshot.Disabled || snapshot.ReadOnly {
+		return TextareaCommandNone, false
+	}
+	if key == ui.KeyEnter {
+		return TextareaCommandInsertNewline, true
+	}
+	return TextareaCommandNone, false
+}
+
+// PaintTextarea paints the official Vega multiline recipe and returns its
+// normalized geometry. The official minimum height is 64 logical pixels.
+func PaintTextarea(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, snapshot TextareaSnapshot) ui.Rect {
+	if bounds.Height < 64 {
+		bounds.Height = 64
+	}
+	if canvas == nil || bounds.Width <= 0 {
+		return bounds
+	}
+	focused := !snapshot.Disabled && (snapshot.Focused || !snapshot.ID.IsZero() && canvas.Focused() == snapshot.ID)
+	paintTextEntrySurface(canvas, theme, bounds, textEntryState{Focused: focused, Invalid: snapshot.Invalid, Disabled: snapshot.Disabled})
+	content := ui.Rect{X: bounds.X + inputInsetX, Y: bounds.Y + textareaPadY, Width: textareaMax(0, bounds.Width-2*inputInsetX), Height: textareaMax(0, bounds.Height-2*textareaPadY-snapshot.InsetBottom)}
+	display := snapshot.DisplayValue
+	if display == "" {
+		display = snapshot.Value
+	}
+	layout := snapshot.Layout
+	if layout != nil {
+		layout.painted, layout.caretShown = false, false
+	}
+	if !snapshot.NativeEditing {
+		textareaPaintRows(canvas, theme, content, display, snapshot.Placeholder, snapshot, focused)
+	}
+	if !snapshot.ID.IsZero() {
+		options := ui.HitOptions{
+			Role: ui.RoleTextField, Value: snapshot.Value, Hint: snapshot.Hint,
+			Disabled: snapshot.Disabled, ReadOnly: snapshot.ReadOnly, Multiline: true,
+			TextBounds: content, TextSize: theme.Metrics.FontSizeM, TextColor: theme.Foreground,
+		}
+		if snapshot.HideEditorText {
+			options.TextColor = ui.Color{}
+		}
+		if layout != nil && !snapshot.NativeEditing {
+			options.Placement = layout
+		}
+		canvas.HitWithOptions(snapshot.ID, bounds, snapshot.Label, options)
+	}
+	return bounds
+}
+
+// textareaRows walks the rows of the text being painted: the layout's, kept from
+// the last frame, or, for a box without one, wrapped one at a time as they are
+// reached, which allocates nothing and lets a box that shows its first rows
+// skip the rest.
+type textareaRows struct {
+	layout *TextareaLayout
+	canvas *ui.Canvas
+	text   string
+	size   float32
+	width  float32
+	index  int
+	from   int
+}
+
+// next returns the row at the cursor, where the row after it starts (-1 for
+// none), and false past the last.
+func (rows *textareaRows) next() (row ui.TextRow, after int, ok bool) {
+	if rows.layout != nil {
+		if rows.index >= len(rows.layout.rows) {
+			return ui.TextRow{}, -1, false
+		}
+		row, after = rows.layout.rows[rows.index], -1
+		if rows.index+1 < len(rows.layout.rows) {
+			after = rows.layout.rows[rows.index+1].Start
+		}
+		rows.index++
+		return row, after, true
+	}
+	if rows.from < 0 {
+		return ui.TextRow{}, -1, false
+	}
+	row, rows.from = rows.canvas.WrapRow(rows.text, rows.from, rows.size, ui.WeightRegular, rows.width)
+	rows.index++
+	return row, rows.from, true
+}
+
+func textareaPaintRows(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, value, placeholder string, snapshot TextareaSnapshot, focused bool) {
+	fontSize := theme.Metrics.FontSizeM
+	lineHeight := fontSize + 7
+	placeholderShown := value == ""
+	if placeholderShown {
+		value = placeholder
+	}
+	color := theme.Foreground
+	if placeholderShown {
+		color = theme.MutedForeground
+	}
+	if snapshot.Disabled {
+		color.Alpha *= 0.50
+	}
+	selectionStart, selectionEnd := textareaRange(value, snapshot.SelectionStart, snapshot.SelectionEnd)
+	compositionStart, compositionEnd := textareaRange(value, snapshot.CompositionStart, snapshot.CompositionEnd)
+	caret := textareaBoundary(value, snapshot.Caret)
+	width := bounds.Width
+	if snapshot.NoWrap {
+		width = 0
+	}
+
+	// The layout follows the text of the box, not its hint.
+	layout := snapshot.Layout
+	rows := textareaRows{canvas: canvas, text: value, size: fontSize, width: width}
+	var scroll float32
+	if layout != nil {
+		layout.fit(canvas, snapshot.layoutText(), fontSize, bounds.Width, !snapshot.NoWrap)
+		layout.content, layout.lineHeight = bounds, lineHeight
+		if !placeholderShown {
+			layout.follow(caret, layout.rowOf(caret))
+			rows.layout, rows.index = layout, int(layout.scroll/lineHeight)
+			scroll = layout.scroll
+		} else {
+			layout.scroll = 0
+			layout.followedValid = false
+		}
+		layout.painted = true
+	}
+
+	upstream := layout != nil && !placeholderShown && layout.upstream && layout.upstreamCaret == caret
+	// Rows wrap by the reference metrics and the platform draws them with its own
+	// advances, a pixel or three wider at the end of a full row: the clip, and the
+	// label of a left-aligned row, reach into the padding so that does not cut the
+	// last letter.
+	clip := bounds
+	clip.X -= inputInsetX - 1
+	clip.Width += 2 * (inputInsetX - 1)
+	canvas.Clip(clip)
+	for {
+		row, after, ok := rows.next()
+		if !ok {
+			break
+		}
+		index := rows.index - 1
+		lineBounds := ui.Rect{X: bounds.X, Y: bounds.Y + float32(index)*lineHeight - scroll, Width: bounds.Width, Height: lineHeight}
+		if lineBounds.Y >= bounds.Y+bounds.Height {
+			break
+		}
+		// A row that wrapped does not draw the spaces left hanging at its end.
+		line := value[row.Start:row.End]
+		if after == row.End {
+			line = trimTrailingSpaces(line)
+		}
+		lineEnd := row.Start + len(line)
+		style := ui.TextStyle{Size: fontSize, Weight: ui.WeightRegular, Color: color}
+		origin := canvas.LabelOrigin(line, lineBounds, style, ui.AlignStart)
+		labelBounds := lineBounds
+		if origin == lineBounds.X {
+			labelBounds.Width += inputInsetX - 1 // see clip
+		}
+		var selections []ui.Rect
+		var ranges [4]ui.Rect
+		// At a wrap, the end of one row is the start of the next: the caret is drawn on
+		// the next unless it got to the end of the first by going there.
+		holdsCaret := caret >= row.Start && (after < 0 || caret < after)
+		if after >= 0 && after == row.End && caret == after {
+			holdsCaret = upstream
+		}
+		if upstream && caret == row.Start && row.Start > 0 && value[row.Start-1] != '\n' {
+			holdsCaret = false
+		}
+		if !placeholderShown {
+			selections = textareaLineRanges(canvas, ranges[:0], labelBounds, origin, line, fontSize, row.Start, lineEnd, selectionStart, selectionEnd)
+			selectionColor := theme.Primary
+			if snapshot.Disabled {
+				selectionColor.Alpha *= 0.50
+			}
+			for _, selection := range selections {
+				canvas.Fill(selection, selectionColor)
+			}
+			var underlines [4]ui.Rect
+			underline := theme.Foreground
+			if snapshot.Disabled {
+				underline.Alpha *= 0.50
+			}
+			for _, composition := range textareaLineRanges(canvas, underlines[:0], labelBounds, origin, line, fontSize, row.Start, lineEnd, compositionStart, compositionEnd) {
+				canvas.Fill(ui.Rect{X: composition.X, Y: lineBounds.Y + lineHeight - 3, Width: composition.Width, Height: 1}, underline)
+			}
+			if holdsCaret {
+				caretOffset := textareaBoundary(line, min(caret-row.Start, len(line)))
+				x := min(origin+canvas.TextCaret(line, fontSize, ui.WeightRegular, caretOffset), labelBounds.X+labelBounds.Width-1)
+				textareaPlaceCaret(canvas, theme, layout, lineBounds, x, focused && snapshot.ShowCaret && !snapshot.Disabled)
+			}
+		}
+		if placeholderShown && index == 0 {
+			// An empty box has its caret at the start, in front of the hint.
+			textareaPlaceCaret(canvas, theme, layout, lineBounds, origin, focused && snapshot.ShowCaret && !snapshot.Disabled)
+		}
+		canvas.Label(line, labelBounds, style)
+		for _, selection := range selections {
+			if selection.Width <= 0 {
+				continue
+			}
+			canvas.Clip(selection)
+			selectedColor := theme.PrimaryForeground
+			if snapshot.Disabled {
+				selectedColor.Alpha *= 0.50
+			}
+			canvas.Label(line, labelBounds, ui.TextStyle{Size: fontSize, Weight: ui.WeightRegular, Color: selectedColor})
+			canvas.Unclip()
+		}
+	}
+	canvas.Unclip()
+}
+
+// layoutText is the text a Layout lays out: the one the box paints.
+func (snapshot TextareaSnapshot) layoutText() string {
+	if snapshot.DisplayValue != "" {
+		return snapshot.DisplayValue
+	}
+	return snapshot.Value
+}
+
+// textareaPlaceCaret records where the caret is for the runtime and paints it
+// when the box shows one.
+func textareaPlaceCaret(canvas *ui.Canvas, theme ui.Theme, layout *TextareaLayout, row ui.Rect, x float32, show bool) {
+	if layout != nil {
+		layout.caret, layout.caretShown = ui.Rect{X: x, Y: row.Y, Width: 1, Height: row.Height}, true
+	}
+	if show {
+		canvas.Fill(ui.Rect{X: x, Y: row.Y + 2, Width: 1, Height: 16}, theme.Foreground)
+	}
+}
+
+// textareaLineRanges appends the rectangles of the part of [start, end) that lies on the
+// line (starting at lineStart in the value and drawn from x = origin), one for
+// left-to-right text, more where the range crosses a change of direction.
+func textareaLineRanges(canvas *ui.Canvas, dst []ui.Rect, bounds ui.Rect, origin float32, line string, size float32, lineStart, lineEnd, start, end int) []ui.Rect {
+	start = max(start, lineStart)
+	end = min(end, lineEnd)
+	if end <= start {
+		return dst
+	}
+	localStart := textareaBoundary(line, start-lineStart)
+	localEnd := textareaBoundary(line, end-lineStart)
+	var spans [4]ui.TextSpan
+	for _, span := range canvas.TextSelection(spans[:0], line, size, ui.WeightRegular, localStart, localEnd) {
+		x, width := origin+span.X, span.Width
+		if x+width > bounds.X+bounds.Width {
+			width = bounds.X + bounds.Width - x
+		}
+		dst = append(dst, ui.Rect{X: x, Y: bounds.Y + 1, Width: textareaMax(0, width), Height: textareaMax(0, bounds.Height-2)})
+	}
+	return dst
+}
+
+func textareaRange(value string, start, end int) (int, int) {
+	start = textareaBoundary(value, start)
+	end = textareaBoundary(value, end)
+	if start > end {
+		start, end = end, start
+	}
+	return start, end
+}
+
+func textareaBoundary(value string, offset int) int {
+	if offset <= 0 {
+		return 0
+	}
+	if offset >= len(value) {
+		return len(value)
+	}
+	for offset > 0 && value[offset]&0xc0 == 0x80 {
+		offset--
+	}
+	return offset
+}
+
+func textareaMax(left, right float32) float32 {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+// textareaPadY is the space above the first row and below the last (py-2).
+const textareaPadY = 8
+
+// TextareaMovement is a way of moving the caret of a wrapping Textarea that
+// depends on how its text is laid out in rows.
+type TextareaMovement uint8
+
+const (
+	TextareaMoveNone TextareaMovement = iota
+	// TextareaMoveUp and TextareaMoveDown go one row, to the place nearest the
+	// column the caret had when the run of vertical moves began.
+	TextareaMoveUp
+	TextareaMoveDown
+	// TextareaMoveLineStart and TextareaMoveLineEnd go to the ends of the
+	// visual row, not of the line up to a newline.
+	TextareaMoveLineStart
+	TextareaMoveLineEnd
+	// TextareaMovePageUp and TextareaMovePageDown go a box of rows.
+	TextareaMovePageUp
+	TextareaMovePageDown
+	TextareaMoveTextStart
+	TextareaMoveTextEnd
+)
+
+// TextareaMovementForKey says which movement a key asks for in a multiline
+// editor, and whether it extends the selection (Shift). Home and End, Cmd+Left
+// and Cmd+Right are the ends of a row; Cmd+Up and Cmd+Down, Ctrl+Home and
+// Ctrl+End the ends of the text. Left, Right and the editing keys stay with the
+// text system. Pass the key event of the focused textarea to it, then the result
+// to TextareaLayout.Move, then the new offset to the editor.
+func TextareaMovementForKey(key ui.Key, modifiers ui.Modifiers) (movement TextareaMovement, extend bool) {
+	extend = modifiers&ui.ModifierShift != 0
+	command := modifiers&ui.ModifierMeta != 0
+	control := modifiers&ui.ModifierControl != 0
+	switch {
+	case key == ui.KeyUp && command:
+		return TextareaMoveTextStart, extend
+	case key == ui.KeyDown && command:
+		return TextareaMoveTextEnd, extend
+	case key == ui.KeyUp:
+		return TextareaMoveUp, extend
+	case key == ui.KeyDown:
+		return TextareaMoveDown, extend
+	case key == ui.KeyLeft && command:
+		return TextareaMoveLineStart, extend
+	case key == ui.KeyRight && command:
+		return TextareaMoveLineEnd, extend
+	case key == ui.KeyHome && control:
+		return TextareaMoveTextStart, extend
+	case key == ui.KeyEnd && control:
+		return TextareaMoveTextEnd, extend
+	case key == ui.KeyHome:
+		return TextareaMoveLineStart, extend
+	case key == ui.KeyEnd:
+		return TextareaMoveLineEnd, extend
+	case key == ui.KeyPageUp:
+		return TextareaMovePageUp, extend
+	case key == ui.KeyPageDown:
+		return TextareaMovePageDown, extend
+	}
+	return TextareaMoveNone, false
+}
+
+// TextareaLayout is the visual-row layout of one Textarea, held by the
+// application next to its editor and given to every paint through
+// TextareaSnapshot.Layout. The text and its byte offsets stay the application's;
+// the layout knows only where they fall on the screen:
+//
+//   - it keeps the wrapped rows and the scroll position between frames, so a
+//     steady paint builds nothing, and scrolls to keep the caret in view when
+//     the caret moves;
+//   - Move turns an arrow, Home, End or Page key into the byte offset it leads
+//     to, keeping the column of a run of Up and Down;
+//   - OffsetAt and CaretBounds, which the runtime reads through the hit region
+//     (ui.TextPlacement), put the caret where a press lands and the
+//     input-method window where the caret is;
+//   - ContentHeight sizes a box that grows with its text.
+//
+// The zero value is ready. It is not safe for concurrent use, and one layout
+// serves one textarea.
+type TextareaLayout struct {
+	canvas *ui.Canvas
+	text   string
+	rows   []ui.TextRow
+	wrap   bool
+	size   float32
+	width  float32 // the width rows were wrapped to
+	fitted bool
+
+	// What the last paint showed.
+	painted    bool
+	content    ui.Rect
+	lineHeight float32
+	scroll     float32
+	caret      ui.Rect
+	caretShown bool
+
+	// The caret the view last followed.
+	followed      int
+	followedRow   int
+	followedValid bool
+
+	// A run of Up and Down keeps the column the caret began at.
+	goal       float32
+	goalCaret  int
+	goalActive bool
+	// A caret at the end of a wrapped row is also the start of the next; it is
+	// drawn at the end of the first when it got there by going to that end.
+	upstream      bool
+	upstreamCaret int
+}
+
+// ScrollBy scrolls the box by dy pixels, down when positive, as a wheel does.
+// The next paint keeps the offset until the caret moves.
+func (layout *TextareaLayout) ScrollBy(dy float32) {
+	if !layout.painted {
+		return
+	}
+	layout.scroll = layout.clampScroll(layout.scroll + dy)
+}
+
+// RowCount is how many rows text takes in a box of outer width width: one for
+// each line that fits and as many as a longer one wraps to, and an empty one
+// after a final newline. The rows it wraps are the ones the next paint at that
+// width uses.
+func (layout *TextareaLayout) RowCount(canvas *ui.Canvas, theme ui.Theme, text string, width float32, noWrap bool) int {
+	layout.fit(canvas, text, theme.Metrics.FontSizeM, textareaMax(0, width-2*inputInsetX), !noWrap)
+	return len(layout.rows)
+}
+
+// ContentHeight is the height a box of outer width width needs to show text
+// without scrolling, never below the 64 pixels of the minimum: the
+// `field-sizing: content` of shadcn's textarea. The application caps it where it
+// wants the box to start scrolling.
+func (layout *TextareaLayout) ContentHeight(canvas *ui.Canvas, theme ui.Theme, text string, width float32, noWrap bool) float32 {
+	rows := layout.RowCount(canvas, theme, text, width, noWrap)
+	return textareaMax(64, float32(rows)*(theme.Metrics.FontSizeM+7)+2*textareaPadY)
+}
+
+// OffsetAt is the byte offset of the caret position nearest to a window point,
+// for the runtime to place the caret on a press or drag. It implements
+// ui.TextPlacement.
+func (layout *TextareaLayout) OffsetAt(point ui.Point) (int, bool) {
+	if !layout.painted || !layout.fitted || len(layout.rows) == 0 {
+		return 0, false
+	}
+	row := int((point.Y - layout.content.Y + layout.scroll) / layout.lineHeight)
+	if point.Y < layout.content.Y-layout.scroll {
+		row = 0
+	}
+	row = max(0, min(row, len(layout.rows)-1))
+	offset, upstream := layout.offsetInRow(row, point.X-layout.content.X)
+	layout.setUpstream(offset, upstream)
+	return offset, true
+}
+
+// CaretBounds is the row the caret was painted on, one pixel wide, in window
+// coordinates; false while the caret is scrolled out of view. It implements
+// ui.TextPlacement.
+func (layout *TextareaLayout) CaretBounds() (ui.Rect, bool) {
+	return layout.caret, layout.painted && layout.caretShown
+}
+
+// Move returns the byte offset of text that movement leads to from caret, laid
+// out as the last paint laid it out. Up on the first row goes to the start of
+// the text and Down on the last to its end. It records the column of a run of
+// vertical moves and where a caret at the end of a wrapped row is drawn, so call
+// it for every movement and then put the caret at the offset it returns.
+func (layout *TextareaLayout) Move(text string, caret int, movement TextareaMovement) int {
+	caret = textareaBoundary(text, caret)
+	switch movement {
+	case TextareaMoveTextStart:
+		return layout.arrive(0, false)
+	case TextareaMoveTextEnd:
+		return layout.arrive(len(text), false)
+	}
+	if !layout.painted || layout.canvas == nil {
+		return caret
+	}
+	layout.fit(layout.canvas, text, layout.size, layout.width, layout.wrap)
+	row := layout.rowOf(caret)
+	switch movement {
+	case TextareaMoveLineStart:
+		return layout.arrive(layout.rows[row].Start, false)
+	case TextareaMoveLineEnd:
+		end, upstream := layout.rowEnd(row)
+		return layout.arrive(end, upstream)
+	case TextareaMoveUp, TextareaMoveDown, TextareaMovePageUp, TextareaMovePageDown:
+	default:
+		return caret
+	}
+	step := 1
+	if movement == TextareaMovePageUp || movement == TextareaMovePageDown {
+		step = max(1, int(layout.content.Height/layout.lineHeight)-1)
+	}
+	if movement == TextareaMoveUp || movement == TextareaMovePageUp {
+		step = -step
+	}
+	if !layout.goalActive || layout.goalCaret != caret {
+		layout.goal = layout.columnOf(row, caret)
+	}
+	target := row + step
+	var offset int
+	var upstream bool
+	switch {
+	case target < 0:
+		offset = 0
+	case target >= len(layout.rows):
+		offset = len(text)
+	default:
+		offset, upstream = layout.offsetInRow(target, layout.goal)
+	}
+	goal := layout.goal
+	offset = layout.arrive(offset, upstream)
+	layout.goal, layout.goalCaret, layout.goalActive = goal, offset, true
+	return offset
+}
+
+// arrive notes where the caret ended up and returns it.
+func (layout *TextareaLayout) arrive(offset int, upstream bool) int {
+	layout.setUpstream(offset, upstream)
+	layout.goalActive = false
+	return offset
+}
+
+func (layout *TextareaLayout) setUpstream(offset int, upstream bool) {
+	layout.upstream, layout.upstreamCaret = upstream, offset
+}
+
+// fit wraps text to width unless the rows already are, and keeps what it wrapped
+// them with for the events that follow.
+func (layout *TextareaLayout) fit(canvas *ui.Canvas, text string, size, width float32, wrap bool) {
+	layout.canvas = canvas
+	if layout.fitted && layout.wrap == wrap && layout.size == size && layout.width == width && layout.text == text {
+		return
+	}
+	layout.fitted, layout.wrap, layout.size, layout.width, layout.text = true, wrap, size, width, text
+	wrapWidth := width
+	if !wrap {
+		wrapWidth = 0
+	}
+	layout.rows = canvas.WrapRows(layout.rows[:0], text, size, ui.WeightRegular, wrapWidth)
+}
+
+// rowOf is the row the caret at offset is drawn on.
+func (layout *TextareaLayout) rowOf(offset int) int {
+	row := sort.Search(len(layout.rows), func(index int) bool { return layout.rows[index].Start > offset }) - 1
+	row = max(row, 0)
+	if layout.upstream && layout.upstreamCaret == offset && row > 0 && layout.rows[row-1].End == offset && layout.rows[row].Start == offset {
+		row--
+	}
+	return row
+}
+
+// next is the offset the row after row starts at, and false for the last row.
+func (layout *TextareaLayout) next(row int) (int, bool) {
+	if row+1 < len(layout.rows) {
+		return layout.rows[row+1].Start, true
+	}
+	return 0, false
+}
+
+// shown is the text a row paints and measures: a row that wrapped does not show
+// the spaces it left hanging.
+func (layout *TextareaLayout) shown(row int) string {
+	r := layout.rows[row]
+	line := layout.text[r.Start:r.End]
+	if next, ok := layout.next(row); ok && next == r.End {
+		line = trimTrailingSpaces(line)
+	}
+	return line
+}
+
+// rowEnd is the offset of the End key on a row, and whether it must be drawn at
+// the end of this row though it is also the start of the next.
+func (layout *TextareaLayout) rowEnd(row int) (int, bool) {
+	r := layout.rows[row]
+	next, wrapped := layout.next(row)
+	if !wrapped || next != r.End {
+		return r.End, false
+	}
+	shown := len(layout.shown(row))
+	return r.Start + shown, shown == r.End-r.Start
+}
+
+// columnOf is the distance from the left edge of the content to the caret.
+func (layout *TextareaLayout) columnOf(row, offset int) float32 {
+	r := layout.rows[row]
+	line := layout.shown(row)
+	origin := layout.origin(line)
+	local := textareaBoundary(line, min(max(offset-r.Start, 0), len(line)))
+	return origin + layout.canvas.TextCaret(line, layout.size, ui.WeightRegular, local) - layout.content.X
+}
+
+// origin is the left end of a line as drawn in the content.
+func (layout *TextareaLayout) origin(line string) float32 {
+	return layout.canvas.LabelOrigin(line, ui.Rect{X: layout.content.X, Width: layout.content.Width}, ui.TextStyle{Size: layout.size, Weight: ui.WeightRegular}, ui.AlignStart)
+}
+
+// offsetInRow is the offset on row nearest to column x from the left edge of the
+// content, and whether it is drawn at the end of the row.
+func (layout *TextareaLayout) offsetInRow(row int, x float32) (int, bool) {
+	r := layout.rows[row]
+	line := layout.shown(row)
+	local := layout.canvas.TextOffsetAt(line, layout.size, ui.WeightRegular, x+layout.content.X-layout.origin(line))
+	local = textareaBoundary(line, min(max(local, 0), len(line)))
+	offset := r.Start + local
+	next, wrapped := layout.next(row)
+	return offset, wrapped && next == r.End && offset == r.End
+}
+
+func (layout *TextareaLayout) clampScroll(scroll float32) float32 {
+	most := float32(len(layout.rows))*layout.lineHeight - layout.content.Height
+	return textareaMax(0, min(scroll, most))
+}
+
+// follow scrolls the box to keep the row of caret in view when the caret, or the
+// row it is on, is not where the last paint left it. A wheel or a drag of a
+// scroll bar moves the box and the next paint leaves it there until then.
+func (layout *TextareaLayout) follow(caret, row int) {
+	if !layout.followedValid || layout.followed != caret || layout.followedRow != row {
+		top := float32(row) * layout.lineHeight
+		if top < layout.scroll {
+			layout.scroll = top
+		} else if bottom := top + layout.lineHeight; bottom > layout.scroll+layout.content.Height {
+			layout.scroll = bottom - layout.content.Height
+		}
+	}
+	layout.followed, layout.followedRow, layout.followedValid = caret, row, true
+	layout.scroll = layout.clampScroll(layout.scroll)
+}
+
+func trimTrailingSpaces(value string) string {
+	for len(value) > 0 && value[len(value)-1] == ' ' {
+		value = value[:len(value)-1]
+	}
+	return value
+}

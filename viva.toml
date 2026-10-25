@@ -1,0 +1,18 @@
+# The Viva component gallery, as viva build and viva package see it.
+#
+#   go run ./cmd/viva build                 native program     -> build/viva-gallery
+#   go run ./cmd/viva package               macOS app bundle   -> build/Viva Gallery.app
+#   go run ./cmd/viva build --target web    browser build      -> build/web/
+
+[app]
+name = "Viva Gallery"
+id = "dev.viva.gallery"
+version = "0.1.0"
+executable = "viva-gallery"
+package = "./cmd/showcase"
+
+[web]
+package = "./cmd/gallery-web"
+
+[mac]
+category = "public.app-category.developer-tools"

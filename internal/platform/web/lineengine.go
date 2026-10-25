@@ -1,0 +1,264 @@
+package web
+
+import (
+	"github.com/vivaui/viva/internal/bidi"
+	"github.com/vivaui/viva/internal/grapheme"
+	"github.com/vivaui/viva/internal/textcache"
+	"github.com/vivaui/viva/ui"
+)
+
+// The web text engine. The browser measures a line's width (Canvas 2D
+// measureText, what fillText draws) and, the first time a caret, a selection or a click
+// asks about it, the rectangle of each grapheme cluster (a DOM Range over the same text
+// and font: the browser's own shaping, ligatures and bidirectional order). Everything
+// else is arithmetic on those rectangles, so a line that has been measured costs no call
+// into JavaScript and allocates nothing.
+//
+// This file has no JavaScript in it, so the geometry is tested on the host; domMeasurer
+// (measure_js.go) is the browser.
+
+// lineMeasurer is the browser's text layout.
+type lineMeasurer interface {
+	// width is the advance of value drawn in the font of size and weight, with rtl its
+	// paragraph direction.
+	width(value string, size, weight float32, rtl bool) float32
+	// rects fills lefts[i] and rights[i] with the horizontal extent, from the left end
+	// of the line, of the UTF-16 range [bounds[i], bounds[i+1]) of value.
+	rects(value string, size, weight float32, rtl bool, bounds []int32, lefts, rights []float32)
+	// setInvalidate gives the measurer the function to call when measurements made so
+	// far may no longer hold (a font finished loading).
+	setInvalidate(invalidate func())
+}
+
+// lineEngine implements ui.TextEngine over a lineMeasurer.
+type lineEngine struct {
+	measurer lineMeasurer
+	lines    *textcache.Cache[*measuredLine]
+	resolver bidi.Resolver
+	levels   []uint8
+}
+
+// lineCacheLimit is how many lines a generation holds (twice that many are kept).
+const lineCacheLimit = 512
+
+func newLineEngine(measurer lineMeasurer) *lineEngine {
+	engine := &lineEngine{measurer: measurer, lines: textcache.New[*measuredLine](lineCacheLimit, nil)}
+	measurer.setInvalidate(engine.lines.Clear)
+	return engine
+}
+
+type measuredLine struct {
+	width float32
+	rtl   bool
+	// clusters is built when a caret, selection or click first asks about the line.
+	clusters *clusterRects
+}
+
+// clusterRects is the geometry of a line cluster by cluster. starts has one more entry
+// than there are clusters: len(value).
+type clusterRects struct {
+	starts        []int32
+	left, right   []float32
+	rtl           []bool
+	endsAtRTLEdge bool // the last cluster is right-to-left: the end of the line is its left edge
+}
+
+func (engine *lineEngine) line(value string, size, weight float32) *measuredLine {
+	key := textcache.Key{Value: value, Size: size, Weight: weight}
+	if line, ok := engine.lines.Get(key); ok {
+		return line
+	}
+	rtl := bidi.BaseDirection(value) == bidi.RTL
+	line := &measuredLine{width: engine.measurer.width(value, size, weight, rtl), rtl: rtl}
+	engine.lines.Put(key, line)
+	return line
+}
+
+func (engine *lineEngine) geometry(value string, size, weight float32, line *measuredLine) *clusterRects {
+	if line.clusters != nil {
+		return line.clusters
+	}
+	var starts []int32
+	for at := 0; at < len(value); at = grapheme.Next(value, at) {
+		starts = append(starts, int32(at))
+	}
+	count := len(starts)
+	starts = append(starts, int32(len(value)))
+
+	// One pass over the runes gives each cluster its UTF-16 start (the browser's
+	// offsets) and the index of its first rune (the bidi levels').
+	bounds := make([]int32, count+1)
+	first := make([]int, count)
+	units, runeIndex, cluster := int32(0), 0, 0
+	for at, r := range value {
+		if cluster < count && int(starts[cluster]) == at {
+			bounds[cluster], first[cluster] = units, runeIndex
+			cluster++
+		}
+		units += utf16Units(r)
+		runeIndex++
+	}
+	bounds[count] = units
+	rects := &clusterRects{starts: starts, left: make([]float32, count), right: make([]float32, count), rtl: make([]bool, count)}
+	engine.measurer.rects(value, size, weight, line.rtl, bounds, rects.left, rects.right)
+
+	direction := bidi.LTR
+	if line.rtl {
+		direction = bidi.RTL
+	}
+	paragraph := engine.resolver.Resolve(value, direction)
+	engine.levels = engine.resolver.LineLevels(paragraph, 0, len(value), engine.levels)
+	for cluster := range count {
+		if first[cluster] < len(engine.levels) {
+			rects.rtl[cluster] = engine.levels[first[cluster]]&1 == 1
+		}
+	}
+	if count > 0 {
+		rects.endsAtRTLEdge = rects.rtl[count-1]
+	}
+	line.clusters = rects
+	return rects
+}
+
+func utf16Units(r rune) int32 {
+	if r >= 0x10000 {
+		return 2
+	}
+	return 1
+}
+
+// cluster is the index of the cluster that contains byte offset.
+func (rects *clusterRects) cluster(offset int) int {
+	low, high := 0, len(rects.starts)-1
+	for low < high {
+		middle := int(uint(low+high) >> 1)
+		if int(rects.starts[middle+1]) <= offset {
+			low = middle + 1
+		} else {
+			high = middle
+		}
+	}
+	return low
+}
+
+// caret is the x of the caret at a cluster boundary: the leading edge of the cluster that
+// starts there, the trailing edge of the last one at the end of the line.
+func (rects *clusterRects) caret(cluster int) float32 {
+	if cluster >= len(rects.left) {
+		if rects.endsAtRTLEdge {
+			return rects.left[len(rects.left)-1]
+		}
+		return rects.right[len(rects.right)-1]
+	}
+	if rects.rtl[cluster] {
+		return rects.right[cluster]
+	}
+	return rects.left[cluster]
+}
+
+// Width implements ui.TextEngine.
+func (engine *lineEngine) Width(value string, size, weight float32) float32 {
+	if value == "" {
+		return 0
+	}
+	return engine.line(value, size, weight).width
+}
+
+// Caret implements ui.TextEngine.
+func (engine *lineEngine) Caret(value string, size, weight float32, offset int) float32 {
+	if value == "" {
+		return 0
+	}
+	rects := engine.geometry(value, size, weight, engine.line(value, size, weight))
+	offset = max(0, min(offset, len(value)))
+	if offset == len(value) {
+		return rects.caret(len(rects.left))
+	}
+	return rects.caret(rects.cluster(offset))
+}
+
+// Selection implements ui.TextEngine. The clusters of [start, end) are joined where the
+// display puts them side by side, so a selection that crosses a change of direction is
+// several spans, left to right.
+func (engine *lineEngine) Selection(dst []ui.TextSpan, value string, size, weight float32, start, end int) []ui.TextSpan {
+	if value == "" {
+		return dst
+	}
+	rects := engine.geometry(value, size, weight, engine.line(value, size, weight))
+	first, last := rects.boundary(start, len(value)), rects.boundary(end, len(value))
+	if first > last {
+		first, last = last, first
+	}
+	base := len(dst)
+	for cluster := first; cluster < last; cluster++ {
+		left, right := rects.left[cluster], rects.right[cluster]
+		if count := len(dst); count > base {
+			previous := &dst[count-1]
+			if abuts(previous.X+previous.Width, left) {
+				previous.Width = right - previous.X
+				continue
+			}
+			if abuts(right, previous.X) {
+				previous.Width += previous.X - left
+				previous.X = left
+				continue
+			}
+		}
+		dst = append(dst, ui.TextSpan{X: left, Width: right - left})
+	}
+	// Visual order, then join spans that touch after it.
+	added := dst[base:]
+	for i := 1; i < len(added); i++ {
+		for j := i; j > 0 && added[j].X < added[j-1].X; j-- {
+			added[j], added[j-1] = added[j-1], added[j]
+		}
+	}
+	for i := 1; i < len(added); {
+		if previous := &added[i-1]; abuts(previous.X+previous.Width, added[i].X) {
+			previous.Width = added[i].X + added[i].Width - previous.X
+			copy(added[i:], added[i+1:])
+			added = added[:len(added)-1]
+			dst = dst[:base+len(added)]
+			continue
+		}
+		i++
+	}
+	return dst
+}
+
+// boundary is the index of the cluster that starts at or contains offset, len(clusters)
+// for the end of the line.
+func (rects *clusterRects) boundary(offset, length int) int {
+	if offset >= length {
+		return len(rects.left)
+	}
+	return rects.cluster(max(offset, 0))
+}
+
+// abuts reports whether two edges are the same pixel, as the neighbouring clusters of a
+// run are: the browser reports each from the same advance.
+func abuts(a, b float32) bool {
+	return a-b < 0.25 && b-a < 0.25
+}
+
+// OffsetAt implements ui.TextEngine: the boundary whose caret is nearest x, the earlier
+// one when two are equally near.
+func (engine *lineEngine) OffsetAt(value string, size, weight, x float32) int {
+	if value == "" {
+		return 0
+	}
+	rects := engine.geometry(value, size, weight, engine.line(value, size, weight))
+	best, bestDistance := 0, float32(-1)
+	for cluster := 0; cluster <= len(rects.left); cluster++ {
+		distance := rects.caret(cluster) - x
+		if distance < 0 {
+			distance = -distance
+		}
+		if bestDistance < 0 || distance < bestDistance {
+			best, bestDistance = cluster, distance
+		}
+	}
+	return int(rects.starts[best])
+}
+
+var _ ui.TextEngine = (*lineEngine)(nil)

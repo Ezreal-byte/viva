@@ -1,0 +1,278 @@
+package components
+
+import "github.com/vivaui/viva/ui"
+
+// AlertDialogSize selects the official default or compact confirmation layout.
+type AlertDialogSize uint8
+
+const (
+	AlertDialogDefault AlertDialogSize = iota
+	AlertDialogSmall
+)
+
+// AlertDialogOptions contains caller-owned modal and action identities.
+type AlertDialogOptions struct {
+	Layer    uint16
+	Scope    ui.ID
+	ActionID ui.ID
+	CancelID ui.ID
+	Size     AlertDialogSize
+	// ActionVariant styles the confirming button; the zero value is the default
+	// (primary) one. A confirmation of something that cannot be undone passes
+	// ButtonDestructive. The cancel button is always the outline variant.
+	ActionVariant ButtonVariant
+	// ContentSize.Width defaults to 512 (320 for AlertDialogSmall). A zero
+	// ContentSize.Height sizes a dialog without media to its title, description
+	// and buttons, so a plain confirmation has no empty body above its footer;
+	// set it to leave room for custom body UI, or to size a dialog with media.
+	ContentSize ui.Size
+	// ButtonSize sizes the two buttons and the footer with them; the zero value
+	// is ButtonSizeDefault.
+	ButtonSize ButtonSize
+	// InitialFocusID names the control that takes focus when the confirmation
+	// opens. Zero leaves focus where the runtime puts it.
+	InitialFocusID ui.ID
+}
+
+// AlertDialogLayout exposes official media, body, and footer slots.
+type AlertDialogLayout struct {
+	Content ui.Rect
+	Media   ui.Rect
+	Header  ui.Rect
+	Body    ui.Rect
+	Footer  ui.Rect
+	Action  ui.Rect
+	Cancel  ui.Rect
+}
+
+// AlertDialog is an application-owned modal confirmation recipe.
+type AlertDialog struct {
+	canvas         *ui.Canvas
+	theme          ui.Theme
+	viewport       ui.Rect
+	options        AlertDialogOptions
+	showMedia      bool
+	actionDisabled bool
+	cancelDisabled bool
+}
+
+// BeginAlertDialog creates a confirmation declaration.
+func BeginAlertDialog(canvas *ui.Canvas, theme ui.Theme, viewport ui.Rect, options AlertDialogOptions) AlertDialog {
+	return AlertDialog{canvas: canvas, theme: theme, viewport: viewport, options: options}
+}
+
+// WithMedia reserves and paints the official 64px muted media slot.
+func (dialog AlertDialog) WithMedia() AlertDialog {
+	dialog.showMedia = true
+	return dialog
+}
+
+// DisableAction keeps the primary action visible and semantically disabled.
+func (dialog AlertDialog) DisableAction() AlertDialog {
+	dialog.actionDisabled = true
+	return dialog
+}
+
+// DisableCancel keeps cancellation visible and semantically disabled.
+func (dialog AlertDialog) DisableCancel() AlertDialog {
+	dialog.cancelDisabled = true
+	return dialog
+}
+
+// Disabled disables both explicit dialog actions.
+func (dialog AlertDialog) Disabled() AlertDialog {
+	dialog.actionDisabled = true
+	dialog.cancelDisabled = true
+	return dialog
+}
+
+// Paint paints a complete confirmation and closes the modal layer.
+func (dialog AlertDialog) Paint(title, description, actionLabel, cancelLabel string) AlertDialogLayout {
+	layout := dialog.Begin(title, description, actionLabel, cancelLabel)
+	dialog.End()
+	return layout
+}
+
+// Begin paints the dialog and leaves its layer/scope active for custom body UI.
+func (dialog AlertDialog) Begin(title, description, actionLabel, cancelLabel string) AlertDialogLayout {
+	if dialog.canvas == nil || dialog.viewport.Width <= 0 || dialog.viewport.Height <= 0 {
+		return AlertDialogLayout{}
+	}
+	dialog.canvas.PushLayer(dialog.options.Layer)
+	if !dialog.options.Scope.IsZero() {
+		dialog.canvas.PushFocusScope(dialog.options.Scope)
+	}
+	key := overlayKey(dialog.options.CancelID, dialog.options.ActionID, dialog.options.Scope)
+	beginScrim(dialog.canvas, dialog.theme, key, scrimPresence(dialog.theme, overlayDuration, ui.EaseCSS), dialog.viewport)
+
+	metrics := dialog.theme.Metrics
+	var scratch overlayLines
+	width := dialog.contentWidth()
+	centerText := dialog.options.Size == AlertDialogSmall
+	// The text column: the whole inner width, less the media beside it (the
+	// default size puts the media left of the text, the small one above it).
+	innerWidth := max(width-2*alertDialogPadding(metrics), 0)
+	textWidth := innerWidth
+	if dialog.showMedia && !centerText {
+		textWidth = max(innerWidth-alertDialogMediaSize-alertDialogMediaGap(metrics), 0)
+	}
+	lines := overlayWrap(dialog.canvas, &scratch, description, metrics.FontSizeM, ui.WeightRegular, textWidth)
+	headerHeight, textTop := dialog.headerHeight(len(lines))
+	content := dialog.contentBounds(width, headerHeight)
+
+	dialog.canvas.BeginPresence(key, overlaySurfacePart, fadePresence(dialog.theme), centerOf(content))
+	dialog.canvas.RoundedBorder(content, metrics.RadiusSurface, 1, dialog.theme.Border, dialog.theme.Popover)
+
+	inner := content.Inset(ui.All(alertDialogPadding(metrics)))
+	footerHeight := dialogFooterHeight(metrics, dialog.options.ButtonSize)
+	footer := ui.Rect{X: inner.X, Y: inner.Y + inner.Height - footerHeight, Width: inner.Width, Height: footerHeight}
+	header := ui.Rect{X: inner.X, Y: inner.Y, Width: inner.Width, Height: min(headerHeight, max(footer.Y-metrics.GapItem*dialogGapsBelowBody-inner.Y, 0))}
+	layout := AlertDialogLayout{Content: content, Header: header, Footer: footer}
+
+	textX := header.X
+	if dialog.showMedia {
+		layout.Media = ui.Rect{X: header.X, Y: header.Y, Width: alertDialogMediaSize, Height: alertDialogMediaSize}
+		if centerText {
+			layout.Media.X = header.X + (header.Width-layout.Media.Width)/2
+		} else {
+			textX += alertDialogMediaSize + alertDialogMediaGap(metrics)
+		}
+		dialog.canvas.Rounded(layout.Media, metrics.RadiusControl, dialog.theme.Muted)
+	}
+	titleBounds := ui.Rect{X: textX, Y: header.Y + textTop, Width: textWidth, Height: alertDialogTitleHeight(metrics)}
+	descriptionBounds := ui.Rect{X: textX, Y: titleBounds.Y + titleBounds.Height + alertDialogTitleGap, Width: textWidth}
+	titleStyle := ui.TextStyle{Size: metrics.FontSizeM + 5, Weight: ui.WeightMedium, Color: dialog.theme.PopoverForeground}
+	descriptionStyle := ui.TextStyle{Size: metrics.FontSizeM, Weight: ui.WeightRegular, Color: dialog.theme.MutedForeground}
+	if centerText {
+		dialog.canvas.LabelCenter(title, titleBounds, titleStyle)
+	} else {
+		dialog.canvas.Label(title, titleBounds, titleStyle)
+	}
+	overlayParagraph(dialog.canvas, lines, descriptionBounds, overlayLineHeight(metrics), descriptionStyle, centerText)
+	bodyTop := header.Y + header.Height + metrics.GapItem*dialogGapsAboveBody
+	bodyBottom := footer.Y - metrics.GapItem*dialogGapsBelowBody
+	layout.Body = ui.Rect{X: textX, Y: min(bodyTop, bodyBottom), Width: textWidth, Height: max(bodyBottom-bodyTop, 0)}
+
+	layout.Cancel, layout.Action = dialog.actionBounds(footer, actionLabel, cancelLabel)
+	dialog.paintButton(layout.Cancel, cancelLabel, ButtonOutline, dialog.options.CancelID, dialog.cancelDisabled)
+	dialog.paintButton(layout.Action, actionLabel, dialog.options.ActionVariant, dialog.options.ActionID, dialog.actionDisabled)
+	return layout
+}
+
+// End closes the modal scope and layer and traps focus until cancellation. It
+// also ends what the dialog animates in and out.
+func (dialog AlertDialog) End() {
+	if dialog.canvas == nil || dialog.viewport.Width <= 0 || dialog.viewport.Height <= 0 {
+		return
+	}
+	dialog.canvas.EndPresence()
+	// Claim while the dialog's own scope is still pushed, so a popup painted
+	// deeper inside it keeps its own trap and Escape target.
+	if !dialog.options.Scope.IsZero() {
+		dialog.canvas.TrapFocus(dialog.options.Scope)
+		if !dialog.cancelDisabled {
+			dialog.canvas.SetInitialFocus(dialog.options.InitialFocusID)
+		}
+	}
+	escapeTarget := dialog.options.CancelID
+	if dialog.cancelDisabled {
+		escapeTarget = ui.ID{}
+	}
+	dialog.canvas.SetEscapeTarget(escapeTarget)
+	if !dialog.options.Scope.IsZero() {
+		dialog.canvas.PopFocusScope()
+	}
+	dialog.canvas.PopLayer()
+}
+
+const (
+	alertDialogMediaSize = float32(64)
+	// alertDialogTitleGap separates the title from the description (`gap-1.5`).
+	alertDialogTitleGap = float32(6)
+)
+
+// alertDialogPadding is the dialog's inner padding (`p-6`).
+func alertDialogPadding(metrics ui.Metrics) float32 { return metrics.PadSurface + metrics.GapItem }
+
+// alertDialogMediaGap is the space between media and text (`gap-x-6`).
+func alertDialogMediaGap(metrics ui.Metrics) float32 { return metrics.PadSurface + metrics.GapItem }
+
+func alertDialogTitleHeight(metrics ui.Metrics) float32 { return metrics.FontSizeM + 8 }
+
+// headerHeight is how tall the title, the description's lines and the media
+// make the header, and where the title starts inside it. A default-size media
+// stands beside the text, a small one above it, each with the 8px margin under
+// the media (`mb-2`).
+func (dialog AlertDialog) headerHeight(descriptionLines int) (height, textTop float32) {
+	metrics := dialog.theme.Metrics
+	text := alertDialogTitleHeight(metrics)
+	if descriptionLines > 0 {
+		text += alertDialogTitleGap + float32(descriptionLines)*overlayLineHeight(metrics)
+	}
+	if !dialog.showMedia {
+		return text, 0
+	}
+	media := alertDialogMediaSize + metrics.GapItem
+	if dialog.options.Size == AlertDialogSmall {
+		return media + alertDialogTitleGap + text, media + alertDialogTitleGap
+	}
+	return max(media, text), 0
+}
+
+// contentWidth is ContentSize.Width, else 512 (320 for the small size), and never
+// wider than the viewport less a 16px margin.
+func (dialog AlertDialog) contentWidth() float32 {
+	width := dialog.options.ContentSize.Width
+	if width <= 0 {
+		if dialog.options.Size == AlertDialogSmall {
+			width = 320
+		} else {
+			width = 512
+		}
+	}
+	return max(min(width, dialog.viewport.Width-32), 0)
+}
+
+// contentBounds centers the dialog. Without a ContentSize.Height it is as tall as
+// its parts: the padding around it, the header, the footer and the gaps between
+// them, so a plain confirmation has no empty body above its buttons.
+func (dialog AlertDialog) contentBounds(width, headerHeight float32) ui.Rect {
+	metrics := dialog.theme.Metrics
+	height := dialog.options.ContentSize.Height
+	if height <= 0 {
+		height = 2*alertDialogPadding(metrics) + headerHeight + dialogGapsBelowBody*metrics.GapItem + dialogFooterHeight(metrics, dialog.options.ButtonSize)
+	}
+	height = max(min(height, dialog.viewport.Height-32), 0)
+	return ui.Rect{X: dialog.viewport.X + (dialog.viewport.Width-width)/2, Y: dialog.viewport.Y + (dialog.viewport.Height-height)/2, Width: width, Height: height}
+}
+
+func (dialog AlertDialog) actionBounds(footer ui.Rect, actionLabel, cancelLabel string) (ui.Rect, ui.Rect) {
+	gap := dialog.theme.Metrics.GapItem
+	if dialog.options.Size == AlertDialogSmall {
+		width := (footer.Width - gap) / 2
+		return ui.Rect{X: footer.X, Y: footer.Y, Width: width, Height: footer.Height}, ui.Rect{X: footer.X + width + gap, Y: footer.Y, Width: width, Height: footer.Height}
+	}
+	actionWidth := dialog.canvas.TextWidthWeight(actionLabel, dialog.theme.Metrics.FontSizeM, ui.WeightMedium) + dialog.theme.Metrics.PadControlX*2
+	cancelWidth := dialog.canvas.TextWidthWeight(cancelLabel, dialog.theme.Metrics.FontSizeM, ui.WeightMedium) + dialog.theme.Metrics.PadControlX*2
+	if actionWidth < 72 {
+		actionWidth = 72
+	}
+	if cancelWidth < 72 {
+		cancelWidth = 72
+	}
+	action := ui.Rect{X: footer.X + footer.Width - actionWidth, Y: footer.Y, Width: actionWidth, Height: footer.Height}
+	cancel := ui.Rect{X: action.X - gap - cancelWidth, Y: footer.Y, Width: cancelWidth, Height: footer.Height}
+	return cancel, action
+}
+
+// paintButton paints one footer button with the Button recipe, centered in the
+// footer row.
+func (dialog AlertDialog) paintButton(bounds ui.Rect, label string, variant ButtonVariant, id ui.ID, disabled bool) {
+	button := BeginButton(dialog.canvas, dialog.theme, id, bounds).Size(dialog.options.ButtonSize)
+	height, _, _, _ := button.geometry()
+	button.bounds.Y = bounds.Y + (bounds.Height-height)/2
+	if disabled {
+		button = button.Disabled()
+	}
+	button.paint(label, variant)
+}

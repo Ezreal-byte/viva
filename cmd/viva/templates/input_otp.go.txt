@@ -1,0 +1,439 @@
+package {{PACKAGE}}
+
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/vivaui/viva/ui"
+)
+
+// InputOTPCommand is a request for the caller-owned one-time-code editor.
+// Printable text and IME input continue through the platform text service.
+type InputOTPCommand uint8
+
+const (
+	InputOTPCommandNone InputOTPCommand = iota
+	InputOTPCommandMovePrevious
+	InputOTPCommandMoveNext
+	InputOTPCommandMoveFirst
+	InputOTPCommandMoveLast
+	InputOTPCommandDeleteBackward
+	InputOTPCommandDeleteForward
+)
+
+// InputOTPSemantics is the normalized typed state exposed to an accessibility
+// or native editing bridge. Slot offsets are rune indices, not UTF-8 bytes.
+type InputOTPSemantics struct {
+	ID               ui.ID
+	Label            string
+	Value            string
+	Hint             string
+	Slots            int
+	Focused          bool
+	Disabled         bool
+	ReadOnly         bool
+	Invalid          bool
+	ActiveSlot       int
+	HasActiveSlot    bool
+	SelectionStart   int
+	SelectionEnd     int
+	HasSelection     bool
+	CompositionStart int
+	CompositionEnd   int
+	HasComposition   bool
+}
+
+// InputOTPSnapshot is a caller-owned one-time-code presentation. Slot focus,
+// selection, composition, and caret visibility are snapshots only; this recipe
+// does not run an editor, IME, timer, or caret animation.
+type InputOTPSnapshot struct {
+	ID            ui.ID
+	Label         string
+	Value         string
+	DisplayValue  string
+	Hint          string
+	Slots         int
+	GroupSize     int
+	Disabled      bool
+	ReadOnly      bool
+	Invalid       bool
+	Focused       bool
+	NativeEditing bool
+	// PlatformInput lets the platform text service edit the code through an
+	// invisible one-pixel editor beside the active slot (which is also where an
+	// IME places its candidate window), while the caller keeps painting the
+	// slots from its own editor. Contrast NativeEditing, where the platform
+	// draws the text itself and the slots paint none.
+	PlatformInput    bool
+	HasActiveSlot    bool
+	ActiveSlot       int
+	ShowCaret        bool
+	HasSelection     bool
+	SelectionStart   int
+	SelectionEnd     int
+	HasComposition   bool
+	CompositionStart int
+	CompositionEnd   int
+}
+
+// Semantics returns a normalized, allocation-free snapshot without claiming
+// that the platform currently renders slot-shaped native editors.
+func (snapshot InputOTPSnapshot) Semantics() InputOTPSemantics {
+	slots := snapshot.Slots
+	if slots <= 0 {
+		slots = 6
+	}
+	active := inputOTPClamp(snapshot.ActiveSlot, 0, slots-1)
+	selectionStart, selectionEnd := inputOTPRange(snapshot.SelectionStart, snapshot.SelectionEnd, slots)
+	compositionStart, compositionEnd := inputOTPRange(snapshot.CompositionStart, snapshot.CompositionEnd, slots)
+	return InputOTPSemantics{
+		ID: snapshot.ID, Label: snapshot.Label, Value: snapshot.Value, Hint: snapshot.Hint, Slots: slots,
+		Focused: snapshot.Focused && !snapshot.Disabled, Disabled: snapshot.Disabled,
+		ReadOnly: snapshot.ReadOnly, Invalid: snapshot.Invalid,
+		ActiveSlot: active, HasActiveSlot: snapshot.HasActiveSlot,
+		SelectionStart: selectionStart, SelectionEnd: selectionEnd, HasSelection: snapshot.HasSelection && selectionStart != selectionEnd,
+		CompositionStart: compositionStart, CompositionEnd: compositionEnd, HasComposition: snapshot.HasComposition && compositionStart != compositionEnd,
+	}
+}
+
+// InputOTPCommandForKey maps normalized non-text keys to editor requests. It
+// deliberately does not synthesize digits, paste, selection extension, or IME.
+func InputOTPCommandForKey(snapshot InputOTPSnapshot, key ui.Key) (InputOTPCommand, bool) {
+	if snapshot.Disabled || snapshot.ReadOnly {
+		return InputOTPCommandNone, false
+	}
+	switch key {
+	case ui.KeyLeft:
+		return InputOTPCommandMovePrevious, true
+	case ui.KeyRight:
+		return InputOTPCommandMoveNext, true
+	case ui.KeyHome:
+		return InputOTPCommandMoveFirst, true
+	case ui.KeyEnd:
+		return InputOTPCommandMoveLast, true
+	case ui.KeyBackspace:
+		return InputOTPCommandDeleteBackward, true
+	case ui.KeyDelete:
+		return InputOTPCommandDeleteForward, true
+	default:
+		return InputOTPCommandNone, false
+	}
+}
+
+// InputOTPLayout describes the deterministic intrinsic geometry of an OTP row.
+type InputOTPLayout struct {
+	Bounds        ui.Rect
+	SlotSize      float32
+	Slots         int
+	GroupSize     int
+	SeparatorSpan float32
+}
+
+// SlotBounds returns one slot rectangle, or zero for an invalid index.
+func (layout InputOTPLayout) SlotBounds(index int) ui.Rect {
+	if index < 0 || index >= layout.Slots {
+		return ui.Rect{}
+	}
+	groupsBefore := 0
+	if layout.GroupSize > 0 {
+		groupsBefore = index / layout.GroupSize
+	}
+	return ui.Rect{
+		X: layout.Bounds.X + float32(index)*layout.SlotSize + float32(groupsBefore)*layout.SeparatorSpan,
+		Y: layout.Bounds.Y, Width: layout.SlotSize, Height: layout.SlotSize,
+	}
+}
+
+// PaintInputOTP paints the official grouped 32px native adaptation of the
+// shadcn 36px slots and returns intrinsic layout information.
+func PaintInputOTP(canvas *ui.Canvas, theme ui.Theme, origin ui.Rect, snapshot InputOTPSnapshot) InputOTPLayout {
+	slots := snapshot.Slots
+	if slots <= 0 {
+		slots = 6
+	}
+	groupSize := snapshot.GroupSize
+	if groupSize <= 0 || groupSize >= slots {
+		groupSize = slots
+	}
+	slotSize := theme.Metrics.ControlHeight
+	separatorSpan := float32(32)
+	separatorCount := (slots - 1) / groupSize
+	width := float32(slots)*slotSize + float32(separatorCount)*separatorSpan
+	bounds := ui.Rect{X: origin.X, Y: origin.Y, Width: width, Height: slotSize}
+	layout := InputOTPLayout{Bounds: bounds, SlotSize: slotSize, Slots: slots, GroupSize: groupSize, SeparatorSpan: separatorSpan}
+	if canvas == nil || slotSize <= 0 {
+		return layout
+	}
+	focused := !snapshot.Disabled && (snapshot.Focused || !snapshot.ID.IsZero() && canvas.Focused() == snapshot.ID)
+	activeIndex := -1
+	if !snapshot.NativeEditing && focused && snapshot.HasActiveSlot {
+		activeIndex = snapshot.ActiveSlot
+	}
+	// The active slot goes last: it reaches one pixel over its left neighbor to
+	// recolor the border line they share, so it has to be painted after them.
+	for index := 0; index < slots; index++ {
+		if index != activeIndex {
+			inputOTPPaintSlot(canvas, theme, layout, index, groupSize, focused, snapshot)
+		}
+	}
+	if activeIndex >= 0 && activeIndex < slots {
+		inputOTPPaintSlot(canvas, theme, layout, activeIndex, groupSize, focused, snapshot)
+	}
+	if !snapshot.ID.IsZero() {
+		options := ui.HitOptions{
+			Role: ui.RoleTextField, Value: snapshot.Value, Hint: snapshot.Hint,
+			Disabled: snapshot.Disabled, ReadOnly: snapshot.ReadOnly,
+		}
+		if snapshot.PlatformInput && !snapshot.Disabled && !snapshot.ReadOnly {
+			// An editor whose text cannot be seen: the slots show the code, and
+			// the editor only has to exist where the typing happens. A zero
+			// color is fully transparent.
+			active := layout.SlotBounds(inputOTPClamp(snapshot.ActiveSlot, 0, slots-1))
+			options.TextBounds = ui.Rect{X: active.X, Y: active.Y, Width: 1, Height: active.Height}
+			options.TextSize = theme.Metrics.FontSizeM
+			options.TextColor = ui.Color{}
+		}
+		canvas.HitWithOptions(snapshot.ID, bounds, snapshot.Label, options)
+	}
+	return layout
+}
+
+// inputOTPPaintSlot paints slot index with its content and, when it ends a
+// group that is not the last, the separator that follows.
+func inputOTPPaintSlot(canvas *ui.Canvas, theme ui.Theme, layout InputOTPLayout, index, groupSize int, focused bool, snapshot InputOTPSnapshot) {
+	slot := layout.SlotBounds(index)
+	active, selected, composing := inputOTPSlotState(snapshot, focused, index)
+	inputOTPPaintSlotShape(canvas, theme, slot, index, layout.Slots, groupSize, active, selected, snapshot)
+	inputOTPPaintSlotContent(canvas, theme, slot, index, active, composing, snapshot)
+	if (index+1)%groupSize == 0 && index+1 < layout.Slots {
+		separator := ui.Rect{X: slot.X + slot.Width + 8, Y: slot.Y, Width: 16, Height: slot.Height}
+		color := theme.MutedForeground
+		if snapshot.Disabled {
+			color.Alpha *= 0.50
+		}
+		canvas.DrawIcon(inputOTPSeparatorIcon, ui.Rect{X: separator.X, Y: separator.Y + (separator.Height-16)/2, Width: 16, Height: 16}, color)
+	}
+}
+
+// inputOTPSeparatorIcon is Lucide's minus, the separator between groups. Like
+// the check and the cross it is a path, not the "-" of some font.
+var inputOTPSeparatorIcon = ui.Icon{ViewBox: 24, Stroke: 2, Cap: ui.CapRound, Join: ui.JoinRound, Commands: []ui.PathCommand{
+	ui.MoveTo(5, 12), ui.LineTo(19, 12),
+}}
+
+// inputOTPSlotState reports whether one slot is the active, selected or
+// composing one. Native editing draws all three itself.
+func inputOTPSlotState(snapshot InputOTPSnapshot, focused bool, index int) (active, selected, composing bool) {
+	if snapshot.NativeEditing {
+		return false, false, false
+	}
+	active = focused && snapshot.HasActiveSlot && snapshot.ActiveSlot == index
+	selected = snapshot.HasSelection && index >= min(snapshot.SelectionStart, snapshot.SelectionEnd) && index < max(snapshot.SelectionStart, snapshot.SelectionEnd)
+	composing = snapshot.HasComposition && index >= min(snapshot.CompositionStart, snapshot.CompositionEnd) && index < max(snapshot.CompositionStart, snapshot.CompositionEnd)
+	return active, selected, composing
+}
+
+// inputOTPPaintSlotShape paints one slot's border and fill. The slots of a group
+// read as one segmented field: neighbors share a single border line and only the
+// outer corners of the group are rounded.
+//
+// The shared line belongs to the slot on its left, so a slot that does not open
+// its group paints no left border of its own. The active slot is the exception:
+// its border must be complete, so it paints all four sides and reaches one pixel
+// into the slot on its left to recolor the line it shares with it. Painting the
+// slots in order and never reordering them keeps the rectangle stream stable
+// when focus moves: only the colors and bounds of the slots involved change.
+func inputOTPPaintSlotShape(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, index, slots, groupSize int, active, selected bool, snapshot InputOTPSnapshot) {
+	// An active slot is marked by its border color alone.
+	border, fill := textEntryColors(theme, textEntryState{Focused: active, Invalid: snapshot.Invalid, Disabled: snapshot.Disabled})
+	if selected {
+		fill = theme.Primary
+		fill.Alpha *= 0.20
+		if snapshot.Disabled {
+			fill.Alpha *= 0.50
+		}
+		fill = fill.Over(theme.Background)
+	}
+	position := index % groupSize
+	first := position == 0
+	last := position == groupSize-1 || index == slots-1
+	if active && !first {
+		bounds.X--
+		bounds.Width++
+	}
+	ownsLeft := first || active
+	radius := theme.Metrics.RadiusControl
+	// The rounded shape is soft-edged (the renderer anti-aliases it over 1.5
+	// pixels) while plain rectangles are crisp, so the straight runs of an end
+	// slot are covered with crisp rectangles from where its corner arc ends and
+	// only the arc itself stays soft; otherwise half of every outer edge would
+	// look paler than the other half.
+	arc := min(radius, bounds.Width/2)
+	switch {
+	case first && last:
+		canvas.RoundedBorder(bounds, radius, 1, border, fill)
+	case first:
+		// Rounded on the left only: cover everything right of the arc with
+		// square corners.
+		canvas.RoundedBorder(bounds, radius, 1, border, fill)
+		x := bounds.X + arc
+		canvas.Fill(ui.Rect{X: x, Y: bounds.Y, Width: bounds.Width - arc, Height: bounds.Height}, border)
+		canvas.Fill(ui.Rect{X: x - 1, Y: bounds.Y + 1, Width: bounds.Width - arc, Height: bounds.Height - 2}, fill)
+	case last:
+		// Rounded on the right only: cover everything left of the arc.
+		canvas.RoundedBorder(bounds, radius, 1, border, fill)
+		width := bounds.Width - arc
+		canvas.Fill(ui.Rect{X: bounds.X, Y: bounds.Y, Width: width, Height: bounds.Height}, border)
+		if ownsLeft {
+			canvas.Fill(ui.Rect{X: bounds.X + 1, Y: bounds.Y + 1, Width: width, Height: bounds.Height - 2}, fill)
+		} else {
+			canvas.Fill(ui.Rect{X: bounds.X, Y: bounds.Y + 1, Width: width + 1, Height: bounds.Height - 2}, fill)
+		}
+	case ownsLeft:
+		canvas.Border(bounds, 1, border, fill)
+	default:
+		canvas.Fill(bounds, border)
+		canvas.Fill(ui.Rect{X: bounds.X, Y: bounds.Y + 1, Width: bounds.Width - 1, Height: bounds.Height - 2}, fill)
+	}
+}
+
+// inputOTPPaintSlotContent paints a slot's character, composition underline and
+// caret over the shapes. The caret marks where the next character goes, so it
+// appears only in an empty active slot; a filled one shows just its border.
+func inputOTPPaintSlotContent(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, index int, active, composing bool, snapshot InputOTPSnapshot) {
+	value := snapshot.DisplayValue
+	if value == "" {
+		value = snapshot.Value
+	}
+	character := ""
+	if !snapshot.NativeEditing {
+		character = inputOTPCharacter(value, index)
+	}
+	color := theme.Foreground
+	if snapshot.Disabled {
+		color.Alpha *= 0.50
+	}
+	if character != "" {
+		canvas.LabelCenter(character, bounds, ui.TextStyle{Size: theme.Metrics.FontSizeM, Weight: ui.WeightRegular, Color: color})
+	}
+	if composing {
+		canvas.Fill(ui.Rect{X: bounds.X + 9, Y: bounds.Y + bounds.Height - 5, Width: inputOTPMax(0, bounds.Width-18), Height: 1}, color)
+	}
+	if active && character == "" && snapshot.ShowCaret && !snapshot.Disabled {
+		canvas.Fill(ui.Rect{X: bounds.X + (bounds.Width-1)/2, Y: bounds.Y + (bounds.Height-16)/2, Width: 1, Height: 16}, theme.Foreground)
+	}
+}
+
+// inputOTPCharacter returns the rune of value that belongs in slot index, or ""
+// when the code has not reached that slot yet.
+func inputOTPCharacter(value string, index int) string {
+	if index < 0 {
+		return ""
+	}
+	current := 0
+	for offset, r := range value {
+		if current == index {
+			return value[offset : offset+utf8.RuneLen(r)]
+		}
+		current++
+	}
+	return ""
+}
+
+func inputOTPRange(start, end, slots int) (int, int) {
+	start = inputOTPClamp(start, 0, slots)
+	end = inputOTPClamp(end, 0, slots)
+	if start > end {
+		start, end = end, start
+	}
+	return start, end
+}
+
+func inputOTPClamp(value, minimum, maximum int) int {
+	if value < minimum {
+		return minimum
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
+}
+
+func inputOTPMax(left, right float32) float32 {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+// InputOTPFilter selects which characters a one-time code accepts, after the
+// input-otp package's patterns: REGEXP_ONLY_DIGITS and
+// REGEXP_ONLY_DIGITS_AND_CHARS. The zero value accepts any visible character.
+type InputOTPFilter uint8
+
+const (
+	// InputOTPAny accepts every character except whitespace and controls.
+	InputOTPAny InputOTPFilter = iota
+	// InputOTPDigits accepts the ASCII digits 0-9.
+	InputOTPDigits
+	// InputOTPAlphanumeric accepts the ASCII digits and letters.
+	InputOTPAlphanumeric
+)
+
+// Accepts reports whether the filter lets r into the code.
+func (filter InputOTPFilter) Accepts(r rune) bool {
+	switch filter {
+	case InputOTPDigits:
+		return r >= '0' && r <= '9'
+	case InputOTPAlphanumeric:
+		return r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+	default:
+		return !unicode.IsSpace(r) && !unicode.IsControl(r)
+	}
+}
+
+// Normalize is what a caller-owned editor should store after text is typed or
+// pasted: text reduced to the characters the filter accepts and cut to slots
+// characters (6 when slots is not positive), so a pasted "123-456" becomes
+// "123456" for a digit code. Text that needs no change is returned as is,
+// without allocating.
+func (filter InputOTPFilter) Normalize(text string, slots int) string {
+	if slots <= 0 {
+		slots = 6
+	}
+	count, clean := 0, true
+	for _, r := range text {
+		if !filter.Accepts(r) {
+			clean = false
+			break
+		}
+		count++
+	}
+	if clean && count <= slots {
+		return text
+	}
+	var builder strings.Builder
+	count = 0
+	for _, r := range text {
+		if !filter.Accepts(r) {
+			continue
+		}
+		if count == slots {
+			break
+		}
+		builder.WriteRune(r)
+		count++
+	}
+	return builder.String()
+}
+
+// InputOTPComplete reports whether value fills every slot of the code (6 when
+// slots is not positive): the moment shadcn's onComplete fires. The component
+// keeps no state, so the caller compares it with the previous value.
+func InputOTPComplete(value string, slots int) bool {
+	if slots <= 0 {
+		slots = 6
+	}
+	return utf8.RuneCountInString(value) == slots
+}

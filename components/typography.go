@@ -1,0 +1,54 @@
+package components
+
+import "github.com/vivaui/viva/ui"
+
+// TypographyVariant selects a shadcn documentation typography role.
+type TypographyVariant uint8
+
+const (
+	TypographyH1 TypographyVariant = iota
+	TypographyH2
+	TypographyH3
+	TypographyH4
+	TypographyParagraph
+	TypographyLead
+	TypographyLarge
+	TypographySmall
+	TypographyMuted
+)
+
+// Typography paints one line using the theme's type scale. Rich text, wrapping,
+// and document layout remain separate concerns of the text subsystem.
+func Typography(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, variant TypographyVariant, text string) {
+	metrics := theme.Metrics
+	style := ui.TextStyle{
+		Size: metrics.FontSizeM + 3, Weight: ui.WeightRegular, Color: theme.Foreground,
+	}
+	switch variant {
+	case TypographyH1:
+		style.Size = metrics.FontSizeL * 1.5
+		style.Weight = ui.WeightBold
+	case TypographyH2:
+		style.Size = metrics.FontSizeL + 6
+		style.Weight = ui.WeightSemibold
+	case TypographyH3:
+		style.Size = metrics.FontSizeL
+		style.Weight = ui.WeightSemibold
+	case TypographyH4:
+		style.Size = metrics.FontSizeM + 7
+		style.Weight = ui.WeightSemibold
+	case TypographyLead:
+		style.Size = metrics.FontSizeM + 7
+		style.Color = theme.MutedForeground
+	case TypographyLarge:
+		style.Size = metrics.FontSizeM + 5
+		style.Weight = ui.WeightSemibold
+	case TypographySmall:
+		style.Size = metrics.FontSizeM
+		style.Weight = ui.WeightMedium
+	case TypographyMuted:
+		style.Size = metrics.FontSizeM
+		style.Color = theme.MutedForeground
+	}
+	canvas.Label(text, bounds, style)
+}

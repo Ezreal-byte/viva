@@ -1,0 +1,30 @@
+// Package headless operates a Viva application without opening a window.
+//
+// A Session runs the application's real paint, input routing, focus and
+// text-input paths through app.Driver, with an animation clock that only moves
+// when told to, and can turn the current frame into an image. On macOS the
+// image comes from the window's own Metal pipelines and CoreText
+// rasterizers, drawing into a texture instead of a drawable, so a headless
+// screenshot is the pixels the window would show. That renderer is linked only
+// into builds made with -tags vivahead, so release builds carry none of it;
+// without the tag sessions still operate and answer queries and Image reports
+// ErrNoRenderer. Windows (Direct3D 11, GDI text) and Linux (Vulkan, Pango text)
+// draw their screenshots the same way, with their own renderers,
+// in any build that links this package; only the macOS one also draws the text being
+// edited, which the platform's native editor paints over the scene. A session
+// lays the application out with the platform's text engine, as a window does
+// (Options.ReferenceText asks for the platform-independent reference metrics).
+//
+//	session, err := headless.Open(config, nil, headless.Options{})
+//	session.ClickLabel("New Host")
+//	session.Type("example.com")
+//	session.Keys("cmd+c")
+//	text := session.Driver().Clipboard()
+//	session.Screenshot("after.png")
+//
+// A running application can be driven the same way without any change to its
+// code: link package headless/auto (behind a build tag, so release builds never
+// contain it) and start the process with VIVA_HEADLESS=1. RunCanvas then serves
+// the line protocol documented on Serve on standard input and output instead
+// of opening a window.
+package headless

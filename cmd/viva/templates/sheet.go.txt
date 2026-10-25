@@ -1,0 +1,273 @@
+package {{PACKAGE}}
+
+import (
+	"time"
+
+	"github.com/vivaui/viva/ui"
+)
+
+// SheetSide selects the viewport edge occupied by a sheet.
+type SheetSide uint8
+
+const (
+	SheetRight SheetSide = iota
+	SheetLeft
+	SheetTop
+	SheetBottom
+)
+
+// SheetOptions contains caller-owned modal identities and side geometry.
+type SheetOptions struct {
+	Layer         uint16
+	Scope         ui.ID
+	DismissID     ui.ID
+	CloseID       ui.ID
+	Side          SheetSide
+	ContentExtent float32
+	// BodyHeight sizes a top or bottom sheet that has no ContentExtent to its
+	// parts: the header, a body this tall, the footer and the gaps between them,
+	// as `h-auto` fits a sheet to its content. A side sheet fills the window's
+	// height and ignores it.
+	BodyHeight float32
+	// ButtonSize sizes the footer's buttons and the footer with them; the zero
+	// value is ButtonSizeDefault.
+	ButtonSize ButtonSize
+	// InitialFocusID names the control that takes focus when the sheet opens.
+	// Zero leaves focus where the runtime puts it, which is nowhere when the
+	// opener is outside the new scope.
+	InitialFocusID ui.ID
+}
+
+// SheetLayout exposes the source-owned content slots.
+type SheetLayout struct {
+	Content ui.Rect
+	Header  ui.Rect
+	Body    ui.Rect
+	Footer  ui.Rect
+	Close   ui.Rect
+}
+
+// Sheet is a modal edge panel matching the Vega sheet recipe.
+type Sheet struct {
+	canvas    *ui.Canvas
+	theme     ui.Theme
+	viewport  ui.Rect
+	options   SheetOptions
+	disabled  bool
+	hideClose bool
+}
+
+// BeginSheet creates a sheet declaration.
+func BeginSheet(canvas *ui.Canvas, theme ui.Theme, viewport ui.Rect, options SheetOptions) Sheet {
+	return Sheet{canvas: canvas, theme: theme, viewport: viewport, options: options}
+}
+
+// Actions paints the footer's buttons against its right edge, in the order
+// given, so the last one sits at the corner (see ButtonRow). A disabled sheet
+// makes every action inert. Call it between Begin and End.
+func (sheet Sheet) Actions(layout SheetLayout, actions ...ButtonAction) {
+	overlayActions(sheet.canvas, sheet.theme, layout.Footer, sheet.options.ButtonSize, sheet.disabled, actions)
+}
+
+// Disabled keeps dismiss and close semantics visible while making them inert.
+func (sheet Sheet) Disabled() Sheet {
+	sheet.disabled = true
+	return sheet
+}
+
+// WithoutCloseButton hides the standard close action.
+func (sheet Sheet) WithoutCloseButton() Sheet {
+	sheet.hideClose = true
+	return sheet
+}
+
+// Paint paints a complete sheet and closes its modal layer.
+func (sheet Sheet) Paint(title, description string) SheetLayout {
+	layout := sheet.Begin(title, description)
+	sheet.End()
+	return layout
+}
+
+// Begin paints the edge panel and leaves its layer/scope active for body UI.
+func (sheet Sheet) Begin(title, description string) SheetLayout {
+	if sheet.canvas == nil || sheet.viewport.Width <= 0 || sheet.viewport.Height <= 0 {
+		return SheetLayout{}
+	}
+	sheet.canvas.PushLayer(sheet.options.Layer)
+	if !sheet.options.Scope.IsZero() {
+		sheet.canvas.PushFocusScope(sheet.options.Scope)
+	}
+	key := overlayKey(sheet.options.DismissID, sheet.options.CloseID, sheet.options.Scope)
+	beginScrim(sheet.canvas, sheet.theme, key, scrimPresence(sheet.theme, sheetScrimTime, ui.EaseInOut), sheet.viewport)
+	if !sheet.options.DismissID.IsZero() {
+		sheet.canvas.HitWithOptions(sheet.options.DismissID, sheet.viewport, "Dismiss sheet", ui.HitOptions{
+			Role: ui.RoleButton, Disabled: sheet.disabled, SkipFocus: true, Backdrop: true,
+		})
+	}
+	metrics := sheet.theme.Metrics
+	padding := metrics.PadSurface
+	var scratch overlayLines
+	lines := overlayWrap(sheet.canvas, &scratch, description, metrics.FontSizeM, ui.WeightRegular, sheet.contentWidth()-2*padding)
+	headerHeight := sheetHeaderHeight(metrics, len(lines))
+	content := sheet.contentBounds(headerHeight)
+	sheet.canvas.BeginPresence(key, overlaySurfacePart, sheet.presence(), centerOf(content))
+	sheet.canvas.Elevate(content, 0, ui.ShadowLG) // shadow-lg
+	sheet.canvas.Fill(content, sheet.theme.Popover)
+	sheet.paintInnerBorder(content)
+	// The panel is opaque to pointers: pressing it must not reach the dismiss
+	// target behind it.
+	sheet.canvas.Block(content)
+
+	inner := content.Inset(ui.All(padding))
+	footerHeight := dialogFooterHeight(metrics, sheet.options.ButtonSize)
+	layout := SheetLayout{
+		Content: content,
+		Header:  ui.Rect{X: inner.X, Y: inner.Y, Width: inner.Width, Height: headerHeight},
+		Footer:  ui.Rect{X: inner.X, Y: inner.Y + inner.Height - footerHeight, Width: inner.Width, Height: footerHeight},
+	}
+	layout.Body = ui.Rect{X: inner.X, Y: layout.Header.Y + layout.Header.Height + metrics.GapItem*2, Width: inner.Width, Height: max(0, layout.Footer.Y-layout.Header.Y-layout.Header.Height-metrics.GapItem*5)}
+	titleHeight := overlayLineHeight(metrics)
+	sheet.canvas.Label(title, ui.Rect{X: inner.X, Y: inner.Y, Width: inner.Width, Height: titleHeight}, ui.TextStyle{Size: overlayTitleSize(metrics), Weight: ui.WeightMedium, Color: sheet.theme.Foreground})
+	overlayParagraph(sheet.canvas, lines, ui.Rect{X: inner.X, Y: inner.Y + titleHeight + sheetTitleGap, Width: inner.Width}, overlayLineHeight(metrics), ui.TextStyle{
+		Size: metrics.FontSizeM, Weight: ui.WeightRegular, Color: sheet.theme.MutedForeground,
+	}, false)
+	if !sheet.hideClose {
+		closeSize := metrics.ControlHeight
+		layout.Close = ui.Rect{X: content.X + content.Width - padding - closeSize, Y: content.Y + padding, Width: closeSize, Height: closeSize}
+		sheet.paintClose(layout.Close)
+	}
+	return layout
+}
+
+// sheetTitleGap separates the title from the description (`gap-1.5`).
+const sheetTitleGap = float32(6)
+
+// sheetHeaderHeight is the title and, under it, the description's lines.
+func sheetHeaderHeight(metrics ui.Metrics, descriptionLines int) float32 {
+	height := overlayLineHeight(metrics)
+	if descriptionLines > 0 {
+		height += sheetTitleGap + float32(descriptionLines)*overlayLineHeight(metrics)
+	}
+	return height
+}
+
+// presence is how the panel comes and goes: it fades and slides 40px from its
+// edge (Vega's `translate-*-[2.5rem]` with `duration-200 ease-in-out`).
+func (sheet Sheet) presence() ui.Presence {
+	if !moving(sheet.theme) {
+		return ui.Presence{}
+	}
+	slide := ui.Point{X: sheetSlide}
+	switch sheet.options.Side {
+	case SheetLeft:
+		slide = ui.Point{X: -sheetSlide}
+	case SheetTop:
+		slide = ui.Point{Y: -sheetSlide}
+	case SheetBottom:
+		slide = ui.Point{Y: sheetSlide}
+	}
+	return ui.Presence{Motion: ui.Motion{Duration: sheetDuration, Easing: ui.EaseInOut}, Fade: true, SlideIn: slide, SlideOut: slide}
+}
+
+// End closes the layer and installs modal focus and Escape routing. It also ends
+// what the sheet animates in and out.
+func (sheet Sheet) End() {
+	if sheet.canvas == nil || sheet.viewport.Width <= 0 || sheet.viewport.Height <= 0 {
+		return
+	}
+	sheet.canvas.EndPresence()
+	// Claim while the sheet's own scope is still pushed, so a popup painted
+	// deeper inside it keeps its own trap and Escape target.
+	if !sheet.options.Scope.IsZero() {
+		sheet.canvas.TrapFocus(sheet.options.Scope)
+		if !sheet.disabled {
+			sheet.canvas.SetInitialFocus(sheet.options.InitialFocusID)
+		}
+	}
+	escapeTarget := sheet.options.DismissID
+	if escapeTarget.IsZero() {
+		escapeTarget = sheet.options.CloseID
+	}
+	if sheet.disabled {
+		escapeTarget = ui.ID{}
+	}
+	sheet.canvas.SetEscapeTarget(escapeTarget)
+	if !sheet.options.Scope.IsZero() {
+		sheet.canvas.PopFocusScope()
+	}
+	sheet.canvas.PopLayer()
+}
+
+// contentWidth is the width the sheet's text lays out in: the window's for a top
+// or bottom sheet, the panel's for a side sheet.
+func (sheet Sheet) contentWidth() float32 {
+	if sheet.options.Side == SheetTop || sheet.options.Side == SheetBottom {
+		return sheet.viewport.Width
+	}
+	extent := sheet.options.ContentExtent
+	if extent <= 0 {
+		extent = min(sheet.viewport.Width*0.75, 384)
+	}
+	return min(extent, sheet.viewport.Width)
+}
+
+func (sheet Sheet) contentBounds(headerHeight float32) ui.Rect {
+	extent := sheet.options.ContentExtent
+	if sheet.options.Side == SheetTop || sheet.options.Side == SheetBottom {
+		if extent <= 0 {
+			metrics := sheet.theme.Metrics
+			extent = 2*metrics.PadSurface + headerHeight + dialogFooterHeight(metrics, sheet.options.ButtonSize) + max(sheet.options.BodyHeight, 0) + 5*metrics.GapItem
+		}
+		extent = min(extent, sheet.viewport.Height)
+		y := sheet.viewport.Y
+		if sheet.options.Side == SheetBottom {
+			y = sheet.viewport.Y + sheet.viewport.Height - extent
+		}
+		return ui.Rect{X: sheet.viewport.X, Y: y, Width: sheet.viewport.Width, Height: extent}
+	}
+	extent = sheet.contentWidth()
+	x := sheet.viewport.X
+	if sheet.options.Side == SheetRight {
+		x = sheet.viewport.X + sheet.viewport.Width - extent
+	}
+	return ui.Rect{X: x, Y: sheet.viewport.Y, Width: extent, Height: sheet.viewport.Height}
+}
+
+func (sheet Sheet) paintInnerBorder(content ui.Rect) {
+	switch sheet.options.Side {
+	case SheetLeft:
+		sheet.canvas.Fill(ui.Rect{X: content.X + content.Width - 1, Y: content.Y, Width: 1, Height: content.Height}, sheet.theme.Border)
+	case SheetTop:
+		sheet.canvas.Fill(ui.Rect{X: content.X, Y: content.Y + content.Height - 1, Width: content.Width, Height: 1}, sheet.theme.Border)
+	case SheetBottom:
+		sheet.canvas.Fill(ui.Rect{X: content.X, Y: content.Y, Width: content.Width, Height: 1}, sheet.theme.Border)
+	default:
+		sheet.canvas.Fill(ui.Rect{X: content.X, Y: content.Y, Width: 1, Height: content.Height}, sheet.theme.Border)
+	}
+}
+
+func (sheet Sheet) paintClose(bounds ui.Rect) {
+	fill := sheet.theme.Background
+	fill.Alpha = 0
+	foreground := sheet.theme.MutedForeground
+	if !sheet.disabled && sheet.canvas.Hovered() == sheet.options.CloseID {
+		fill = sheet.theme.Accent
+		foreground = sheet.theme.AccentForeground
+	}
+	if sheet.disabled {
+		foreground.Alpha *= 0.50
+	}
+	sheet.canvas.Rounded(bounds, sheet.theme.Metrics.RadiusControl, fill)
+	paintCross(sheet.canvas, bounds, 16, foreground)
+	if !sheet.options.CloseID.IsZero() {
+		sheet.canvas.HitWithOptions(sheet.options.CloseID, bounds, "Close sheet", ui.HitOptions{Role: ui.RoleButton, Disabled: sheet.disabled})
+	}
+}
+
+// A sheet takes Vega's `duration-200 ease-in-out`, its scrim the 150ms of
+// `transition-opacity`, and it slides in from 40px (`translate-*-[2.5rem]`).
+const (
+	sheetDuration  = 200 * time.Millisecond
+	sheetScrimTime = 150 * time.Millisecond
+	sheetSlide     = float32(40)
+)

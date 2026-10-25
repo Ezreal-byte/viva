@@ -1,0 +1,20 @@
+//go:build linux
+
+package app
+
+import (
+	"testing"
+
+	"github.com/vivaui/viva/ui"
+)
+
+func TestLinuxAcceptsNativeTextInputConfiguration(t *testing.T) {
+	runner = func(Config, *ui.Canvas) error { return nil }
+	defer func() { runner = nil }()
+	err := RunCanvas(Config{
+		TextInput: func(TextInputContext) *TextInput { return nil },
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunCanvas error = %v", err)
+	}
+}

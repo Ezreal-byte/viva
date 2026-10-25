@@ -1,0 +1,26 @@
+---
+import type { GetStaticPaths } from 'astro';
+import DocPageLayout from '../../../layouts/DocPageLayout.astro';
+import { locales, isLocale, type Locale } from '../../../lib/i18n';
+import { siteText } from '../../../lib/site';
+import { apiPath } from '../../../lib/routes';
+import { readAPI } from '../../../lib/api';
+
+export const getStaticPaths = (() => locales.map(lang => ({ params: { lang } }))) satisfies GetStaticPaths;
+const locale = Astro.params.lang;
+if (!isLocale(locale)) throw new Error('Unsupported locale');
+const text = siteText(locale);
+const { packages } = readAPI();
+const alternates = Object.fromEntries(locales.map(language => [language, apiPath(language)])) as Record<Locale, string>;
+const navigation = [{ heading: text.apiPackages, links: packages.map(entry => ({ href: apiPath(locale, entry.name), label: entry.name })) }];
+---
+
+<DocPageLayout {locale} title={text.apiTitle} summary={text.apiSummary} section="api" {alternates} {navigation}>
+  <div class="page-heading"><h1>{text.apiTitle}</h1><p class="page-summary">{text.apiSummary}</p></div>
+  {locale === 'zh' && <p class="repository-note">{text.apiEnglishOnly}</p>}
+  <div class="guide-cards">{packages.map(entry => <a class="guide-card" href={apiPath(locale, entry.name)}>
+    <h2><code>{entry.importPath}</code></h2>
+    <p>{entry.synopsis}</p>
+    <p class="guide-card-meta">{entry.types.length} {text.apiTypes.toLowerCase()} · {entry.functions.length} {text.apiFunctions.toLowerCase()}</p>
+  </a>)}</div>
+</DocPageLayout>

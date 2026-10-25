@@ -1,0 +1,1002 @@
+package components
+
+import (
+	"strconv"
+	"strings"
+	"unicode/utf8"
+	"unsafe"
+
+	"github.com/vivaui/viva/markdown"
+	"github.com/vivaui/viva/ui"
+)
+
+// MarkdownStyle sizes the text of a MarkdownView. The zero value is a 13-point
+// body on a 20-point line.
+type MarkdownStyle struct {
+	// Size is the body text size. Headings are scaled from it, inline code and
+	// code blocks are a point smaller.
+	Size float32
+	// LineHeight is the distance between the lines of body text.
+	LineHeight float32
+	// MonoFace is the fixed-pitch family of code.
+	MonoFace ui.MonoFace
+	// CodeInset keeps this much of the right side of every code block free of
+	// text: room for a button the application paints over the block.
+	CodeInset float32
+	// Highlight, when set, is asked for the colored stretches of every line of a
+	// fenced block: language is the block's info string ("bash", "go", ""), line
+	// one line of its code. It appends to dst the runs it wants colored, in
+	// order, not overlapping, on character boundaries, and returns dst; whatever
+	// it leaves out is plain code. It sees one line at a time, so a comment or
+	// string that runs over several lines is only colored where the lexer can
+	// tell from the line itself. The colors come from MarkdownLook.Code.
+	Highlight func(language, line string, dst []MarkdownCodeRun) []MarkdownCodeRun
+}
+
+// MarkdownCodeClass says what a stretch of code is, which MarkdownLook.Code turns
+// into a color. The zero class is plain code.
+type MarkdownCodeClass uint8
+
+const (
+	CodeComment MarkdownCodeClass = iota + 1
+	CodeString
+	CodeNumber
+	CodeKeyword
+	CodeFunction
+	CodeVariable
+	CodeFlag
+	CodeKey
+	CodeAdded
+	CodeRemoved
+	// MarkdownCodeClasses is the size of MarkdownLook.Code.
+	MarkdownCodeClasses
+)
+
+// MarkdownCodeRun is a stretch of one line of code, in bytes, and what it is.
+type MarkdownCodeRun struct {
+	Start, End int
+	Class      MarkdownCodeClass
+}
+
+// MarkdownLook colors a MarkdownView.
+type MarkdownLook struct {
+	Text           ui.Color // body text, headings and code
+	Muted          ui.Color // quotes, list markers
+	Link           ui.Color
+	CodeFill       ui.Color // behind a fenced block
+	InlineCodeFill ui.Color // behind code inside a line
+	Line           ui.Color // borders, rules and quote bars
+	// Code colors the classes of highlighted code, by class; a class left
+	// transparent is drawn in Text.
+	Code   [MarkdownCodeClasses]ui.Color
+	Radius float32 // corners of code blocks and tables
+}
+
+// MarkdownLookFor derives a look from a theme.
+func MarkdownLookFor(theme ui.Theme) MarkdownLook {
+	return MarkdownLook{
+		Text: theme.Foreground, Muted: theme.MutedForeground, Link: theme.Chart[1],
+		CodeFill: theme.Muted, InlineCodeFill: theme.Muted, Line: theme.Border,
+		Radius: theme.Metrics.RadiusControl,
+	}
+}
+
+// MarkdownCode is a fenced code block of a laid-out document: where it is, so
+// the application can put a copy button on it, and what it holds.
+type MarkdownCode struct {
+	Bounds ui.Rect // relative to the origin the document is painted at
+	Text   string
+}
+
+// MarkdownPaint says where and how to paint a MarkdownView.
+type MarkdownPaint struct {
+	Look MarkdownLook
+	// X and Y are where the top-left corner of the document goes.
+	X, Y float32
+	// Clip is the visible part of the canvas. Nothing outside it is painted
+	// and no link outside it gets a hit region. The zero Rect means everything.
+	Clip ui.Rect
+	// Links names the hit regions of links: fragment i of the view is
+	// Links.At(Base+i), and MarkdownView.Link(i) says where it points. Zero
+	// paints links without hits.
+	Links ui.Scope
+	// Base is added to the number of every fragment, so that several views
+	// painted in one frame can share a scope: give each the total of the
+	// LinkCount of the views before it.
+	Base int
+}
+
+// MarkdownView lays out and paints a markdown.Document. It keeps the arrays it
+// builds, so laying out the next version of a message that is still being typed
+// allocates nothing once the view is warm. The zero value is ready; a view is
+// used by one goroutine, and one view serves one document.
+//
+//	doc.Parse(message)
+//	height := view.Layout(canvas, components.MarkdownStyle{Size: 13}, &doc, width)
+//	...
+//	view.Paint(canvas, components.MarkdownPaint{Look: components.MarkdownLookFor(theme), X: x, Y: y, Links: links})
+//
+// Layout measures text and is the expensive half: do it when the text or the
+// width changed, and call Paint every frame. Proportional text has no italic
+// face yet, so emphasis is drawn a weight heavier than the text around it.
+type MarkdownView struct {
+	pieces  []mdPiece
+	runs    []mdCodeRun
+	hl      []MarkdownCodeRun
+	scratch []ui.TextRun
+	cell    float32 // the width of a cell of code
+	boxes   []mdBox
+	links   []mdLink
+	codes   []MarkdownCode
+	atoms   []mdAtom
+	numbers []byte
+	tabs    []byte // code lines with their tabs spread into blanks
+	bars    [markdownMaxQuote + 1]int32
+	face    ui.MonoFace
+	height  float32
+}
+
+// Height is the height of the laid-out document.
+func (v *MarkdownView) Height() float32 { return v.height }
+
+// Codes lists the fenced code blocks, in reading order.
+func (v *MarkdownView) Codes() []MarkdownCode { return v.codes }
+
+// LinkCount is how many link fragments the document has: a link that wraps onto
+// two lines is two fragments.
+func (v *MarkdownView) LinkCount() int { return len(v.links) }
+
+// Link returns the destination of link fragment i, as numbered by
+// MarkdownPaint.Links (less Base), and "" for a number that is not one.
+func (v *MarkdownView) Link(i int) string {
+	if i < 0 || i >= len(v.links) {
+		return ""
+	}
+	return v.links[i].dest
+}
+
+const (
+	markdownMaxQuote  = 8
+	markdownQuoteStep = 14
+	markdownListStep  = 20
+	markdownMarkerW   = 24
+	markdownCodePadX  = 10
+	markdownCodePadY  = 8
+	markdownCellPadX  = 8
+	markdownCellPadY  = 5
+	markdownMaxLines  = 20000 // the most lines one layout produces
+)
+
+type mdColor uint8
+
+const (
+	mdColText mdColor = iota
+	mdColMuted
+	mdColLink
+)
+
+// mdCodeRun is a stretch of a highlighted piece: how many bytes and cells.
+type mdCodeRun struct {
+	bytes, cells int32
+	class        MarkdownCodeClass
+}
+
+type mdPiece struct {
+	runLo, runHi int32 // the stretches of a highlighted line of code, in View.runs
+	text         string
+	x, y, w, h   float32
+	size         float32
+	weight       float32
+	color        mdColor
+	mono         bool
+	strike       bool
+	link         int32
+}
+
+type mdBoxKind uint8
+
+const (
+	mdBoxCode mdBoxKind = iota
+	mdBoxInlineCode
+	mdBoxBar
+	mdBoxLine
+	mdBoxHead
+)
+
+type mdBox struct {
+	kind       mdBoxKind
+	x, y, w, h float32
+}
+
+type mdLink struct {
+	x, y, w, h float32
+	size       float32
+	text, dest string
+}
+
+type mdAtom struct {
+	span, lo, hi int32
+	w, space     float32 // width, and the width of the blank that follows it
+	brk          bool    // a line break
+	glue         bool    // punctuation that may not start a line
+}
+
+type mdFont struct {
+	size, line, weight float32
+	color              mdColor
+}
+
+// mdLayout is the state of one Layout call.
+type mdLayout struct {
+	v      *MarkdownView
+	canvas *ui.Canvas
+	style  MarkdownStyle
+	doc    *markdown.Document
+	lines  int
+}
+
+// Layout positions the blocks of doc in a column width wide and returns its
+// height. Positions are relative to the point the document is painted at.
+func (v *MarkdownView) Layout(canvas *ui.Canvas, style MarkdownStyle, doc *markdown.Document, width float32) float32 {
+	if style.Size <= 0 {
+		style.Size = 13
+	}
+	if style.LineHeight <= 0 {
+		style.LineHeight = float32(int(style.Size*1.55 + 0.5))
+	}
+	v.pieces, v.boxes, v.links, v.codes, v.numbers, v.runs, v.tabs = v.pieces[:0], v.boxes[:0], v.links[:0], v.codes[:0], v.numbers[:0], v.runs[:0], v.tabs[:0]
+	v.bars = [markdownMaxQuote + 1]int32{}
+	v.face = style.MonoFace
+	l := mdLayout{v: v, canvas: canvas, style: style, doc: doc}
+	width = max(width, 40)
+
+	body := mdFont{size: style.Size, line: style.LineHeight, weight: ui.WeightRegular, color: mdColText}
+	y := float32(0)
+	var prev *markdown.Block
+	for index := range doc.Blocks {
+		if l.lines >= markdownMaxLines {
+			break
+		}
+		b := &doc.Blocks[index]
+		y += l.gap(prev, b)
+		x0 := float32(b.Quote) * markdownQuoteStep
+		w := width - x0
+		top := y
+		t := body
+		if b.Quote > 0 {
+			t.color = mdColMuted
+		}
+		switch b.Kind {
+		case markdown.Paragraph:
+			indent := float32(0)
+			if b.Level > 0 {
+				indent = float32(b.Level-1)*markdownListStep + markdownMarkerW
+			}
+			y = l.inline(doc.Spans(b), x0+indent, w-indent, y, t, markdown.AlignLeft)
+		case markdown.Heading:
+			y = l.inline(doc.Spans(b), x0, w, y, l.heading(b.Level, t), markdown.AlignLeft)
+		case markdown.Item:
+			indent := float32(b.Level)*markdownListStep + markdownMarkerW
+			l.marker(b, x0+float32(b.Level)*markdownListStep, y, t)
+			y = l.inline(doc.Spans(b), x0+indent, w-indent, y, t, markdown.AlignLeft)
+			y = max(y, top+t.line)
+		case markdown.Code:
+			y = l.code(b, x0, w, y)
+		case markdown.Rule:
+			v.boxes = append(v.boxes, mdBox{kind: mdBoxLine, x: x0, y: y + 6, w: w, h: 1})
+			y += 13
+		case markdown.Table:
+			y = l.table(b, x0, w, y, t)
+		}
+		l.quoteBars(b.Quote, top, y)
+		prev = b
+	}
+	v.height = y
+	return y
+}
+
+func (l *mdLayout) heading(level int, t mdFont) mdFont {
+	scale := float32(1)
+	switch level {
+	case 1:
+		scale = 1.4
+	case 2:
+		scale = 1.25
+	case 3:
+		scale = 1.1
+	}
+	t.size *= scale
+	t.line = float32(int(t.line*scale + 0.5))
+	t.weight = ui.WeightSemibold
+	if level == 1 {
+		t.weight = ui.WeightBold
+	}
+	return t
+}
+
+// gap is the space between two blocks.
+func (l *mdLayout) gap(prev, cur *markdown.Block) float32 {
+	if prev == nil {
+		return 0
+	}
+	lh := l.style.LineHeight
+	switch {
+	case prev.Kind == markdown.Item && (cur.Kind == markdown.Item || cur.Kind == markdown.Paragraph && cur.Level > 0):
+		return float32(int(lh * 0.25))
+	case cur.Kind == markdown.Heading:
+		return float32(int(lh * 0.75))
+	case prev.Kind == markdown.Heading:
+		return float32(int(lh * 0.3))
+	}
+	return float32(int(lh * 0.45))
+}
+
+// quoteBars keeps one bar per quote level running through the blocks inside it.
+func (l *mdLayout) quoteBars(quote int, top, bottom float32) {
+	v := l.v
+	for level := 1; level <= markdownMaxQuote; level++ {
+		if level > quote {
+			v.bars[level] = 0
+			continue
+		}
+		if open := v.bars[level]; open > 0 {
+			box := &v.boxes[open-1]
+			box.h = bottom - box.y
+			continue
+		}
+		v.boxes = append(v.boxes, mdBox{kind: mdBoxBar, x: float32(level-1)*markdownQuoteStep + 2, y: top, w: 3, h: bottom - top})
+		v.bars[level] = int32(len(v.boxes))
+	}
+}
+
+// marker draws the bullet or number in front of a list item.
+func (l *mdLayout) marker(b *markdown.Block, x, y float32, t mdFont) {
+	v := l.v
+	text := "•"
+	if b.Number > 0 {
+		start := len(v.numbers)
+		v.numbers = strconv.AppendInt(v.numbers, int64(b.Number), 10)
+		v.numbers = append(v.numbers, '.')
+		text = unsafe.String(&v.numbers[start], len(v.numbers)-start)
+	}
+	w := l.canvas.TextWidthWeight(text, t.size, ui.WeightRegular)
+	v.pieces = append(v.pieces, mdPiece{
+		text: text, x: x + markdownMarkerW - 6 - w, y: y, w: w + 2, h: t.line, size: t.size,
+		weight: ui.WeightRegular, color: mdColMuted, link: -1,
+	})
+}
+
+// code lays out a fenced block.
+func (l *mdLayout) code(b *markdown.Block, x, width, y float32) float32 {
+	v, style := l.v, l.style
+	size := max(style.Size-1, 9)
+	cell, height := l.canvas.MonoCellSize(size, style.MonoFace)
+	if cell <= 0 {
+		cell = size * 0.6
+	}
+	v.cell = cell
+	cols := max(int((width-2*markdownCodePadX-style.CodeInset)/cell), 4)
+	top := y
+	y += markdownCodePadY
+	text := b.Text
+	for {
+		line, rest, more := cutLine(text)
+		line = v.spreadTabs(line)
+		var marked []MarkdownCodeRun
+		if style.Highlight != nil && len(line) <= 4000 {
+			v.hl = style.Highlight(b.Info, line, v.hl[:0])
+			marked = v.hl
+		}
+		for start := 0; ; {
+			if l.lines >= markdownMaxLines {
+				more = false
+				break
+			}
+			end, done := monoBreak(line[start:], cols)
+			if end > 0 {
+				chunk := line[start : start+end]
+				piece := mdPiece{
+					text: chunk, x: x + markdownCodePadX, y: y, w: float32(monoCells(chunk)) * cell, h: height,
+					size: size, weight: ui.WeightRegular, color: mdColText, mono: true, link: -1,
+				}
+				piece.runLo = int32(len(v.runs))
+				v.appendCodeRuns(line, start, start+end, marked)
+				piece.runHi = int32(len(v.runs))
+				v.pieces = append(v.pieces, piece)
+			}
+			l.lines++
+			y += height
+			start += end
+			if done {
+				break
+			}
+		}
+		if !more {
+			break
+		}
+		text = rest
+	}
+	y += markdownCodePadY
+	rect := ui.Rect{X: x, Y: top, Width: width, Height: y - top}
+	v.boxes = append(v.boxes, mdBox{kind: mdBoxCode, x: rect.X, y: rect.Y, w: rect.Width, h: rect.Height})
+	v.codes = append(v.codes, MarkdownCode{Bounds: rect, Text: b.Text})
+	return y
+}
+
+// spreadTabs returns line with each tab replaced by the blanks that reach the
+// next stop four cells on, since a fixed-pitch grid has no tab character.
+func (v *MarkdownView) spreadTabs(line string) string {
+	if strings.IndexByte(line, '\t') < 0 {
+		return line
+	}
+	start := len(v.tabs)
+	cells := 0
+	for _, r := range line {
+		if r == '\t' {
+			for fill := 4 - cells%4; fill > 0; fill-- {
+				v.tabs = append(v.tabs, ' ')
+				cells++
+			}
+			continue
+		}
+		v.tabs = utf8.AppendRune(v.tabs, r)
+		cells += monoRuneCells(r)
+	}
+	return unsafe.String(&v.tabs[start], len(v.tabs)-start)
+}
+
+// appendCodeRuns records the stretches of line[from:to] that marked colors, and
+// the plain code between them, if there is any marking at all. Each character
+// that is not ASCII is a stretch of its own, as LabelRuns wants.
+func (v *MarkdownView) appendCodeRuns(line string, from, to int, marked []MarkdownCodeRun) {
+	if len(marked) == 0 {
+		return
+	}
+	at := from
+	emit := func(start, end int, class MarkdownCodeClass) {
+		for start < end {
+			stop := start
+			for stop < end && line[stop] < utf8.RuneSelf {
+				stop++
+			}
+			if stop > start {
+				v.runs = append(v.runs, mdCodeRun{bytes: int32(stop - start), cells: int32(stop - start), class: class})
+				start = stop
+				continue
+			}
+			r, n := utf8.DecodeRuneInString(line[start:end])
+			v.runs = append(v.runs, mdCodeRun{bytes: int32(n), cells: int32(monoRuneCells(r)), class: class})
+			start += n
+		}
+	}
+	for _, run := range marked {
+		start, end := max(run.Start, at), min(run.End, to)
+		if end <= start {
+			continue
+		}
+		emit(at, start, 0)
+		emit(start, end, run.Class)
+		at = end
+	}
+	emit(at, to, 0)
+}
+
+func cutLine(text string) (line, rest string, more bool) {
+	for i := 0; i < len(text); i++ {
+		if text[i] == '\n' {
+			return trimCR(text[:i]), text[i+1:], true
+		}
+	}
+	return trimCR(text), "", false
+}
+
+func trimCR(s string) string {
+	if len(s) > 0 && s[len(s)-1] == '\r' {
+		return s[:len(s)-1]
+	}
+	return s
+}
+
+// monoCells is how many cells of a fixed-pitch grid s takes: two for the wide scripts.
+func monoCells(s string) int {
+	cells := 0
+	for _, r := range s {
+		cells += monoRuneCells(r)
+	}
+	return cells
+}
+
+func monoRuneCells(r rune) int {
+	switch {
+	case r < 0x1100:
+		return 1
+	case r >= 0x1100 && r <= 0x115F, r >= 0x2E80 && r <= 0xA4CF, r >= 0xAC00 && r <= 0xD7A3,
+		r >= 0xF900 && r <= 0xFAFF, r >= 0xFE30 && r <= 0xFE6F, r >= 0xFF00 && r <= 0xFF60,
+		r >= 0xFFE0 && r <= 0xFFE6, r >= 0x1F300 && r <= 0x1FAFF, r >= 0x20000 && r <= 0x3FFFD:
+		return 2
+	}
+	return 1
+}
+
+// monoBreak is where to cut s so that at most cols cells remain in the first part.
+func monoBreak(s string, cols int) (end int, done bool) {
+	used := 0
+	for index, r := range s {
+		width := monoRuneCells(r)
+		if used+width > cols && used > 0 {
+			return index, false
+		}
+		used += width
+	}
+	return len(s), true
+}
+
+// table lays out a pipe table: columns as wide as their text, or as wide as
+// the space allows, cells that wrap.
+func (l *mdLayout) table(b *markdown.Block, x, width, y float32, t mdFont) float32 {
+	v, doc := l.v, l.doc
+	cells := doc.Cells(b)
+	columns := b.Columns
+	if columns < 1 || len(cells) < columns {
+		return y
+	}
+	rows := len(cells) / columns
+	var natural, widths [24]float32
+	for c := 0; c < columns; c++ {
+		natural[c] = 2 * markdownCellPadX
+	}
+	head := t
+	head.weight = ui.WeightSemibold
+	for i, cell := range cells[:rows*columns] {
+		style := t
+		if i < columns {
+			style = head
+		}
+		c := i % columns
+		natural[c] = max(natural[c], l.natural(doc.CellSpans(cell), style)+2*markdownCellPadX)
+	}
+	var total float32
+	for c := 0; c < columns; c++ {
+		total += natural[c]
+	}
+	if total <= width {
+		widths = natural
+	} else {
+		remaining, free := width, columns
+		var fixed [24]bool
+		for free > 0 {
+			share := remaining / float32(free)
+			changed := false
+			for c := 0; c < columns; c++ {
+				if !fixed[c] && natural[c] <= share {
+					widths[c], fixed[c] = natural[c], true
+					remaining -= natural[c]
+					free--
+					changed = true
+				}
+			}
+			if !changed {
+				break
+			}
+		}
+		for c := 0; c < columns; c++ {
+			if !fixed[c] {
+				widths[c] = max(remaining/float32(free), 4*markdownCellPadX)
+			}
+		}
+	}
+	var tableW float32
+	for c := 0; c < columns; c++ {
+		tableW += widths[c]
+	}
+	for r := 0; r < rows; r++ {
+		if l.lines >= markdownMaxLines {
+			rows = r
+			break
+		}
+		rowTop := y
+		rowBottom := y + 2*markdownCellPadY + t.line
+		cx := x
+		for c := 0; c < columns; c++ {
+			cell := cells[r*columns+c]
+			style := t
+			if r == 0 {
+				style = head
+			}
+			end := l.inline(doc.CellSpans(cell), cx+markdownCellPadX, widths[c]-2*markdownCellPadX, rowTop+markdownCellPadY, style, cell.Align)
+			rowBottom = max(rowBottom, end+markdownCellPadY)
+			cx += widths[c]
+		}
+		y = rowBottom
+		if r == 0 {
+			v.boxes = append(v.boxes, mdBox{kind: mdBoxHead, x: x, y: rowTop, w: tableW, h: rowBottom - rowTop})
+		}
+		v.boxes = append(v.boxes, mdBox{kind: mdBoxLine, x: x, y: y - 1, w: tableW, h: 1})
+	}
+	return y
+}
+
+// natural is the width the spans take on one line per Newline.
+func (l *mdLayout) natural(spans []markdown.Span, t mdFont) float32 {
+	l.atomize(spans, t)
+	var best, line float32
+	for _, a := range l.v.atoms {
+		if a.brk {
+			best, line = max(best, line), 0
+			continue
+		}
+		line += a.w + a.space
+	}
+	return max(best, line)
+}
+
+// spanWeight is the weight of text with a style, in a context of weight base.
+func spanWeight(base float32, style markdown.Style) float32 {
+	switch {
+	case style&markdown.Bold != 0:
+		if base >= ui.WeightSemibold {
+			return ui.WeightBold
+		}
+		return ui.WeightSemibold
+	case style&markdown.Italic != 0 && base < ui.WeightMedium:
+		return ui.WeightMedium
+	}
+	return base
+}
+
+func isBreakRune(r rune) bool {
+	switch {
+	case r >= 0x2E80 && r <= 0x9FFF, r >= 0xAC00 && r <= 0xD7AF, r >= 0xF900 && r <= 0xFAFF, r >= 0xFF00 && r <= 0xFFEF:
+		return true
+	}
+	return false
+}
+
+// closesLine reports whether r is punctuation that may not start a line.
+func closesLine(r rune) bool {
+	switch r {
+	case '，', '。', '、', '；', '：', '！', '？', '）', '」', '』', '》', '】', '…', '”', '’', ',', '.', ';', ':', '!', '?', ')', ']', '}':
+		return true
+	}
+	return false
+}
+
+// atomize cuts the spans into the pieces a line may break between: words, single
+// ideographs, and the code that sits between blanks.
+func (l *mdLayout) atomize(spans []markdown.Span, t mdFont) {
+	atoms := l.v.atoms[:0]
+	monoSize := max(t.size-1, 9)
+	cell, _ := l.canvas.MonoCellSize(monoSize, l.style.MonoFace)
+	space := l.canvas.TextWidthWeight(" ", t.size, ui.WeightRegular)
+	var pending float32
+	for si, sp := range spans {
+		if sp.Text == markdown.Newline {
+			atoms = append(atoms, mdAtom{span: int32(si), brk: true})
+			pending = 0
+			continue
+		}
+		mono := sp.Style&markdown.Mono != 0
+		size, weight := t.size, spanWeight(t.weight, sp.Style)
+		if mono {
+			size = monoSize
+		}
+		text := sp.Text
+		for i := 0; i < len(text); {
+			r, n := utf8.DecodeRuneInString(text[i:])
+			if r == ' ' || r == '\t' {
+				if mono {
+					pending += cell
+				} else {
+					pending = space
+				}
+				i += n
+				continue
+			}
+			j := i + n
+			switch {
+			case mono:
+				for j < len(text) && text[j] != ' ' && text[j] != '\t' {
+					j++
+				}
+			case isBreakRune(r):
+				for j < len(text) {
+					next, w := utf8.DecodeRuneInString(text[j:])
+					if !closesLine(next) {
+						break
+					}
+					j += w
+				}
+			default:
+				for j < len(text) {
+					next, w := utf8.DecodeRuneInString(text[j:])
+					if next == ' ' || next == '\t' || isBreakRune(next) {
+						break
+					}
+					j += w
+				}
+			}
+			glue := pending == 0 && len(atoms) > 0 && !atoms[len(atoms)-1].brk && closesLine(r)
+			if pending > 0 && len(atoms) > 0 && !atoms[len(atoms)-1].brk {
+				atoms[len(atoms)-1].space = pending
+			}
+			pending = 0
+			var w float32
+			if mono {
+				w = float32(monoCells(text[i:j])) * cell
+			} else {
+				w = l.canvas.TextWidthWeight(text[i:j], size, weight)
+			}
+			atoms = append(atoms, mdAtom{span: int32(si), lo: int32(i), hi: int32(j), w: w, glue: glue})
+			i = j
+		}
+	}
+	l.v.atoms = atoms
+}
+
+// mdLine is the line being filled by inline.
+type mdLine struct {
+	l      *mdLayout
+	spans  []markdown.Span
+	t      mdFont
+	align  markdown.Align
+	x0     float32 // where lines start
+	width  float32
+	y      float32 // top of the current line
+	x      float32 // cursor, relative to x0
+	w      float32 // end of the last atom, relative to x0
+	has    bool
+	piece  int // the open piece, or -1
+	lo     int32
+	span   int32
+	pieceP int // first piece, box and link of the line, for alignment
+	pieceB int
+	pieceL int
+}
+
+// inline lays spans out as wrapped lines from y and returns where the text ends.
+func (l *mdLayout) inline(spans []markdown.Span, x, width, y float32, t mdFont, align markdown.Align) float32 {
+	if len(spans) == 0 {
+		return y
+	}
+	l.atomize(spans, t)
+	m := mdLine{l: l, spans: spans, t: t, align: align, x0: x, width: width, y: y, piece: -1}
+	m.reset()
+	for _, a := range l.v.atoms {
+		if l.lines >= markdownMaxLines {
+			break
+		}
+		if a.brk {
+			m.endLine()
+			continue
+		}
+		if m.has && !a.glue && m.x+a.w > width {
+			m.endLine()
+		}
+		if a.w > width && !a.glue {
+			a = m.split(a)
+		}
+		m.place(a)
+	}
+	m.endLine()
+	return m.y
+}
+
+func (m *mdLine) reset() {
+	v := m.l.v
+	m.x, m.w, m.has, m.piece = 0, 0, false, -1
+	m.pieceP, m.pieceB, m.pieceL = len(v.pieces), len(v.boxes), len(v.links)
+}
+
+// split places the leading chunks of an atom wider than a whole line, each on a
+// line of its own, and returns the rest.
+func (m *mdLine) split(a mdAtom) mdAtom {
+	l := m.l
+	sp := m.spans[a.span]
+	mono := sp.Style&markdown.Mono != 0
+	size, weight := m.t.size, spanWeight(m.t.weight, sp.Style)
+	if mono {
+		size = max(size-1, 9)
+	}
+	cell, _ := l.canvas.MonoCellSize(size, l.style.MonoFace)
+	measure := func(text string) float32 {
+		if mono {
+			return float32(monoCells(text)) * cell
+		}
+		return l.canvas.TextWidthWeight(text, size, weight)
+	}
+	m.endLine()
+	for a.w > m.width {
+		text := sp.Text[a.lo:a.hi]
+		// The longest prefix that fits, by bisection on rune boundaries.
+		lo, hi := 0, len(text)
+		for hi-lo > 1 {
+			mid := (lo + hi) / 2
+			for mid > lo && !utf8.RuneStart(text[mid]) {
+				mid--
+			}
+			if mid <= lo {
+				break
+			}
+			if measure(text[:mid]) <= m.width {
+				lo = mid
+			} else {
+				hi = mid
+			}
+		}
+		if lo == 0 {
+			_, lo = utf8.DecodeRuneInString(text)
+		}
+		chunk := a
+		chunk.hi = a.lo + int32(lo)
+		chunk.w, chunk.space = measure(text[:lo]), 0
+		m.place(chunk)
+		m.endLine()
+		a.lo += int32(lo)
+		a.w = measure(sp.Text[a.lo:a.hi])
+	}
+	return a
+}
+
+// place puts an atom at the cursor, continuing the open piece when it is more
+// of the same span.
+func (m *mdLine) place(a mdAtom) {
+	l := m.l
+	v := l.v
+	sp := m.spans[a.span]
+	mono := sp.Style&markdown.Mono != 0
+	if a.hi <= a.lo {
+		return
+	}
+	if m.piece >= 0 && m.span == a.span {
+		p := &v.pieces[m.piece]
+		p.text = sp.Text[m.lo:a.hi]
+		p.w = m.x + a.w - (p.x - m.x0)
+	} else {
+		m.closePiece()
+		size, weight, color := m.t.size, spanWeight(m.t.weight, sp.Style), m.t.color
+		if mono {
+			size = max(size-1, 9)
+			m.x += 2
+		}
+		if sp.Link != "" {
+			color = mdColLink
+		}
+		v.pieces = append(v.pieces, mdPiece{
+			text: sp.Text[a.lo:a.hi], x: m.x0 + m.x, y: m.y, w: a.w, h: m.t.line,
+			size: size, weight: weight, color: color, mono: mono, strike: sp.Style&markdown.Strike != 0, link: -1,
+		})
+		m.piece, m.span, m.lo = len(v.pieces)-1, a.span, a.lo
+	}
+	m.x += a.w
+	m.w = m.x
+	m.x += a.space
+	m.has = true
+}
+
+// closePiece finishes the open piece: the box behind inline code, the region of a link.
+func (m *mdLine) closePiece() {
+	if m.piece < 0 {
+		return
+	}
+	v := m.l.v
+	p := &v.pieces[m.piece]
+	sp := m.spans[m.span]
+	if !p.mono {
+		// The atoms were measured one by one; the text is drawn as one run, and
+		// a long run of ideographs drifts from the sum of its parts.
+		if real := m.l.canvas.TextWidthWeight(p.text, p.size, p.weight); real != p.w {
+			m.x += real - p.w
+			m.w += real - p.w
+			p.w = real
+		}
+	}
+	if p.mono {
+		h := p.size * 1.5
+		v.boxes = append(v.boxes, mdBox{kind: mdBoxInlineCode, x: p.x - 2, y: p.y + (p.h-h)/2, w: p.w + 4, h: h})
+	}
+	if sp.Link != "" {
+		v.links = append(v.links, mdLink{x: p.x, y: p.y, w: p.w, h: p.h, size: p.size, text: p.text, dest: sp.Link})
+		p.link = int32(len(v.links) - 1)
+	}
+	m.piece = -1
+}
+
+// endLine finishes the current line and starts the next one below it.
+func (m *mdLine) endLine() {
+	if !m.has {
+		return
+	}
+	m.closePiece()
+	v := m.l.v
+	if m.align != markdown.AlignLeft {
+		shift := m.width - m.w
+		if m.align == markdown.AlignCenter {
+			shift /= 2
+		}
+		if shift > 0 {
+			for i := m.pieceP; i < len(v.pieces); i++ {
+				v.pieces[i].x += shift
+			}
+			for i := m.pieceB; i < len(v.boxes); i++ {
+				v.boxes[i].x += shift
+			}
+			for i := m.pieceL; i < len(v.links); i++ {
+				v.links[i].x += shift
+			}
+		}
+	}
+	m.y += m.t.line
+	m.l.lines++
+	m.reset()
+}
+
+// Paint draws the laid-out document.
+func (v *MarkdownView) Paint(canvas *ui.Canvas, p MarkdownPaint) {
+	look := p.Look
+	clipped := p.Clip.Height > 0
+	visible := func(y, h float32) bool {
+		return !clipped || (y+h >= p.Clip.Y && y <= p.Clip.Y+p.Clip.Height)
+	}
+	for _, box := range v.boxes {
+		rect := ui.Rect{X: p.X + box.x, Y: p.Y + box.y, Width: box.w, Height: box.h}
+		if !visible(rect.Y, rect.Height) {
+			continue
+		}
+		switch box.kind {
+		case mdBoxCode:
+			canvas.RoundedBorder(rect, look.Radius, 1, look.Line, look.CodeFill)
+		case mdBoxInlineCode:
+			canvas.Rounded(rect, 4, look.InlineCodeFill)
+		case mdBoxBar:
+			canvas.Rounded(rect, 1.5, look.Line)
+		case mdBoxLine:
+			canvas.Fill(rect, look.Line)
+		case mdBoxHead:
+			canvas.Rounded(rect, 4, look.InlineCodeFill)
+		}
+	}
+	for index := range v.pieces {
+		piece := &v.pieces[index]
+		rect := ui.Rect{X: p.X + piece.x, Y: p.Y + piece.y, Width: piece.w + 3, Height: piece.h}
+		if !visible(rect.Y, rect.Height) {
+			continue
+		}
+		color := look.Text
+		switch piece.color {
+		case mdColMuted:
+			color = look.Muted
+		case mdColLink:
+			color = look.Link
+		}
+		if piece.runHi > piece.runLo {
+			v.scratch = v.scratch[:0]
+			column := int32(0)
+			for _, run := range v.runs[piece.runLo:piece.runHi] {
+				stretch := color
+				if run.class > 0 && int(run.class) < len(look.Code) && look.Code[run.class].Alpha > 0 {
+					stretch = look.Code[run.class]
+				}
+				v.scratch = append(v.scratch, ui.TextRun{Column: column, Bytes: run.bytes, Cells: run.cells, Color: stretch})
+				column += run.cells
+			}
+			canvas.LabelRuns(piece.text, rect, ui.TextStyle{Size: piece.size, Color: color, Mono: true, MonoFace: v.face}, v.cell, v.scratch)
+		} else {
+			canvas.Label(piece.text, rect, ui.TextStyle{Size: piece.size, Weight: piece.weight, Color: color, Mono: piece.mono, MonoFace: v.face})
+		}
+		if piece.strike {
+			canvas.Fill(ui.Rect{X: rect.X, Y: rect.Y + rect.Height/2, Width: piece.w, Height: 1}, color)
+		}
+	}
+	for index := range v.links {
+		link := &v.links[index]
+		rect := ui.Rect{X: p.X + link.x, Y: p.Y + link.y, Width: link.w, Height: link.h}
+		if !visible(rect.Y, rect.Height) || p.Links.IsZero() {
+			continue
+		}
+		id := p.Links.At(p.Base + index)
+		canvas.HitWithOptions(id, rect, link.text, ui.HitOptions{Role: ui.RoleLink})
+		if canvas.Hovered() == id {
+			canvas.Fill(ui.Rect{X: rect.X, Y: rect.Y + rect.Height/2 + link.size*0.6, Width: rect.Width, Height: 1}, look.Link)
+		}
+	}
+}

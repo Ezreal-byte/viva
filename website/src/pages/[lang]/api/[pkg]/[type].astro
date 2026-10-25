@@ -1,0 +1,73 @@
+---
+import type { GetStaticPaths } from 'astro';
+import { Code } from 'astro:components';
+import DocPageLayout from '../../../../layouts/DocPageLayout.astro';
+import ApiDoc from '../../../../components/ApiDoc.astro';
+import { locales, isLocale, type Locale } from '../../../../lib/i18n';
+import { siteText } from '../../../../lib/site';
+import { apiPath, type Heading } from '../../../../lib/routes';
+import { readAPI, packageNamed } from '../../../../lib/api';
+
+export const getStaticPaths = (() => locales.flatMap(lang => readAPI().packages.flatMap(entry => entry.types.map(type => ({ params: { lang, pkg: entry.name, type: type.name } }))))) satisfies GetStaticPaths;
+const locale = Astro.params.lang;
+if (!isLocale(locale)) throw new Error('Unsupported locale');
+const text = siteText(locale);
+const api = readAPI();
+const pkg = packageNamed(api, Astro.params.pkg!);
+const type = pkg.types.find(entry => entry.name === Astro.params.type)!;
+const themes = { light: 'github-light', dark: 'github-dark' } as const;
+const alternates = Object.fromEntries(locales.map(language => [language, apiPath(language, pkg.name, type.name)])) as Record<Locale, string>;
+const navigation = [
+  { heading: text.apiPackages, links: api.packages.map(entry => ({ href: apiPath(locale, entry.name), label: entry.name })) },
+  { heading: `${pkg.name}: ${text.apiTypes}`, links: pkg.types.map(entry => ({ href: apiPath(locale, pkg.name, entry.name), label: entry.name, current: entry.name === type.name })) },
+];
+const headings: Heading[] = [
+  ...(type.constants.length ? [{ depth: 2, slug: 'constants', text: text.apiConstants }] : []),
+  ...(type.variables.length ? [{ depth: 2, slug: 'variables', text: text.apiVariables }] : []),
+  ...(type.constructors.length ? [{ depth: 2, slug: 'constructors', text: text.apiConstructors }] : []),
+  ...type.constructors.map(entry => ({ depth: 3, slug: `func-${entry.name}`, text: entry.name })),
+  ...(type.methods.length ? [{ depth: 2, slug: 'methods', text: text.apiMethods }] : []),
+  ...type.methods.map(entry => ({ depth: 3, slug: `method-${entry.name}`, text: entry.name })),
+];
+const members = [
+  { id: 'constructors', title: text.apiConstructors, anchor: 'func', list: type.constructors },
+  { id: 'methods', title: text.apiMethods, anchor: 'method', list: type.methods },
+].filter(group => group.list.length > 0);
+---
+
+<DocPageLayout {locale} title={`${pkg.name}.${type.name}`} summary={type.synopsis || `${pkg.name}.${type.name}`} section="api" {alternates} {navigation} {headings}>
+  <div class="page-heading">
+    <div class="breadcrumb"><a href={apiPath(locale)}>{text.navApi}</a><span aria-hidden="true">/</span><a href={apiPath(locale, pkg.name)}>{pkg.name}</a></div>
+    <h1>{text.apiType} {type.name}</h1>
+  </div>
+  {locale === 'zh' && <p class="repository-note">{text.apiEnglishOnly}</p>}
+  <div class="highlighted-code api-decl"><Code code={type.decl} lang="go" themes={themes} defaultColor={false} /></div>
+  <div class="markdown api-doc"><ApiDoc blocks={type.doc} {locale} /></div>
+
+  {type.constants.length > 0 && <section aria-labelledby="constants">
+    <h2 id="constants" class="api-heading">{text.apiConstants}</h2>
+    {type.constants.map(entry => <article class="api-item">
+      {entry.names.map(name => <span id={`value-${name}`}></span>)}
+      <div class="highlighted-code api-decl"><Code code={entry.decl} lang="go" themes={themes} defaultColor={false} /></div>
+      <div class="markdown api-doc"><ApiDoc blocks={entry.doc} {locale} /></div>
+    </article>)}
+  </section>}
+
+  {type.variables.length > 0 && <section aria-labelledby="variables">
+    <h2 id="variables" class="api-heading">{text.apiVariables}</h2>
+    {type.variables.map(entry => <article class="api-item">
+      {entry.names.map(name => <span id={`value-${name}`}></span>)}
+      <div class="highlighted-code api-decl"><Code code={entry.decl} lang="go" themes={themes} defaultColor={false} /></div>
+      <div class="markdown api-doc"><ApiDoc blocks={entry.doc} {locale} /></div>
+    </article>)}
+  </section>}
+
+  {members.map(group => <section aria-labelledby={group.id}>
+    <h2 id={group.id} class="api-heading">{group.title}</h2>
+    {group.list.map(entry => <article class="api-item" id={`${group.anchor}-${entry.name}`}>
+      <h3><code>{entry.name}</code><a class="heading-anchor" href={`#${group.anchor}-${entry.name}`} aria-label={entry.name}>#</a></h3>
+      <div class="highlighted-code api-decl"><Code code={entry.decl} lang="go" themes={themes} defaultColor={false} /></div>
+      <div class="markdown api-doc"><ApiDoc blocks={entry.doc} {locale} /></div>
+    </article>)}
+  </section>)}
+</DocPageLayout>

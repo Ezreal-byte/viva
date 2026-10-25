@@ -1,0 +1,287 @@
+package components
+
+import (
+	"unicode/utf8"
+
+	"github.com/vivaui/viva/ui"
+)
+
+// InputSnapshot is one caller-owned single-line editor presentation. Value is
+// exposed to accessibility; DisplayValue may contain masking or IME preedit
+// text without transferring editing ownership to the component. Secure makes
+// it a password field: the value is never exposed, DisplayValue is ignored,
+// and the field paints one bullet per character.
+type InputSnapshot struct {
+	ID               ui.ID
+	Label            string
+	Value            string
+	DisplayValue     string
+	Placeholder      string
+	Hint             string
+	Disabled         bool
+	ReadOnly         bool
+	Invalid          bool
+	Secure           bool
+	Focused          bool
+	PlatformEditing  bool
+	ShowCaret        bool
+	Caret            int
+	SelectionStart   int
+	SelectionEnd     int
+	CompositionStart int
+	CompositionEnd   int
+}
+
+// PaintInput paints the official Vega input recipe and returns its normalized
+// geometry. Byte offsets describe DisplayValue (or Value when DisplayValue is
+// empty) and are clamped to UTF-8 boundaries before painting.
+func PaintInput(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, snapshot InputSnapshot) ui.Rect {
+	if bounds.Height <= 0 {
+		bounds.Height = theme.Metrics.ControlHeight
+	}
+	if canvas == nil || bounds.Width <= 0 || bounds.Height <= 0 {
+		return bounds
+	}
+
+	focused := snapshot.Focused || !snapshot.ID.IsZero() && canvas.Focused() == snapshot.ID
+	paintTextEntrySurface(canvas, theme, bounds, textEntryState{Focused: focused, Invalid: snapshot.Invalid, Disabled: snapshot.Disabled})
+	content := ui.Rect{X: bounds.X + inputInsetX, Y: bounds.Y, Width: inputMax(0, bounds.Width-2*inputInsetX), Height: bounds.Height}
+	if !snapshot.PlatformEditing {
+		inputPaintText(canvas, theme, content, snapshot, focused)
+	}
+
+	if !snapshot.ID.IsZero() {
+		canvas.HitWithOptions(snapshot.ID, bounds, snapshot.Label, ui.HitOptions{
+			Role: ui.RoleTextField, Value: snapshot.Value, Hint: snapshot.Hint,
+			Disabled: snapshot.Disabled, ReadOnly: snapshot.ReadOnly, Secure: snapshot.Secure,
+			TextBounds: content, TextSize: theme.Metrics.FontSizeM, TextColor: theme.Foreground,
+		})
+	}
+	return bounds
+}
+
+// inputPaintText paints the value (or the placeholder) of a single-line field
+// with its selection, composition and caret. A Secure field shows one bullet per
+// character, and the offsets of the snapshot, which index the real text, are
+// mapped onto the bullets. InputGroup paints its embedded single-line control
+// through the same function, so the two cannot drift apart.
+func inputPaintText(canvas *ui.Canvas, theme ui.Theme, content ui.Rect, snapshot InputSnapshot, focused bool) {
+	display := snapshot.DisplayValue
+	if display == "" {
+		display = snapshot.Value
+	}
+	if snapshot.Secure {
+		display = inputMask(snapshot.Value)
+		snapshot.Caret = inputMaskOffset(snapshot.Value, snapshot.Caret)
+		snapshot.SelectionStart = inputMaskOffset(snapshot.Value, snapshot.SelectionStart)
+		snapshot.SelectionEnd = inputMaskOffset(snapshot.Value, snapshot.SelectionEnd)
+		snapshot.CompositionStart = inputMaskOffset(snapshot.Value, snapshot.CompositionStart)
+		snapshot.CompositionEnd = inputMaskOffset(snapshot.Value, snapshot.CompositionEnd)
+	}
+	inputPaintLine(canvas, theme, content, display, snapshot.Placeholder, snapshot, focused)
+}
+
+func inputPaintLine(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, value, placeholder string, snapshot InputSnapshot, focused bool) {
+	fontSize := theme.Metrics.FontSizeM
+	color := theme.Foreground
+	if value == "" {
+		value = placeholder
+		color = theme.MutedForeground
+		// A placeholder that does not fit ends in an ellipsis, as it does in a native
+		// field, instead of being cut mid-word by the field's edge.
+		var scratch [1]string
+		if lines := canvas.WrapLines(scratch[:0], value, fontSize, ui.WeightRegular, bounds.Width, 1); len(lines) == 1 {
+			value = lines[0]
+		}
+	}
+	if snapshot.Disabled {
+		color.Alpha *= 0.50
+	}
+	canvas.Clip(bounds)
+	placeholderShown := snapshot.Value == "" && snapshot.DisplayValue == ""
+	style := ui.TextStyle{Size: fontSize, Weight: ui.WeightRegular, Color: color}
+	// The line starts where the label puts it: the right end of the field for text that
+	// reads right to left. The caret, selection and composition are measured from there,
+	// and follow the visual order of mixed text (a selection may be several stretches).
+	origin := canvas.LabelOrigin(value, bounds, style, ui.AlignStart)
+	var ranges [4]ui.Rect
+	selectionStart, selectionEnd := inputRange(value, snapshot.SelectionStart, snapshot.SelectionEnd)
+	var selections []ui.Rect
+	if selectionEnd > selectionStart && !placeholderShown {
+		selections = inputTextRanges(canvas, ranges[:0], bounds, origin, value, fontSize, selectionStart, selectionEnd)
+		selectionColor := theme.Primary
+		if snapshot.Disabled {
+			selectionColor.Alpha *= 0.50
+		}
+		for _, selection := range selections {
+			canvas.Fill(selection, selectionColor)
+		}
+	}
+	compositionStart, compositionEnd := inputRange(value, snapshot.CompositionStart, snapshot.CompositionEnd)
+	if compositionEnd > compositionStart && !placeholderShown {
+		var underlines [4]ui.Rect
+		underline := theme.Foreground
+		if snapshot.Disabled {
+			underline.Alpha *= 0.50
+		}
+		for _, composition := range inputTextRanges(canvas, underlines[:0], bounds, origin, value, fontSize, compositionStart, compositionEnd) {
+			canvas.Fill(ui.Rect{X: composition.X, Y: bounds.Y + bounds.Height - 5, Width: composition.Width, Height: 1}, underline)
+		}
+	}
+	if focused && snapshot.ShowCaret && !snapshot.Disabled {
+		caret := inputBoundary(value, snapshot.Caret)
+		x := origin + canvas.TextCaret(value, fontSize, ui.WeightRegular, caret)
+		canvas.Fill(ui.Rect{X: x, Y: bounds.Y + (bounds.Height-16)/2, Width: 1, Height: 16}, theme.Foreground)
+	}
+	canvas.Label(value, bounds, style)
+	for _, selection := range selections {
+		if selection.Width <= 0 {
+			continue
+		}
+		canvas.Clip(selection)
+		selectedColor := theme.PrimaryForeground
+		if snapshot.Disabled {
+			selectedColor.Alpha *= 0.50
+		}
+		canvas.Label(value, bounds, ui.TextStyle{Size: fontSize, Weight: ui.WeightRegular, Color: selectedColor})
+		canvas.Unclip()
+	}
+	canvas.Unclip()
+}
+
+// inputTextRanges appends the rectangles of the bytes [start, end) of value, a line drawn
+// from x = origin in bounds, clamped to bounds: one for left-to-right text, more where the
+// range crosses a change of direction.
+func inputTextRanges(canvas *ui.Canvas, dst []ui.Rect, bounds ui.Rect, origin float32, value string, size float32, start, end int) []ui.Rect {
+	var spans [4]ui.TextSpan
+	for _, span := range canvas.TextSelection(spans[:0], value, size, ui.WeightRegular, start, end) {
+		x, width := origin+span.X, span.Width
+		if x < bounds.X {
+			width -= bounds.X - x
+			x = bounds.X
+		}
+		if x > bounds.X+bounds.Width {
+			x = bounds.X + bounds.Width
+		}
+		if x+width > bounds.X+bounds.Width {
+			width = bounds.X + bounds.Width - x
+		}
+		dst = append(dst, ui.Rect{X: x, Y: bounds.Y + 4, Width: inputMax(0, width), Height: inputMax(0, bounds.Height-8)})
+	}
+	return dst
+}
+
+func inputRange(value string, start, end int) (int, int) {
+	start = inputBoundary(value, start)
+	end = inputBoundary(value, end)
+	if start > end {
+		start, end = end, start
+	}
+	return start, end
+}
+
+func inputBoundary(value string, offset int) int {
+	if offset <= 0 {
+		return 0
+	}
+	if offset >= len(value) {
+		return len(value)
+	}
+	for offset > 0 && value[offset]&0xc0 == 0x80 {
+		offset--
+	}
+	return offset
+}
+
+func inputMax(left, right float32) float32 {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+// inputBullets is the longest mask a password field paints; longer values show
+// this many bullets. It is a constant so masking never allocates.
+const inputBullets = "••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••"
+
+// inputMask returns one bullet per character of value, up to the cap.
+func inputMask(value string) string {
+	count := min(utf8.RuneCountInString(value), len(inputBullets)/3)
+	return inputBullets[:count*3]
+}
+
+// inputMaskOffset converts a byte offset into value to the matching byte
+// offset into its mask.
+func inputMaskOffset(value string, offset int) int {
+	count := utf8.RuneCountInString(value[:inputBoundary(value, offset)])
+	return min(count, len(inputBullets)/3) * 3
+}
+
+const (
+	// inputInsetX is where the text of a text-entry control starts, measured
+	// from its outer edge: the 1px border plus Vega's px-2.5 (10).
+	inputInsetX = float32(11)
+	// inputRing is the width of the focus ring around a button-like control
+	// (Vega's ring-3). Text-entry controls have none: focus is their border.
+	inputRing = float32(3)
+)
+
+// textEntryState is the transient state that colors the surface of a
+// text-entry control: Input, Textarea, InputGroup, Select, NativeSelect,
+// Combobox and the slots of InputOTP.
+type textEntryState struct {
+	Focused  bool
+	Invalid  bool
+	Disabled bool
+	// Hovered is the pointer over a trigger. Only the select family reacts to
+	// it (Vega's dark:hover:bg-input/50); a text field does not.
+	Hovered bool
+}
+
+// textEntryDark reports whether theme is a dark appearance, which Vega fills
+// text-entry controls for (dark:bg-input/30).
+func textEntryDark(theme ui.Theme) bool { return theme.Background.Red < 0.5 }
+
+// textEntryColors resolves the text-entry recipe for state:
+//
+//   - border-input and a transparent fill, dark:bg-input/30 (hover input/50);
+//   - focus: the border alone turns the accent color; there is no halo around
+//     the control, which would wash the field and crowd its neighbors;
+//   - invalid: border-destructive, which also wins over the focus color;
+//   - disabled: opacity-50 on all of it.
+//
+// border and fill come back flattened onto the page background: RoundedBorder
+// paints the border color as a solid backing shape under the fill, so a
+// translucent token would otherwise tint the control's interior.
+func textEntryColors(theme ui.Theme, state textEntryState) (border, fill ui.Color) {
+	border = theme.Input
+	fill = theme.Background
+	fill.Alpha = 0
+	if textEntryDark(theme) {
+		fill = theme.Input
+		fill.Alpha *= 0.30
+		if state.Hovered && !state.Disabled {
+			fill.Alpha = theme.Input.Alpha * 0.50
+		}
+	}
+	if state.Focused && !state.Disabled {
+		border = theme.Primary
+	}
+	if state.Invalid {
+		border = theme.Danger
+	}
+	if state.Disabled {
+		border.Alpha *= 0.50
+		fill.Alpha *= 0.50
+	}
+	return border.Over(theme.Background), fill.Over(theme.Background)
+}
+
+// paintTextEntrySurface paints the border and fill of one text-entry control:
+// the single place the Input family takes its look from.
+func paintTextEntrySurface(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, state textEntryState) {
+	border, fill := textEntryColors(theme, state)
+	radius := theme.Metrics.RadiusControl
+	canvas.Elevate(bounds, radius, ui.ShadowXS) // shadow-xs
+	canvas.RoundedBorder(bounds, radius, 1, border, fill)
+}

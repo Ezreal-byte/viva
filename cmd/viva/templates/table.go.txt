@@ -1,0 +1,343 @@
+package {{PACKAGE}}
+
+import (
+	"math"
+
+	"github.com/vivaui/viva/ui"
+)
+
+// TableAlignment selects text placement within a table column.
+type TableAlignment uint8
+
+const (
+	TableAlignLeft TableAlignment = iota
+	TableAlignCenter
+	TableAlignRight
+)
+
+// TableColumn is a statically typed column declaration. Width is measured in
+// logical pixels; the final non-positive width consumes the remaining space.
+type TableColumn struct {
+	Width     float32
+	Alignment TableAlignment
+	// Inset reserves leading content space inside a left-aligned cell, for
+	// example an application-painted file icon.
+	Inset float32
+}
+
+// Table incrementally paints headers and rows. It draws no outer surface or
+// border, like shadcn's Table: wrap it in a Card or a bordered container for
+// that. Columns are borrowed only while a Header or Row call is executing.
+type Table struct {
+	canvas       *ui.Canvas
+	theme        ui.Theme
+	bounds       ui.Rect
+	columns      []TableColumn
+	y            float32
+	rowHeight    float32
+	headerHeight float32
+	headerSet    bool
+}
+
+// TableRowState mirrors selected and expanded row data states. Expanded rows
+// use the same muted treatment as the official has-aria-expanded rule.
+type TableRowState struct {
+	Selected bool
+	Expanded bool
+}
+
+// TableRowLayout is the exact geometry painted for one row. Cells aliases
+// caller-provided storage and is valid until that storage is reused.
+type TableRowLayout struct {
+	Bounds ui.Rect
+	Cells  []ui.Rect
+}
+
+// TableRowHeight is the default height of a body or footer row: TableCell's p-2
+// around one 20px line, scaled to the theme's control height.
+func TableRowHeight(theme ui.Theme) float32 { return theme.Metrics.ControlHeight + 4 }
+
+// TableHeaderHeight is the default height of the header row, TableHead's h-10.
+func TableHeaderHeight(theme ui.Theme) float32 { return theme.Metrics.ControlHeight + 8 }
+
+// BeginTable starts a table whose first painted row is at bounds.Y. Cells have
+// px-2 of horizontal padding. A cell whose text is wider than its column ends in
+// an ellipsis, as it does in a native table; shadcn's cells never truncate, its
+// auto-width columns grow with their content instead, which FitTableHeadings
+// does for the headings of fixed-width columns.
+func BeginTable(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, columns []TableColumn) Table {
+	return Table{
+		canvas: canvas, theme: theme, bounds: bounds, columns: columns,
+		y: bounds.Y, rowHeight: TableRowHeight(theme), headerHeight: TableHeaderHeight(theme),
+	}
+}
+
+// RowHeight overrides the default body and footer row height for subsequent calls.
+func (table Table) RowHeight(height float32) Table {
+	if height > 0 {
+		table.rowHeight = height
+	}
+	return table
+}
+
+// HeaderHeight overrides the default header row height for subsequent calls.
+func (table Table) HeaderHeight(height float32) Table {
+	if height > 0 {
+		table.headerHeight = height
+	}
+	return table
+}
+
+// Header paints a muted header row. Extra cells are ignored and absent cells
+// remain blank.
+func (table *Table) Header(cells []string) {
+	if table.headerSet {
+		return
+	}
+	table.headerSet = true
+	table.paintRow(ui.ID{}, cells, TableRowState{}, tableRowHeader, nil)
+}
+
+// Row paints one body row. A non-zero ID makes the row interactive; selected
+// rows use the blue accent surface.
+func (table *Table) Row(id ui.ID, cells []string, selected bool) {
+	table.RowState(id, cells, TableRowState{Selected: selected})
+}
+
+// RowAt paints body row index of the list scope, numbering its own identity, and
+// reports whether this paint is delivering a click on it. It is Row for a table
+// whose rows are items of a list:
+//
+//	if table.RowAt(rows, i, cells[i], i == selected) { selected = i }
+func (table *Table) RowAt(list ui.Scope, index int, cells []string, selected bool) bool {
+	table.RowState(list.At(index), cells, TableRowState{Selected: selected})
+	clicked, ok := table.canvas.ClickedIn(list)
+	return ok && clicked == index
+}
+
+// RowState paints a body row with explicit selected/expanded state.
+func (table *Table) RowState(id ui.ID, cells []string, state TableRowState) {
+	table.paintRow(id, cells, state, tableRowBody, nil)
+}
+
+// RowLayout paints one body row and appends its cell geometry to dst. The
+// caller owns dst and may reuse it across rows to keep custom cell decoration
+// allocation-free; a nil dst collects nothing.
+func (table *Table) RowLayout(id ui.ID, cells []string, state TableRowState, dst []ui.Rect) TableRowLayout {
+	return table.paintRow(id, cells, state, tableRowBody, dst)
+}
+
+// Footer paints the official muted, medium-weight footer row.
+func (table *Table) Footer(cells []string) {
+	table.paintRow(ui.ID{}, cells, TableRowState{}, tableRowFooter, nil)
+}
+
+// Caption paints the muted caption below the rows already emitted.
+func (table *Table) Caption(text string) {
+	if text == "" {
+		return
+	}
+	table.canvas.Label(text, ui.Rect{X: table.bounds.X, Y: table.y + 16, Width: table.bounds.Width, Height: table.theme.Metrics.FontSizeM + 4}, ui.TextStyle{
+		Size: table.theme.Metrics.FontSizeM, Weight: ui.WeightRegular, Color: table.theme.MutedForeground,
+	})
+}
+
+type tableRowKind uint8
+
+const (
+	tableRowBody tableRowKind = iota
+	tableRowHeader
+	tableRowFooter
+)
+
+func (table *Table) paintRow(id ui.ID, cells []string, state TableRowState, kind tableRowKind, cellsOut []ui.Rect) TableRowLayout {
+	bottom := table.bounds.Y + table.bounds.Height
+	if table.y >= bottom || len(table.columns) == 0 {
+		return TableRowLayout{}
+	}
+	height := table.rowHeight
+	if kind == tableRowHeader {
+		height = table.headerHeight
+	}
+	if table.y+height > bottom {
+		height = bottom - table.y
+	}
+	if height <= 0 {
+		return TableRowLayout{}
+	}
+	rowBounds := ui.Rect{X: table.bounds.X, Y: table.y, Width: table.bounds.Width, Height: height}
+	// Only a caller that passed storage gets geometry back; every other row
+	// must not grow a slice it has no use for.
+	collect := cellsOut != nil
+	cellsOut = cellsOut[:0]
+	background := table.theme.Background
+	foreground := table.theme.Foreground
+	weight := ui.WeightRegular
+	paintBackground := false
+	if kind == tableRowHeader {
+		weight = ui.WeightMedium
+	} else if kind == tableRowFooter {
+		background = table.theme.Muted
+		background.Alpha *= 0.50
+		weight = ui.WeightMedium
+		paintBackground = true
+	} else if state.Expanded && !state.Selected {
+		// has-aria-expanded:bg-muted/50, which is what Hover is.
+		background = table.theme.Hover
+		paintBackground = true
+	} else if state.Selected {
+		background = table.theme.Muted
+		paintBackground = true
+	} else if !id.IsZero() && table.canvas.Pressed() == id {
+		background = table.theme.Muted
+		paintBackground = true
+	} else if !id.IsZero() && table.canvas.Hovered() == id {
+		background = table.theme.Hover
+		paintBackground = true
+	}
+	if paintBackground {
+		table.canvas.Fill(rowBounds, background)
+	}
+	if kind == tableRowBody && !id.IsZero() && table.canvas.FocusVisible() == id {
+		focus := table.theme.Primary
+		focus.Alpha = 0.22
+		table.canvas.Fill(ui.Rect{X: rowBounds.X, Y: rowBounds.Y, Width: 2, Height: rowBounds.Height}, focus)
+	}
+
+	x := rowBounds.X
+	remaining := rowBounds.Width
+	metrics := table.theme.Metrics
+	pad := metrics.GapItem // px-2
+	for index, column := range table.columns {
+		width := tableColumnWidth(column, index == len(table.columns)-1, remaining)
+		if width <= 0 {
+			break
+		}
+		cellBounds := ui.Rect{X: x, Y: rowBounds.Y, Width: width, Height: rowBounds.Height}
+		if collect {
+			cellsOut = append(cellsOut, cellBounds)
+		}
+		if index < len(cells) {
+			inset := float32(0)
+			if column.Alignment == TableAlignLeft {
+				inset = min(column.Inset, max(cellBounds.Width-pad*2, 0))
+			}
+			textBounds := ui.Rect{
+				X:      cellBounds.X + pad + inset,
+				Y:      cellBounds.Y,
+				Width:  tableMax32(0, cellBounds.Width-pad*2-inset),
+				Height: cellBounds.Height,
+			}
+			if text := table.canvas.FitLine(cells[index], metrics.FontSizeM, weight, textBounds.Width); text != "" {
+				table.canvas.Clip(textBounds)
+				tableLabel(table.canvas, text, textBounds, column.Alignment, ui.TextStyle{
+					Size: metrics.FontSizeM, Weight: weight, Color: foreground,
+				})
+				table.canvas.Unclip()
+			}
+		}
+		x += width
+		remaining -= width
+	}
+	if kind == tableRowBody && !id.IsZero() {
+		table.canvas.HitWithLabel(id, rowBounds, tableRowLabel(cells))
+	}
+	table.y += height
+	if table.y < bottom {
+		// border-b is part of the row's own height, painted over its background.
+		table.canvas.Fill(ui.Rect{X: rowBounds.X, Y: table.y - 1, Width: rowBounds.Width, Height: 1}, table.theme.Border)
+	}
+	return TableRowLayout{Bounds: rowBounds, Cells: cellsOut}
+}
+
+// tableColumnWidth is the width a column gets of the room remaining: its own, or
+// all that is left for a column with no width (and for a last one too wide).
+func tableColumnWidth(column TableColumn, last bool, remaining float32) float32 {
+	width := column.Width
+	if width <= 0 || last && width > remaining {
+		width = remaining
+	}
+	return min(width, remaining)
+}
+
+// FitTableHeadings widens each fixed-width column of columns that is narrower than
+// its heading to the width the heading needs, so that no heading is cut or ends in an
+// ellipsis. It is what shadcn's TableHead gets from whitespace-nowrap in an auto-width
+// table, whose column is never narrower than its heading. A column that takes the
+// remaining space (Width <= 0) and a column without a heading keep their width; the
+// heading of a column that is too wide for the room left is still ellipsized.
+//
+// Call it before BeginTable and before TableCellBounds with the columns and headings
+// that are passed to them: the declared widths are the minimum, and the heading is
+// measured in the language and weight it is painted in, so a translation that is
+// longer than its column does not need a wider column written for it.
+//
+//	components.FitTableHeadings(canvas, theme, columns[:], headings[:])
+//	table := components.BeginTable(canvas, theme, bounds, columns[:])
+//	table.Header(headings[:])
+func FitTableHeadings(canvas *ui.Canvas, theme ui.Theme, columns []TableColumn, headings []string) {
+	pad := theme.Metrics.GapItem * 2
+	for index := range columns {
+		column := &columns[index]
+		if column.Width <= 0 || index >= len(headings) || headings[index] == "" {
+			continue
+		}
+		need := canvas.TextWidthWeight(headings[index], theme.Metrics.FontSizeM, ui.WeightMedium)
+		inset := float32(0)
+		if column.Alignment == TableAlignLeft {
+			inset = column.Inset
+		}
+		// A heading is measured to the pixel, so round it up: it must fit, not tie.
+		column.Width = max(column.Width, float32(math.Ceil(float64(need)))+pad+inset)
+	}
+}
+
+// TableCellBounds appends to dst the cells of a row that fills row, as Header and
+// Row paint them: fixed widths in order, a column without one taking what is left,
+// cells that no longer fit left out. It lets a caller put something on a cell, a
+// sort arrow or a hit region, without painting the row first.
+func TableCellBounds(columns []TableColumn, row ui.Rect, dst []ui.Rect) []ui.Rect {
+	x, remaining := row.X, row.Width
+	for index, column := range columns {
+		width := tableColumnWidth(column, index == len(columns)-1, remaining)
+		if width <= 0 {
+			break
+		}
+		dst = append(dst, ui.Rect{X: x, Y: row.Y, Width: width, Height: row.Height})
+		x += width
+		remaining -= width
+	}
+	return dst
+}
+
+func tableLabel(canvas *ui.Canvas, value string, bounds ui.Rect, alignment TableAlignment, style ui.TextStyle) {
+	switch alignment {
+	case TableAlignCenter:
+		canvas.LabelCenter(value, bounds, style)
+	case TableAlignRight:
+		width := canvas.TextWidthWeight(value, style.Size, style.Weight)
+		if width < bounds.Width {
+			bounds.X += bounds.Width - width
+			bounds.Width = width
+		}
+		canvas.Label(value, bounds, style)
+	default:
+		canvas.Label(value, bounds, style)
+	}
+}
+
+func tableRowLabel(cells []string) string {
+	for _, cell := range cells {
+		if cell != "" {
+			return cell
+		}
+	}
+	return "Table row"
+}
+
+func tableMax32(left, right float32) float32 {
+	if left > right {
+		return left
+	}
+	return right
+}

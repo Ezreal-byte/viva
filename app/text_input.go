@@ -1,0 +1,198 @@
+package app
+
+import (
+	"github.com/vivaui/viva/text"
+	"github.com/vivaui/viva/ui"
+)
+
+// TextRange is a half-open rune-indexed range.
+type TextRange struct {
+	Start int
+	End   int
+}
+
+// TextState is the complete application-owned native editor state.
+type TextState struct {
+	Value       string
+	Selection   TextRange
+	Composition TextRange
+	Composing   bool
+	// Redraw asks for a frame after the event although the editor looks the same,
+	// because the application changed something else in response. A terminal
+	// uses it when typed text appears ahead of the server's echo; ordinary
+	// terminal input leaves it false and costs no frame.
+	Redraw bool
+}
+
+// TextEventKind identifies one native text-system mutation.
+type TextEventKind uint8
+
+const (
+	TextInsert TextEventKind = iota + 1
+	TextSetMarked
+	TextUnmark
+	TextCommandEvent
+	TextSetSelection
+	// TextPaste is one pasteboard edit. It is a separate undo unit in an
+	// ordinary editor; a terminal receives it as is, without line breaks
+	// flattened, and decides how to forward it.
+	TextPaste
+)
+
+// TextCommand identifies one platform-normalized editing command.
+type TextCommand uint8
+
+const (
+	TextDeleteBackward TextCommand = iota + 1
+	TextDeleteForward
+	TextMoveLeft
+	TextMoveRight
+	TextMoveLeftAndModifySelection
+	TextMoveRightAndModifySelection
+	TextInsertNewline
+	TextInsertTab
+	// TextInsertLineBreak is a line break asked for without ending the entry:
+	// Shift+Enter (and Option or Control+Enter on macOS). A chat box submits on
+	// TextInsertNewline and adds a line on this one.
+	TextInsertLineBreak
+	TextUndo
+	TextRedo
+)
+
+// TextEvent contains rune-indexed selection and replacement ranges.
+type TextEvent struct {
+	Kind            TextEventKind
+	Text            string
+	Selection       TextRange
+	MarkedSelection TextRange
+	Replacement     TextRange
+	HasReplacement  bool
+	Command         TextCommand
+}
+
+// TextInputContext describes the focused Canvas text-field hit.
+type TextInputContext struct {
+	ID     ui.ID
+	Bounds ui.Rect
+	// Layer is the compositing layer captured by the focused hit.
+	Layer     uint16
+	Multiline bool
+	ReadOnly  bool
+	Secure    bool
+	// Terminal reports a RoleTerminal hit. The native editor then is a
+	// preedit surface in the fixed-pitch font: it draws only the text being
+	// composed, with no caret or selection, and Bounds should be the cursor
+	// cell. Plain keys reach the application as TextInsert events and the
+	// rest as raw ui.KeyEvents (see ui.KeyEvent).
+	Terminal bool
+	// TextBounds, FontSize and TextColor are the text geometry the component
+	// declared for this field. They fill whatever the returned TextInput leaves
+	// unset, so a bare &TextInput{Editor: editor} draws its text exactly where
+	// the field painted it; set them only to deliberately override.
+	TextBounds ui.Rect
+	FontSize   float32
+	TextColor  ui.Color
+}
+
+// TextInputProvider resolves one focused text-field hit. Returning nil disables
+// native editing without retaining a hidden first responder.
+type TextInputProvider func(TextInputContext) *TextInput
+
+// TextInput describes one application-owned native editor surface. Bounds are
+// logical window pixels. Bounds, FontSize and Color default to the text
+// geometry the focused component declared (see TextInputContext), which is
+// what keeps the text from jumping when a field gains focus.
+type TextInput struct {
+	Bounds   ui.Rect
+	FontSize float32
+	Color    ui.Color
+	MonoFace ui.MonoFace
+	// AltSendsEscape asks printable Alt/Option chords on a terminal to arrive as
+	// raw key events with the unmodified character in KeyEvent.Text. Terminal
+	// encoders can then send the conventional Escape-prefixed Meta sequence.
+	// It is ignored for ordinary text fields, and input-method composition keeps
+	// ownership of every key until it commits. The native policy is currently
+	// implemented on macOS; app.Driver implements it for headless verification.
+	AltSendsEscape bool
+	// KeyReleases asks a terminal for the whole keyboard as presses and
+	// releases: the modifier keys, printable keys (as raw KeyEvents with Text,
+	// not text events, unless an input method consumed them) and a KeyEvent
+	// with Release set when each key goes up. It is for a terminal that shows
+	// another machine's desktop, where a held key or modifier means something
+	// there, and for a terminal implementing a keyboard protocol (kitty's
+	// progressive enhancement or win32-input-mode). Releases are never delivered to a handler that did not ask, every
+	// release matches a press the handler saw, and keys still down when the
+	// terminal loses the keyboard or the window loses focus are released
+	// first. Committed text from an input method still arrives as text events.
+	// Implemented on macOS, Windows and X11, and by app.Driver.
+	KeyReleases bool
+	// Editor connects the native text service straight to a text.Editor: the
+	// runtime mirrors the editor into the platform and applies every native
+	// event to it, so State and OnEvent are ignored. Leave it nil to own the
+	// event handling yourself, for example to filter or transform edits.
+	Editor  *text.Editor
+	State   TextState
+	OnEvent func(TextEvent) (TextState, error)
+}
+
+// TextStateOf snapshots editor into the state native text services mirror.
+func TextStateOf(editor *text.Editor) TextState {
+	selection := editor.Selection()
+	composition, composing := editor.Composition()
+	return TextState{
+		Value:       editor.String(),
+		Selection:   appTextRange(selection),
+		Composition: appTextRange(composition),
+		Composing:   composing,
+	}
+}
+
+// Apply routes one native text event into editor.
+func (event TextEvent) Apply(editor *text.Editor) {
+	if event.HasReplacement {
+		editor.SetSelection(platformTextRange(event.Replacement))
+	}
+	switch event.Kind {
+	case TextInsert:
+		editor.Insert(event.Text)
+	case TextPaste:
+		editor.Paste(event.Text)
+	case TextSetMarked:
+		editor.SetMarkedText(event.Text, platformTextRange(event.MarkedSelection))
+	case TextUnmark:
+		editor.Unmark()
+	case TextSetSelection:
+		editor.SetSelection(platformTextRange(event.Selection))
+	case TextCommandEvent:
+		switch event.Command {
+		case TextDeleteBackward:
+			editor.DeleteBackward()
+		case TextDeleteForward:
+			editor.DeleteForward()
+		case TextMoveLeft:
+			editor.MoveLeft(false)
+		case TextMoveRight:
+			editor.MoveRight(false)
+		case TextMoveLeftAndModifySelection:
+			editor.MoveLeft(true)
+		case TextMoveRightAndModifySelection:
+			editor.MoveRight(true)
+		case TextInsertNewline, TextInsertLineBreak:
+			editor.Insert("\n")
+		case TextInsertTab:
+			editor.Insert("\t")
+		case TextUndo:
+			editor.Undo()
+		case TextRedo:
+			editor.Redo()
+		}
+	}
+}
+
+func platformTextRange(value TextRange) text.Range {
+	return text.Range{Start: value.Start, End: value.End}
+}
+
+func appTextRange(value text.Range) TextRange {
+	return TextRange{Start: value.Start, End: value.End}
+}

@@ -1,0 +1,344 @@
+package components
+
+import "github.com/vivaui/viva/ui"
+
+// carouselControlOffset is the 16px between the viewport and a button (-left-12
+// puts a size-8 button 48px out).
+const carouselControlOffset float32 = 16
+
+// The arrows of the previous and next buttons, Lucide's arrow-left and arrow-right
+// rotated a quarter turn for a vertical carousel.
+var (
+	carouselArrowLeft  = ui.Icon{ViewBox: 24, Stroke: 2, Cap: ui.CapRound, Join: ui.JoinRound, Commands: []ui.PathCommand{ui.MoveTo(19, 12), ui.LineTo(5, 12), ui.MoveTo(12, 19), ui.LineTo(5, 12), ui.LineTo(12, 5)}}
+	carouselArrowRight = ui.Icon{ViewBox: 24, Stroke: 2, Cap: ui.CapRound, Join: ui.JoinRound, Commands: []ui.PathCommand{ui.MoveTo(5, 12), ui.LineTo(19, 12), ui.MoveTo(12, 5), ui.LineTo(19, 12), ui.LineTo(12, 19)}}
+	carouselArrowUp    = ui.Icon{ViewBox: 24, Stroke: 2, Cap: ui.CapRound, Join: ui.JoinRound, Commands: []ui.PathCommand{ui.MoveTo(12, 19), ui.LineTo(12, 5), ui.MoveTo(5, 12), ui.LineTo(12, 5), ui.LineTo(19, 12)}}
+	carouselArrowDown  = ui.Icon{ViewBox: 24, Stroke: 2, Cap: ui.CapRound, Join: ui.JoinRound, Commands: []ui.PathCommand{ui.MoveTo(12, 5), ui.LineTo(12, 19), ui.MoveTo(19, 12), ui.LineTo(12, 19), ui.LineTo(5, 12)}}
+)
+
+// CarouselOrientation selects the axis of caller-owned carousel content.
+type CarouselOrientation uint8
+
+const (
+	CarouselHorizontal CarouselOrientation = iota
+	CarouselVertical
+)
+
+// CarouselGeometry exposes the full externally controlled carousel layout.
+type CarouselGeometry struct {
+	Bounds         ui.Rect
+	Viewport       ui.Rect
+	Content        ui.Rect
+	PreviousButton ui.Rect
+	NextButton     ui.Rect
+	Offset         float32
+	MaxOffset      float32
+	Index          int
+	ItemCount      int
+	CanPrevious    bool
+	CanNext        bool
+}
+
+// CarouselItemGeometry maps one caller-owned slide from content coordinates.
+type CarouselItemGeometry struct {
+	Index         int
+	ContentOffset float32
+	Extent        float32
+	Bounds        ui.Rect
+	Visible       bool
+	Selected      bool
+}
+
+// Carousel is a clipped viewport with caller-owned offset, selected index,
+// item count, and content extent. Keyboard routing, dragging, pointer capture,
+// inertia, autoplay, observers, timers, and virtualization are runtime or
+// application responsibilities and are intentionally absent from this recipe.
+type Carousel struct {
+	canvas              *ui.Canvas
+	theme               ui.Theme
+	bounds              ui.Rect
+	itemCount           int
+	index               int
+	contentExtent       float32
+	offset              float32
+	orientation         CarouselOrientation
+	previousID          ui.ID
+	previousLabel       string
+	nextID              ui.ID
+	nextLabel           string
+	label               string
+	disabled            bool
+	contentClipIsActive bool
+}
+
+// BeginCarousel declares carousel state without retaining item data.
+func BeginCarousel(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, itemCount, index int) Carousel {
+	return Carousel{canvas: canvas, theme: theme, bounds: bounds, itemCount: itemCount, index: index}
+}
+
+// Content sets the caller-owned total axis extent and current scroll offset.
+func (carousel Carousel) Content(extent, offset float32) Carousel {
+	carousel.contentExtent = extent
+	carousel.offset = offset
+	return carousel
+}
+
+// Vertical changes the content axis and control placement to vertical.
+func (carousel Carousel) Vertical() Carousel {
+	carousel.orientation = CarouselVertical
+	return carousel
+}
+
+// Controls assigns stable previous and next action IDs and accessible labels.
+func (carousel Carousel) Controls(previousID ui.ID, previousLabel string, nextID ui.ID, nextLabel string) Carousel {
+	carousel.previousID = previousID
+	carousel.previousLabel = previousLabel
+	carousel.nextID = nextID
+	carousel.nextLabel = nextLabel
+	return carousel
+}
+
+// Label names the carousel region for assistive technology.
+func (carousel Carousel) Label(label string) Carousel {
+	carousel.label = label
+	return carousel
+}
+
+// CarouselStepForKey is the carousel region's keyboard movement: Left/Up go to
+// the previous slide, Right/Down to the next, and Home/End to the ends. The
+// caller owns the index and does not move past either end.
+func CarouselStepForKey(key ui.Key, index, count int, direction Direction) (int, bool) {
+	if count <= 0 || index < 0 || index >= count {
+		return index, false
+	}
+	switch key {
+	case ui.KeyLeft, ui.KeyUp:
+		if index > 0 {
+			return index - 1, true
+		}
+		return index, true
+	case ui.KeyRight, ui.KeyDown:
+		if index < count-1 {
+			return index + 1, true
+		}
+		return index, true
+	case ui.KeyHome:
+		return 0, true
+	case ui.KeyEnd:
+		return count - 1, true
+	default:
+		return index, false
+	}
+}
+
+// Disabled keeps both control bounds and semantics while making them inert.
+func (carousel Carousel) Disabled() Carousel {
+	carousel.disabled = true
+	return carousel
+}
+
+// Geometry returns clamped content and stable external control bounds.
+func (carousel Carousel) Geometry() CarouselGeometry {
+	viewport := carouselNormalizeRect(carousel.bounds)
+	viewportExtent := viewport.Width
+	if carousel.orientation == CarouselVertical {
+		viewportExtent = viewport.Height
+	}
+	contentExtent := carouselFiniteNonNegative(carousel.contentExtent)
+	if contentExtent < viewportExtent {
+		contentExtent = viewportExtent
+	}
+	maximum := carouselMax(contentExtent-viewportExtent, 0)
+	offset := carouselClamp(carousel.offset, 0, maximum)
+	itemCount := carousel.itemCount
+	if itemCount < 0 {
+		itemCount = 0
+	}
+	index := carousel.index
+	if itemCount == 0 {
+		index = 0
+	} else {
+		if index < 0 {
+			index = 0
+		}
+		if index >= itemCount {
+			index = itemCount - 1
+		}
+	}
+	controlSize := carousel.theme.Metrics.ControlHeight
+	if controlSize < 20 {
+		controlSize = 20
+	}
+	geometry := CarouselGeometry{
+		Bounds: viewport, Viewport: viewport,
+		Content: ui.Rect{X: viewport.X - offset, Y: viewport.Y, Width: contentExtent, Height: viewport.Height},
+		Offset:  offset, MaxOffset: maximum, Index: index, ItemCount: itemCount,
+		CanPrevious: !carousel.disabled && itemCount > 0 && index > 0,
+		CanNext:     !carousel.disabled && itemCount > 0 && index+1 < itemCount,
+	}
+	if carousel.orientation == CarouselVertical {
+		geometry.Content = ui.Rect{X: viewport.X, Y: viewport.Y - offset, Width: viewport.Width, Height: contentExtent}
+		geometry.PreviousButton = ui.Rect{
+			X:     viewport.X + (viewport.Width-controlSize)/2,
+			Y:     viewport.Y - carouselControlOffset - controlSize,
+			Width: controlSize, Height: controlSize,
+		}
+		geometry.NextButton = ui.Rect{
+			X: geometry.PreviousButton.X, Y: viewport.Y + viewport.Height + carouselControlOffset,
+			Width: controlSize, Height: controlSize,
+		}
+		return geometry
+	}
+	geometry.PreviousButton = ui.Rect{
+		X:     viewport.X - carouselControlOffset - controlSize,
+		Y:     viewport.Y + (viewport.Height-controlSize)/2,
+		Width: controlSize, Height: controlSize,
+	}
+	geometry.NextButton = ui.Rect{
+		X: viewport.X + viewport.Width + carouselControlOffset, Y: geometry.PreviousButton.Y,
+		Width: controlSize, Height: controlSize,
+	}
+	return geometry
+}
+
+// ItemGeometry translates one caller-supplied slide offset and extent along
+// the carousel axis. It does not retain, measure, or virtualize the item.
+func (carousel Carousel) ItemGeometry(index int, contentOffset, extent float32) CarouselItemGeometry {
+	geometry := carousel.Geometry()
+	contentOffset = carouselFiniteNonNegative(contentOffset)
+	extent = carouselFiniteNonNegative(extent)
+	bounds := ui.Rect{
+		X: geometry.Content.X + contentOffset, Y: geometry.Content.Y,
+		Width: extent, Height: geometry.Viewport.Height,
+	}
+	if carousel.orientation == CarouselVertical {
+		bounds = ui.Rect{
+			X: geometry.Content.X, Y: geometry.Content.Y + contentOffset,
+			Width: geometry.Viewport.Width, Height: extent,
+		}
+	}
+	return CarouselItemGeometry{
+		Index: index, ContentOffset: contentOffset, Extent: extent,
+		Bounds: bounds, Visible: carouselIntersects(bounds, geometry.Viewport),
+		Selected: index == geometry.Index,
+	}
+}
+
+// BeginContent pushes the viewport clip for caller-painted slides.
+func (carousel *Carousel) BeginContent() CarouselGeometry {
+	geometry := carousel.Geometry()
+	if carousel.canvas != nil && !carousel.contentClipIsActive && geometry.Viewport.Width > 0 && geometry.Viewport.Height > 0 {
+		if carousel.label != "" {
+			carousel.canvas.Container(geometry.Viewport, ui.RoleGroup, carousel.label)
+		}
+		carousel.canvas.Clip(geometry.Viewport)
+		carousel.contentClipIsActive = true
+	}
+	return geometry
+}
+
+// EndContent closes the clip and paints both stable navigation controls.
+func (carousel *Carousel) EndContent() CarouselGeometry {
+	geometry := carousel.Geometry()
+	if carousel.canvas == nil {
+		return geometry
+	}
+	if carousel.contentClipIsActive {
+		carousel.canvas.Unclip()
+		carousel.contentClipIsActive = false
+	}
+	carousel.paintControl(geometry.PreviousButton, carousel.previousID, carousel.previousLabel, true, !geometry.CanPrevious)
+	carousel.paintControl(geometry.NextButton, carousel.nextID, carousel.nextLabel, false, !geometry.CanNext)
+	return geometry
+}
+
+func (carousel Carousel) paintControl(bounds ui.Rect, id ui.ID, label string, previous, disabled bool) {
+	if id.IsZero() || bounds.Width <= 0 || bounds.Height <= 0 {
+		return
+	}
+	// An outline icon button, round: bg-background with a border, bg-muted on hover.
+	background := carousel.theme.Background
+	foreground := carousel.theme.Foreground
+	border := carousel.theme.Border
+	radius := bounds.Width / 2
+	if !disabled && carousel.canvas.Hovered() == id {
+		background = carousel.theme.Muted
+	}
+	if !disabled && carousel.canvas.FocusVisible() == id {
+		ring := carousel.theme.Ring
+		ring.Alpha *= 0.50
+		carousel.canvas.Rounded(carouselExpand(bounds, 3), radius+3, ring)
+	}
+	if disabled {
+		background.Alpha *= 0.50
+		foreground.Alpha *= 0.50
+		border.Alpha *= 0.50
+	}
+	carousel.canvas.RoundedBorder(bounds, radius, 1, border, background)
+	icon := &carouselArrowRight
+	switch {
+	case carousel.orientation == CarouselVertical && previous:
+		icon = &carouselArrowUp
+	case carousel.orientation == CarouselVertical:
+		icon = &carouselArrowDown
+	case previous:
+		icon = &carouselArrowLeft
+	}
+	paintChevronSized(carousel.canvas, icon, bounds, 16, foreground)
+	carousel.canvas.HitWithOptions(id, bounds, label, ui.HitOptions{
+		Role: ui.RoleButton, Disabled: disabled,
+	})
+}
+
+func carouselNormalizeRect(bounds ui.Rect) ui.Rect {
+	bounds.X = carouselFinite(bounds.X)
+	bounds.Y = carouselFinite(bounds.Y)
+	bounds.Width = carouselFiniteNonNegative(bounds.Width)
+	bounds.Height = carouselFiniteNonNegative(bounds.Height)
+	return bounds
+}
+
+func carouselFinite(value float32) float32 {
+	if value != value || value > 3.4028235e+38 || value < -3.4028235e+38 {
+		return 0
+	}
+	return value
+}
+
+func carouselFiniteNonNegative(value float32) float32 {
+	value = carouselFinite(value)
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func carouselClamp(value, minimum, maximum float32) float32 {
+	value = carouselFinite(value)
+	if value < minimum {
+		return minimum
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
+}
+
+func carouselMax(left, right float32) float32 {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+func carouselIntersects(bounds, viewport ui.Rect) bool {
+	return bounds.Width > 0 && bounds.Height > 0 &&
+		bounds.X < viewport.X+viewport.Width && bounds.X+bounds.Width > viewport.X &&
+		bounds.Y < viewport.Y+viewport.Height && bounds.Y+bounds.Height > viewport.Y
+}
+
+func carouselExpand(bounds ui.Rect, amount float32) ui.Rect {
+	return ui.Rect{
+		X: bounds.X - amount, Y: bounds.Y - amount,
+		Width: bounds.Width + amount*2, Height: bounds.Height + amount*2,
+	}
+}

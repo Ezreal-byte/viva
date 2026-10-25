@@ -1,0 +1,367 @@
+package components
+
+import "github.com/vivaui/viva/ui"
+
+// FieldOrientation mirrors the Base UI field group's vertical, horizontal,
+// and container-responsive arrangements.
+type FieldOrientation uint8
+
+const (
+	FieldVertical FieldOrientation = iota
+	FieldHorizontal
+	FieldResponsive
+)
+
+// Field is a structural form recipe. It paints label, description, and error
+// slots, then returns the rectangle reserved for the caller-owned control. It
+// deliberately does not impersonate an input or own editor state.
+type Field struct {
+	canvas      *ui.Canvas
+	theme       ui.Theme
+	bounds      ui.Rect
+	orientation FieldOrientation
+	required    bool
+	invalid     bool
+	disabled    bool
+	control     ui.ID
+}
+
+// BeginField starts a vertical field group.
+func BeginField(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect) Field {
+	return Field{canvas: canvas, theme: theme, bounds: bounds}
+}
+
+// Orientation selects vertical, horizontal, or width-responsive layout.
+func (field Field) Orientation(orientation FieldOrientation) Field {
+	field.orientation = orientation
+	return field
+}
+
+// Required appends a destructive required marker to the title.
+func (field Field) Required() Field {
+	field.required = true
+	return field
+}
+
+// Invalid applies destructive title and error semantics.
+func (field Field) Invalid() Field {
+	field.invalid = true
+	return field
+}
+
+// For makes the title the label of the control painted into the returned slot,
+// as `htmlFor` does: pressing the title focuses and clicks the control (see
+// ui.Canvas.HitLabel). The caller declares the control itself, with that
+// identity.
+func (field Field) For(control ui.ID) Field {
+	field.control = control
+	return field
+}
+
+// Disabled mutes field metadata. The caller remains responsible for making the
+// control painted into the returned slot inert.
+func (field Field) Disabled() Field {
+	field.disabled = true
+	return field
+}
+
+// Field and PaintFormField share one vertical rhythm: a title row, the control,
+// then the description and the error, each row preceded by fieldGap. Vega's
+// gap-3 is 12 beside a 36 pixel control; here, beside a 32 pixel one and in a
+// denser form, it is half an item gap, which keeps a title visibly attached to
+// its own control rather than to the control above it. Description and error
+// are text-sm like the title.
+func fieldTitleHeight(metrics ui.Metrics) float32 { return metrics.FontSizeM + 4 }
+
+func fieldGap(metrics ui.Metrics) float32 { return metrics.GapItem / 2 }
+
+func fieldTextHeight(metrics ui.Metrics) float32 { return metrics.FontSizeM + 7 }
+
+// Paint emits metadata slots and returns the control rectangle. Error is
+// caller-deduplicated: avoiding a runtime map keeps paint deterministic and
+// allocation-free while preserving Base UI's alert treatment. For several
+// errors paint the control's slot yourself and use FieldError.
+func (field Field) Paint(title, description, errorText string) ui.Rect {
+	metrics := field.theme.Metrics
+	orientation := field.orientation
+	if orientation == FieldResponsive {
+		orientation = FieldVertical
+		if field.bounds.Width >= 360 {
+			orientation = FieldHorizontal
+		}
+	}
+	if field.bounds.Height <= 0 {
+		field.bounds.Height = fieldTitleHeight(metrics) + fieldGap(metrics) + metrics.ControlHeight + (fieldGap(metrics)+fieldTextHeight(metrics))*2
+	}
+
+	if orientation == FieldHorizontal {
+		return field.paintHorizontal(title, description, errorText)
+	}
+	return field.paintVertical(title, description, errorText)
+}
+
+func (field Field) paintVertical(title, description, errorText string) ui.Rect {
+	metrics := field.theme.Metrics
+	titleHeight := fieldTitleHeight(metrics)
+	field.paintTitle(title, ui.Rect{X: field.bounds.X, Y: field.bounds.Y, Width: field.bounds.Width, Height: titleHeight})
+	control := ui.Rect{
+		X: field.bounds.X, Y: field.bounds.Y + titleHeight + fieldGap(metrics),
+		Width: field.bounds.Width, Height: metrics.ControlHeight,
+	}
+	y := control.Y + control.Height
+	if description != "" {
+		y += fieldGap(metrics)
+		FieldDescription(field.canvas, field.theme, ui.Rect{X: field.bounds.X, Y: y, Width: field.bounds.Width, Height: fieldTextHeight(metrics)}, description, field.disabled)
+		y += fieldTextHeight(metrics)
+	}
+	if errorText != "" {
+		y += fieldGap(metrics)
+		field.paintError(ui.Rect{X: field.bounds.X, Y: y, Width: field.bounds.Width, Height: fieldTextHeight(metrics)}, errorText)
+	}
+	return control
+}
+
+func (field Field) paintHorizontal(title, description, errorText string) ui.Rect {
+	metrics := field.theme.Metrics
+	labelWidth := field.bounds.Width * 0.34
+	gap := metrics.PadSurface
+	if labelWidth+gap > field.bounds.Width {
+		labelWidth = field.bounds.Width
+		gap = 0
+	}
+	labelBounds := ui.Rect{X: field.bounds.X, Y: field.bounds.Y, Width: labelWidth, Height: fieldTitleHeight(metrics)}
+	field.paintTitle(title, labelBounds)
+	if description != "" {
+		FieldDescription(field.canvas, field.theme, ui.Rect{X: field.bounds.X, Y: field.bounds.Y + labelBounds.Height + fieldGap(metrics), Width: labelWidth, Height: fieldTextHeight(metrics)}, description, field.disabled)
+	}
+	control := ui.Rect{
+		X: field.bounds.X + labelWidth + gap, Y: field.bounds.Y,
+		Width: fieldMax32(0, field.bounds.Width-labelWidth-gap), Height: metrics.ControlHeight,
+	}
+	if errorText != "" {
+		field.paintError(ui.Rect{X: control.X, Y: control.Y + control.Height + fieldGap(metrics), Width: control.Width, Height: fieldTextHeight(metrics)}, errorText)
+	}
+	return control
+}
+
+func (field Field) paintError(bounds ui.Rect, text string) {
+	if field.disabled {
+		// Disabled mutes the metadata; an error is no exception.
+		color := field.theme.Danger
+		color.Alpha *= 0.50
+		field.canvas.Label(text, bounds, ui.TextStyle{Size: field.theme.Metrics.FontSizeM, Weight: ui.WeightRegular, Color: color})
+		return
+	}
+	FieldError(field.canvas, field.theme, bounds, []string{text})
+}
+
+func (field Field) paintTitle(title string, bounds ui.Rect) {
+	metrics := field.theme.Metrics
+	titleColor := field.theme.Foreground
+	if field.invalid {
+		titleColor = field.theme.Danger
+	}
+	if field.disabled {
+		titleColor.Alpha *= 0.50
+	}
+	width := field.canvas.TextWidthWeight(title, metrics.FontSizeM, ui.WeightMedium)
+	if width > bounds.Width {
+		width = bounds.Width
+	}
+	field.canvas.Label(title, ui.Rect{X: bounds.X, Y: bounds.Y, Width: width, Height: bounds.Height}, ui.TextStyle{
+		Size: metrics.FontSizeM, Weight: ui.WeightMedium, Color: titleColor,
+	})
+	field.canvas.HitLabel(field.control, ui.Rect{X: bounds.X, Y: bounds.Y, Width: width, Height: bounds.Height}, title, field.disabled)
+	if field.required && width < bounds.Width {
+		markerColor := field.theme.Danger
+		if field.disabled {
+			markerColor.Alpha *= 0.50
+		}
+		field.canvas.Label("*", ui.Rect{X: bounds.X + width + 3, Y: bounds.Y, Width: bounds.Width - width - 3, Height: bounds.Height}, ui.TextStyle{
+			Size: metrics.FontSizeM, Weight: ui.WeightMedium, Color: markerColor,
+		})
+	}
+}
+
+// FieldTitle paints the title of a field: text-sm font-medium, for a row whose
+// control is a switch or a checkbox beside it. A nonzero control makes the title
+// that control's label, as FieldLabel's `htmlFor` does: pressing the text toggles
+// the switch or checkbox (see ui.Canvas.HitLabel).
+func FieldTitle(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, text string, control ui.ID, disabled bool) {
+	color := theme.Foreground
+	if disabled {
+		color.Alpha *= 0.50
+	}
+	canvas.Label(text, bounds, ui.TextStyle{Size: theme.Metrics.FontSizeM, Weight: ui.WeightMedium, Color: color})
+	if !control.IsZero() {
+		width := min(canvas.TextWidthWeight(text, theme.Metrics.FontSizeM, ui.WeightMedium), bounds.Width)
+		canvas.HitLabel(control, ui.Rect{X: bounds.X, Y: bounds.Y, Width: width, Height: bounds.Height}, text, disabled)
+	}
+}
+
+// FieldDescription paints the muted explanation under a title or a control.
+func FieldDescription(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, text string, disabled bool) {
+	color := theme.MutedForeground
+	if disabled {
+		color.Alpha *= 0.50
+	}
+	canvas.Label(text, bounds, ui.TextStyle{Size: theme.Metrics.FontSizeM, Weight: ui.WeightRegular, Color: color})
+}
+
+// FieldContent paints Vega's FieldContent: a title with its description
+// beneath (gap-1), the text column of a row that has a control beside it. It
+// returns the area it used, so the caller can place the control and size the
+// row; the title is omitted when empty. A nonzero control is the identity of the
+// switch, checkbox or field beside the text, which the title then labels (see
+// FieldTitle).
+func FieldContent(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, title, description string, control ui.ID, disabled bool) ui.Rect {
+	metrics := theme.Metrics
+	y := bounds.Y
+	if title != "" {
+		FieldTitle(canvas, theme, ui.Rect{X: bounds.X, Y: y, Width: bounds.Width, Height: fieldTitleHeight(metrics)}, title, control, disabled)
+		y += fieldTitleHeight(metrics)
+	}
+	if description != "" {
+		if title != "" {
+			y += fieldGap(metrics)
+		}
+		FieldDescription(canvas, theme, ui.Rect{X: bounds.X, Y: y, Width: bounds.Width, Height: fieldTextHeight(metrics)}, description, disabled)
+		y += fieldTextHeight(metrics)
+	}
+	return ui.Rect{X: bounds.X, Y: bounds.Y, Width: bounds.Width, Height: y - bounds.Y}
+}
+
+// FieldError paints Vega's FieldError: one message as plain destructive text,
+// several as a bulleted list (list-disc, gap-1) with empty and repeated
+// messages left out. It returns the area used, zero high when there is nothing
+// to say. The bullets are drawn dots, not characters.
+func FieldError(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, errors []string) ui.Rect {
+	style := ui.TextStyle{Size: theme.Metrics.FontSizeM, Weight: ui.WeightRegular, Color: theme.Danger}
+	rowHeight := fieldTextHeight(theme.Metrics)
+	count, last := 0, ""
+	for index, text := range errors {
+		if fieldRepeated(errors, index) {
+			continue
+		}
+		count++
+		last = text
+	}
+	switch count {
+	case 0:
+		return ui.Rect{X: bounds.X, Y: bounds.Y, Width: bounds.Width}
+	case 1:
+		canvas.Label(last, ui.Rect{X: bounds.X, Y: bounds.Y, Width: bounds.Width, Height: rowHeight}, style)
+		return ui.Rect{X: bounds.X, Y: bounds.Y, Width: bounds.Width, Height: rowHeight}
+	}
+	const indent = 16 // ml-4
+	y := bounds.Y
+	for index, text := range errors {
+		if fieldRepeated(errors, index) {
+			continue
+		}
+		dot := ui.Rect{X: bounds.X + indent - 9, Y: y + (rowHeight-4)/2, Width: 4, Height: 4}
+		canvas.Rounded(dot, 2, theme.Danger)
+		canvas.Label(text, ui.Rect{X: bounds.X + indent, Y: y, Width: fieldMax32(0, bounds.Width-indent), Height: rowHeight}, style)
+		y += rowHeight + fieldGap(theme.Metrics)
+	}
+	return ui.Rect{X: bounds.X, Y: bounds.Y, Width: bounds.Width, Height: y - fieldGap(theme.Metrics) - bounds.Y}
+}
+
+// fieldRepeated reports whether errors[index] is empty or already appeared
+// before it. The lists are a handful of messages, so a scan beats a map.
+func fieldRepeated(errors []string, index int) bool {
+	if errors[index] == "" {
+		return true
+	}
+	for earlier := 0; earlier < index; earlier++ {
+		if errors[earlier] == errors[index] {
+			return true
+		}
+	}
+	return false
+}
+
+// FieldStack hands out the rows of a FieldSet or a FieldGroup top to bottom
+// with the gap Vega puts between them. It only lays out: every row is a Field
+// (or a legend, a separator, a nested group) the caller paints into it.
+//
+//	set := components.BeginFieldGroup(theme, area)
+//	name := components.BeginField(canvas, theme, set.Next(fieldHeight))
+type FieldStack struct {
+	bounds  ui.Rect
+	gap     float32
+	y       float32
+	started bool
+}
+
+// BeginFieldSet starts a field set: rows 24 apart (gap-6 at the default
+// density, 1.5 padding units).
+func BeginFieldSet(theme ui.Theme, bounds ui.Rect) FieldStack {
+	return FieldStack{bounds: bounds, gap: theme.Metrics.PadSurface * 1.5, y: bounds.Y}
+}
+
+// BeginFieldGroup starts a field group: rows 28 apart (gap-7).
+func BeginFieldGroup(theme ui.Theme, bounds ui.Rect) FieldStack {
+	return FieldStack{bounds: bounds, gap: theme.Metrics.PadSurface * 1.75, y: bounds.Y}
+}
+
+// Nested is the stack for a group inside a group: rows 16 apart (gap-4).
+func (stack FieldStack) Nested(theme ui.Theme, bounds ui.Rect) FieldStack {
+	return FieldStack{bounds: bounds, gap: theme.Metrics.PadSurface, y: bounds.Y}
+}
+
+// Tight switches the stack to the 12 pixel gap (gap-3) of a set that holds a
+// checkbox or radio group.
+func (stack FieldStack) Tight(theme ui.Theme) FieldStack {
+	stack.gap = theme.Metrics.GapItem * 1.5
+	return stack
+}
+
+// Next returns the next row, height high and as wide as the stack, below the
+// previous one and a gap further down.
+func (stack *FieldStack) Next(height float32) ui.Rect {
+	if stack.started {
+		stack.y += stack.gap
+	}
+	stack.started = true
+	row := ui.Rect{X: stack.bounds.X, Y: stack.y, Width: stack.bounds.Width, Height: height}
+	stack.y += height
+	return row
+}
+
+// Height is the height of the rows handed out so far, gaps included.
+func (stack FieldStack) Height() float32 { return stack.y - stack.bounds.Y }
+
+// FieldLegend paints a field-set legend. Label legends use the normal control
+// scale; section legends use the slightly stronger heading scale.
+func FieldLegend(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, text string, label bool) {
+	size := theme.Metrics.FontSizeM + 2
+	if label {
+		size = theme.Metrics.FontSizeM
+	}
+	canvas.Label(text, bounds, ui.TextStyle{Size: size, Weight: ui.WeightMedium, Color: theme.Foreground})
+}
+
+// FieldSeparator paints the Base UI separator slot with optional centered text
+// (text-sm, px-2 either side).
+func FieldSeparator(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, text string) {
+	y := bounds.Y + bounds.Height/2
+	canvas.Fill(ui.Rect{X: bounds.X, Y: y, Width: bounds.Width, Height: 1}, theme.Border)
+	if text == "" {
+		return
+	}
+	width := canvas.TextWidth(text, theme.Metrics.FontSizeM) + 16
+	if width > bounds.Width {
+		width = bounds.Width
+	}
+	labelBounds := ui.Rect{X: bounds.X + (bounds.Width-width)/2, Y: bounds.Y, Width: width, Height: bounds.Height}
+	canvas.Fill(labelBounds, theme.Background)
+	canvas.LabelCenter(text, labelBounds, ui.TextStyle{Size: theme.Metrics.FontSizeM, Weight: ui.WeightRegular, Color: theme.MutedForeground})
+}
+
+func fieldMax32(left, right float32) float32 {
+	if left > right {
+		return left
+	}
+	return right
+}

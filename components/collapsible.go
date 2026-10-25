@@ -1,0 +1,78 @@
+package components
+
+import "github.com/vivaui/viva/ui"
+
+// Collapsible paints one unstyled disclosure trigger. The official primitive
+// intentionally adds no surface or icon; callers compose those explicitly.
+// The application owns open state and paints content into the returned bounds.
+type Collapsible struct {
+	canvas   *ui.Canvas
+	theme    ui.Theme
+	id       ui.ID
+	bounds   ui.Rect
+	disabled bool
+}
+
+// BeginCollapsible starts a disclosure container declaration.
+func BeginCollapsible(canvas *ui.Canvas, theme ui.Theme, id ui.ID, bounds ui.Rect) Collapsible {
+	return Collapsible{canvas: canvas, theme: theme, id: id, bounds: bounds}
+}
+
+// Disabled renders and routes the trigger as inert.
+func (collapsible Collapsible) Disabled() Collapsible {
+	collapsible.disabled = true
+	return collapsible
+}
+
+// Paint draws the trigger label. contentHeight is reserved only while open;
+// the returned rectangle is empty while closed.
+func (collapsible Collapsible) Paint(title string, open bool, contentHeight float32) ui.Rect {
+	header, content := collapsible.Bare(title, open, contentHeight)
+	if header == (ui.Rect{}) {
+		return content
+	}
+	foreground := collapsible.theme.Foreground
+	if collapsible.disabled {
+		foreground.Alpha *= 0.50
+	}
+	collapsible.canvas.Label(title, header,
+		ui.TextStyle{Size: collapsible.theme.Metrics.FontSizeM, Weight: ui.WeightMedium, Color: foreground})
+	return content
+}
+
+// Bare is CollapsibleTrigger without a look of its own (asChild): it reserves
+// the trigger row, declares its hit with label and the expanded state, and paints
+// nothing, so the caller draws any trigger it likes (a ghost icon button beside
+// a heading, say) into the returned header. contentHeight is reserved only while
+// open; content is empty while closed.
+func (collapsible Collapsible) Bare(label string, open bool, contentHeight float32) (header, content ui.Rect) {
+	if collapsible.canvas == nil || collapsible.bounds.Width <= 0 {
+		return ui.Rect{}, ui.Rect{}
+	}
+	if contentHeight < 0 {
+		contentHeight = 0
+	}
+	headerHeight := collapsible.theme.Metrics.ControlHeight
+	totalHeight := headerHeight
+	if open {
+		totalHeight += contentHeight
+	}
+	if collapsible.bounds.Height <= 0 || collapsible.bounds.Height < totalHeight {
+		collapsible.bounds.Height = totalHeight
+	}
+	header = ui.Rect{X: collapsible.bounds.X, Y: collapsible.bounds.Y, Width: collapsible.bounds.Width, Height: headerHeight}
+	if !collapsible.id.IsZero() {
+		collapsible.canvas.HitWithOptions(collapsible.id, header, label, ui.HitOptions{
+			Role: ui.RoleButton, Disabled: collapsible.disabled, FocusableWhenDisabled: true, Expanded: open, Expandable: true,
+		})
+	}
+	content = ui.Rect{
+		X:     collapsible.bounds.X,
+		Y:     collapsible.bounds.Y + headerHeight,
+		Width: collapsible.bounds.Width,
+	}
+	if open {
+		content.Height = collapsible.bounds.Height - headerHeight
+	}
+	return header, content
+}

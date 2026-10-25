@@ -1,0 +1,108 @@
+//go:build darwin || windows || linux
+
+package headless
+
+import (
+	"bytes"
+	"strings"
+	"testing"
+
+	"github.com/vivaui/viva/app"
+	"github.com/vivaui/viva/ui"
+)
+
+func layoutSession(t *testing.T, paint func(canvas *ui.Canvas)) *Session {
+	t.Helper()
+	session, err := Open(app.Config{
+		Title: "layout", Width: 320, Height: 160,
+		Paint: func(canvas *ui.Canvas, _ ui.Size) { paint(canvas) },
+	}, nil, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(session.Close)
+	return session
+}
+
+func layoutKinds(problems []LayoutProblem) map[LayoutKind]int {
+	kinds := map[LayoutKind]int{}
+	for _, problem := range problems {
+		kinds[problem.Kind]++
+	}
+	return kinds
+}
+
+func TestCheckLayoutAcceptsAFrameWhoseTextFitsItsControls(t *testing.T) {
+	session, _ := openTestApp(t)
+	if problems := CheckLayout(session.Snapshot()); len(problems) != 0 {
+		t.Fatalf("problems = %+v", problems)
+	}
+}
+
+func TestCheckLayoutFindsTextThatDoesNotFit(t *testing.T) {
+	style := ui.TextStyle{Size: 13, Color: ui.Color{Alpha: 1}}
+	session := layoutSession(t, func(canvas *ui.Canvas) {
+		// Wider than the button it is in.
+		canvas.Hit(ui.Item(1), ui.Rect{X: 10, Y: 10, Width: 100, Height: 24})
+		canvas.Label("A very long caption", ui.Rect{X: 14, Y: 12, Width: 200, Height: 20}, style)
+		// Cut by a clip.
+		canvas.Clip(ui.Rect{X: 10, Y: 50, Width: 40, Height: 20})
+		canvas.Label("Cut off by the clip", ui.Rect{X: 10, Y: 50, Width: 200, Height: 20}, style)
+		canvas.Unclip()
+		// Two lines on the same spot.
+		canvas.Label("First", ui.Rect{X: 150, Y: 90, Width: 80, Height: 20}, style)
+		canvas.Label("Second", ui.Rect{X: 160, Y: 95, Width: 80, Height: 20}, style)
+		// Past the right edge of the window.
+		canvas.Label("Runs off the window", ui.Rect{X: 250, Y: 130, Width: 200, Height: 20}, style)
+		// Two buttons that cross.
+		canvas.Hit(ui.Item(2), ui.Rect{X: 10, Y: 100, Width: 60, Height: 30})
+		canvas.Hit(ui.Item(3), ui.Rect{X: 50, Y: 110, Width: 60, Height: 30})
+	})
+	kinds := layoutKinds(CheckLayout(session.Snapshot()))
+	for _, kind := range []LayoutKind{LayoutSpill, LayoutClipped, LayoutOverlap, LayoutOffscreen, LayoutCollide} {
+		if kinds[kind] == 0 {
+			t.Errorf("no %s problem found; kinds = %v", kind, kinds)
+		}
+	}
+}
+
+func TestCheckLayoutIgnoresTextOnAnotherLayerAndCenteredText(t *testing.T) {
+	style := ui.TextStyle{Size: 13, Color: ui.Color{Alpha: 1}}
+	session := layoutSession(t, func(canvas *ui.Canvas) {
+		canvas.Label("Below", ui.Rect{X: 20, Y: 20, Width: 100, Height: 20}, style)
+		canvas.PushLayer(1)
+		canvas.Label("Above", ui.Rect{X: 20, Y: 20, Width: 100, Height: 20}, style)
+		canvas.PopLayer()
+		// The box is wide and the line sits in its middle: the box is not the text.
+		canvas.Hit(ui.Item(1), ui.Rect{X: 20, Y: 60, Width: 120, Height: 24})
+		canvas.LabelCenter("OK", ui.Rect{X: 20, Y: 62, Width: 120, Height: 20}, style)
+	})
+	if problems := CheckLayout(session.Snapshot()); len(problems) != 0 {
+		t.Fatalf("problems = %+v", problems)
+	}
+}
+
+func TestServeLayoutListsProblemsAndNeverFails(t *testing.T) {
+	session := layoutSession(t, func(canvas *ui.Canvas) {
+		canvas.Label("Runs off the window", ui.Rect{X: 250, Y: 20, Width: 200, Height: 20}, ui.TextStyle{Size: 13, Color: ui.Color{Alpha: 1}})
+	})
+	var out bytes.Buffer
+	if err := Serve(session, strings.NewReader("layout\nquit\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	reply := out.String()
+	if !strings.HasPrefix(reply, "offscreen ") || !strings.Contains(reply, `"Runs off the window"`) || !strings.Contains(reply, "ok 1 problems\n") {
+		t.Fatalf("reply = %q", reply)
+	}
+}
+
+func TestCheckLayoutIgnoresALineThatAScrolledAreaShowsHalfOf(t *testing.T) {
+	session := layoutSession(t, func(canvas *ui.Canvas) {
+		canvas.Clip(ui.Rect{X: 0, Y: 0, Width: 320, Height: 100})
+		canvas.Label("Half way out", ui.Rect{X: 10, Y: 90, Width: 200, Height: 20}, ui.TextStyle{Size: 13, Color: ui.Color{Alpha: 1}})
+		canvas.Unclip()
+	})
+	if problems := CheckLayout(session.Snapshot()); len(problems) != 0 {
+		t.Fatalf("problems = %+v", problems)
+	}
+}

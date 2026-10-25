@@ -1,0 +1,373 @@
+package components
+
+import (
+	"github.com/vivaui/viva/ui"
+)
+
+// ToggleGroupOption is one stable toggle. Active is carried per option so the
+// same component supports single- and multiple-selection groups.
+type ToggleGroupOption struct {
+	ID       ui.ID
+	Label    string
+	Active   bool
+	Disabled bool
+}
+
+// ToggleGroupOrientation selects a row or column group.
+type ToggleGroupOrientation uint8
+
+const (
+	ToggleGroupHorizontal ToggleGroupOrientation = iota
+	ToggleGroupVertical
+)
+
+// ToggleGroup paints compact Base UI-style toggles. The default treatment is
+// borderless with eight logical pixels between items; Spacing(0) joins the items
+// into one connected control, rounded only at its outer corners, with hairlines
+// between outline items.
+type ToggleGroup struct {
+	canvas      *ui.Canvas
+	theme       ui.Theme
+	bounds      ui.Rect
+	options     []ToggleGroupOption
+	variant     ToggleVariant
+	size        ToggleSize
+	spacing     float32
+	orientation ToggleGroupOrientation
+	disabled    bool
+	fit         bool
+	// tabStop is the one item Tab reaches; arrows move among the others.
+	tabStop ui.ID
+}
+
+// ToggleGroupResult is what painting a toggle group reports back.
+type ToggleGroupResult struct {
+	canvas  *ui.Canvas
+	options []ToggleGroupOption
+}
+
+// Clicked returns the option whose click this paint is delivering, and false in
+// every other paint (see ui.Canvas.Clicked). The application flips that option's
+// Active, or moves the selection, itself.
+func (result ToggleGroupResult) Clicked() (ui.ID, bool) {
+	if result.canvas == nil {
+		return ui.ID{}, false
+	}
+	for _, option := range result.options {
+		if result.canvas.Clicked(option.ID) {
+			return option.ID, true
+		}
+	}
+	return ui.ID{}, false
+}
+
+// BeginToggleGroup starts a horizontal toggle group.
+func BeginToggleGroup(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, options []ToggleGroupOption) ToggleGroup {
+	group := ToggleGroup{canvas: canvas, theme: theme, bounds: bounds, options: options, spacing: 8}
+	group.tabStop = group.rovingTabStop()
+	return group
+}
+
+// rovingTabStop keeps one toggle in the Tab order: the focused one, else the
+// first active one, else the first enabled one.
+func (group ToggleGroup) rovingTabStop() ui.ID {
+	enabled := func(option ToggleGroupOption) bool {
+		return !group.disabled && !option.Disabled && !option.ID.IsZero()
+	}
+	focus := ui.ID{}
+	if group.canvas != nil {
+		focus = group.canvas.FocusVisible()
+	}
+	for _, option := range group.options {
+		if option.ID == focus && enabled(option) {
+			return focus
+		}
+	}
+	for _, option := range group.options {
+		if option.Active && enabled(option) {
+			return option.ID
+		}
+	}
+	for _, option := range group.options {
+		if enabled(option) {
+			return option.ID
+		}
+	}
+	return ui.ID{}
+}
+
+// Outline selects the bordered item variant.
+func (group ToggleGroup) Outline() ToggleGroup {
+	group.variant = ToggleOutline
+	return group
+}
+
+// Small selects the compact item size.
+func (group ToggleGroup) Small() ToggleGroup {
+	group.size = ToggleSizeSmall
+	return group
+}
+
+// Large selects the large item size.
+func (group ToggleGroup) Large() ToggleGroup {
+	group.size = ToggleSizeLarge
+	return group
+}
+
+// Spacing sets logical pixels between items. Zero joins the items.
+func (group ToggleGroup) Spacing(spacing float32) ToggleGroup {
+	if spacing < 0 {
+		spacing = 0
+	}
+	group.spacing = spacing
+	return group
+}
+
+// SizeToFit sizes every item to its label (px-2.5, px-2 when joined, never
+// narrower than tall) instead of splitting the bounds' width equally; the group
+// is as wide as its items, or as the widest item when vertical. BoundsWidth
+// reports it.
+func (group ToggleGroup) SizeToFit() ToggleGroup {
+	group.fit = true
+	return group
+}
+
+// BoundsWidth is the width the group paints at: the bounds', or with SizeToFit
+// the width its items need.
+func (group ToggleGroup) BoundsWidth() float32 {
+	if !group.fit || len(group.options) == 0 {
+		return group.bounds.Width
+	}
+	height := toggleControlHeight(group.theme, group.size)
+	if group.orientation == ToggleGroupVertical {
+		var widest float32
+		for _, option := range group.options {
+			widest = max(widest, group.fittedWidth(option, height))
+		}
+		return widest
+	}
+	total := group.spacing * float32(len(group.options)-1)
+	for _, option := range group.options {
+		total += group.fittedWidth(option, height)
+	}
+	return total
+}
+
+func (group ToggleGroup) fittedWidth(option ToggleGroupOption, height float32) float32 {
+	padding := float32(10)
+	if group.spacing == 0 {
+		padding = 8
+	}
+	return toggleFittedWidth(group.canvas, group.theme, option.Label, height, padding)
+}
+
+// Vertical lays options out in a column.
+func (group ToggleGroup) Vertical() ToggleGroup {
+	group.orientation = ToggleGroupVertical
+	return group
+}
+
+// Disabled renders every option as inert.
+func (group ToggleGroup) Disabled() ToggleGroup {
+	group.disabled = true
+	return group
+}
+
+// ToggleGroupKeyDown applies orientation-aware roving focus to current. Arrow
+// keys on the group's layout axis wrap through enabled non-zero options; Home
+// and End choose the first and last. Horizontal Left and Right reverse in RTL.
+func ToggleGroupKeyDown(current ui.ID, options []ToggleGroupOption, orientation ToggleGroupOrientation, direction Direction, key ui.Key) (ui.ID, bool) {
+	step := 0
+	switch key {
+	case ui.KeyLeft:
+		if orientation != ToggleGroupHorizontal {
+			return current, false
+		}
+		step = -1
+		if direction.IsRTL() {
+			step = 1
+		}
+	case ui.KeyRight:
+		if orientation != ToggleGroupHorizontal {
+			return current, false
+		}
+		step = 1
+		if direction.IsRTL() {
+			step = -1
+		}
+	case ui.KeyUp:
+		if orientation != ToggleGroupVertical {
+			return current, false
+		}
+		step = -1
+	case ui.KeyDown:
+		if orientation != ToggleGroupVertical {
+			return current, false
+		}
+		step = 1
+	case ui.KeyHome:
+		return firstEnabledToggleGroupOption(current, options, 1), true
+	case ui.KeyEnd:
+		return firstEnabledToggleGroupOption(current, options, -1), true
+	default:
+		return current, false
+	}
+	return nextEnabledToggleGroupOption(current, options, step), true
+}
+
+func firstEnabledToggleGroupOption(current ui.ID, options []ToggleGroupOption, step int) ui.ID {
+	for index := 0; index < len(options); index++ {
+		candidate := index
+		if step < 0 {
+			candidate = len(options) - 1 - index
+		}
+		option := options[candidate]
+		if !option.ID.IsZero() && !option.Disabled {
+			return option.ID
+		}
+	}
+	return current
+}
+
+func nextEnabledToggleGroupOption(current ui.ID, options []ToggleGroupOption, step int) ui.ID {
+	if len(options) == 0 {
+		return current
+	}
+	currentIndex := -1
+	for index := range options {
+		if options[index].ID == current {
+			currentIndex = index
+			break
+		}
+	}
+	if currentIndex < 0 {
+		return firstEnabledToggleGroupOption(current, options, step)
+	}
+	for offset := 1; offset <= len(options); offset++ {
+		index := (currentIndex + step*offset) % len(options)
+		if index < 0 {
+			index += len(options)
+		}
+		option := options[index]
+		if !option.ID.IsZero() && !option.Disabled {
+			return option.ID
+		}
+	}
+	return current
+}
+
+// Paint draws stable per-option surfaces and hit regions.
+func (group ToggleGroup) Paint() ToggleGroupResult {
+	result := ToggleGroupResult{canvas: group.canvas, options: group.options}
+	if group.canvas == nil || len(group.options) == 0 || (group.bounds.Width <= 0 && !group.fit) {
+		return result
+	}
+	if group.fit {
+		group.bounds.Width = group.BoundsWidth()
+	}
+	group.resolveBounds()
+	radius := group.theme.Metrics.RadiusControl
+	joined := group.spacing == 0
+	joinedOutline := joined && group.variant == ToggleOutline
+	vertical := group.orientation == ToggleGroupVertical
+	count := len(group.options)
+	// A joined outline group's frame goes down first and the items are painted
+	// inside it.
+	itemRadius := radius
+	if joinedOutline {
+		group.canvas.Elevate(group.bounds, radius, ui.ShadowXS) // the group's shadow-xs
+		paintBordered(group.canvas, group.theme, group.bounds, radius, group.theme.Input, ui.Color{})
+		itemRadius--
+	}
+	var offset float32
+	for index, option := range group.options {
+		bounds := group.optionBounds(index, float32(count), offset)
+		surface := joinedSurface(bounds, index, count, vertical, joinedOutline)
+		if group.fit && !vertical {
+			offset += bounds.Width + group.spacing
+		}
+		enabled := !group.disabled && !option.Disabled && !option.ID.IsZero()
+		hovered := enabled && group.canvas.Hovered() == option.ID
+		pressed := enabled && group.canvas.Pressed() == option.ID
+		focused := enabled && group.canvas.FocusVisible() == option.ID
+		if focused {
+			group.canvas.Rounded(expand(bounds, 3), radius+3, scaledAlpha(group.theme.Ring, 0.50))
+		}
+		fill := group.theme.Background
+		fill.Alpha = 0
+		foreground := group.theme.Foreground
+		if option.Active {
+			fill = group.theme.Muted
+		}
+		if hovered {
+			fill = group.theme.Muted
+		}
+		if pressed {
+			fill = blend(fill, group.theme.Foreground, 0.05)
+		}
+		if group.disabled || option.Disabled {
+			fill.Alpha *= 0.50
+			foreground.Alpha *= 0.50
+		}
+		switch {
+		case joined:
+			paintJoinedSurface(group.canvas, surface, itemRadius, fill, index, count, vertical)
+			if joinedOutline && index > 0 {
+				paintJoinedSeparator(group.canvas, surface, group.theme.Input, vertical)
+			}
+		case group.variant == ToggleOutline:
+			group.canvas.Elevate(bounds, radius, ui.ShadowXS) // shadow-xs
+			border := group.theme.Input
+			if group.disabled || option.Disabled {
+				border.Alpha *= 0.50
+			}
+			paintBordered(group.canvas, group.theme, bounds, radius, border, fill)
+		default:
+			group.canvas.Rounded(bounds, radius, fill)
+		}
+		group.canvas.LabelCenter(option.Label, bounds, ui.TextStyle{Size: group.theme.Metrics.FontSizeM, Weight: ui.WeightMedium, Color: foreground})
+		if !option.ID.IsZero() {
+			group.canvas.HitWithOptions(option.ID, bounds, option.Label, ui.HitOptions{
+				Role: ui.RoleButton, Disabled: group.disabled || option.Disabled,
+				Checked: option.Active, Selected: option.Active,
+				SkipTab: option.ID != group.tabStop,
+			})
+		}
+	}
+	return result
+}
+
+func (group *ToggleGroup) resolveBounds() {
+	height := toggleControlHeight(group.theme, group.size)
+	if group.orientation == ToggleGroupVertical {
+		if group.bounds.Height <= 0 {
+			group.bounds.Height = height*float32(len(group.options)) + group.spacing*float32(len(group.options)-1)
+		}
+		return
+	}
+	if group.bounds.Height <= 0 {
+		group.bounds.Height = height
+	}
+}
+
+// optionBounds is where option index sits. offset is how far along the row the
+// option starts when the group is sized to its labels (the sum of the widths and
+// gaps before it); an equal split computes it from the index.
+func (group ToggleGroup) optionBounds(index int, count, offset float32) ui.Rect {
+	// Edges are computed rather than accumulated, so joined neighbours share an
+	// edge exactly instead of overlapping by a rounding error.
+	if group.orientation == ToggleGroupVertical {
+		available := group.bounds.Height - group.spacing*(count-1)
+		top := group.bounds.Y + available*float32(index)/count + group.spacing*float32(index)
+		bottom := group.bounds.Y + available*float32(index+1)/count + group.spacing*float32(index)
+		return ui.Rect{X: group.bounds.X, Y: top, Width: group.bounds.Width, Height: bottom - top}
+	}
+	if group.fit {
+		width := group.fittedWidth(group.options[index], toggleControlHeight(group.theme, group.size))
+		return ui.Rect{X: group.bounds.X + offset, Y: group.bounds.Y, Width: width, Height: group.bounds.Height}
+	}
+	available := group.bounds.Width - group.spacing*(count-1)
+	left := group.bounds.X + available*float32(index)/count + group.spacing*float32(index)
+	right := group.bounds.X + available*float32(index+1)/count + group.spacing*float32(index)
+	return ui.Rect{X: left, Y: group.bounds.Y, Width: right - left, Height: group.bounds.Height}
+}

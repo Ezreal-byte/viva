@@ -1,0 +1,416 @@
+package {{PACKAGE}}
+
+import (
+	"time"
+
+	"github.com/vivaui/viva/ui"
+)
+
+// PopoverSide selects the edge of the anchor used by a popover.
+type PopoverSide uint8
+
+const (
+	PopoverBottom PopoverSide = iota
+	PopoverTop
+	PopoverRight
+	PopoverLeft
+)
+
+// PopoverAlign selects placement along the anchor's cross axis.
+type PopoverAlign uint8
+
+const (
+	PopoverAlignCenter PopoverAlign = iota
+	PopoverAlignStart
+	PopoverAlignEnd
+)
+
+// PopoverState is caller-owned popup visibility. Its zero value is closed.
+// Transitions are synchronous value operations and never schedule work.
+type PopoverState bool
+
+// IsOpen reports whether the popover should be painted.
+func (state PopoverState) IsOpen() bool { return bool(state) }
+
+// Open returns the open state.
+func (PopoverState) Open() PopoverState { return true }
+
+// Close returns the closed state.
+func (PopoverState) Close() PopoverState { return false }
+
+// Toggle returns the opposite visibility state.
+func (state PopoverState) Toggle() PopoverState { return !state }
+
+// Dismiss closes the popover after an application-owned dismiss action.
+func (PopoverState) Dismiss() PopoverState { return false }
+
+// Escape closes the popover after the runtime routes an Escape key press.
+func (PopoverState) Escape() PopoverState { return false }
+
+// OutsidePress closes the popover after the runtime identifies an outside press.
+func (PopoverState) OutsidePress() PopoverState { return false }
+
+// PopoverOptions contains stable overlay identities and positioning values.
+type PopoverOptions struct {
+	Layer uint16
+	Scope ui.ID
+	// DismissID, when set, makes the popover dismiss on Escape and on a primary
+	// or secondary press outside its surface. The outside press is passed on to
+	// the control beneath, as a non-modal web popover's is. The surface itself is
+	// opaque, so presses on its padding or header do not reach the trigger.
+	DismissID   ui.ID
+	Side        PopoverSide
+	Align       PopoverAlign
+	SideOffset  float32
+	AlignOffset float32
+	// ContentSize.Width defaults to 288 (`w-72`). A zero ContentSize.Height sizes
+	// the popover to its parts: the header (its description wraps to the width)
+	// and, under it, BodyHeight, so no guessed height leaves a gap or cuts the
+	// body off.
+	ContentSize ui.Size
+	BodyHeight  float32
+	// InitialFocusID, when set, takes keyboard focus when the popover opens.
+	// A non-modal popover asks the runtime directly (Canvas.RequestFocus); the
+	// request is honored once, so it does not steal focus back afterwards.
+	InitialFocusID ui.ID
+}
+
+// PopoverLayout exposes the content and body slots.
+type PopoverLayout struct {
+	Content ui.Rect
+	Header  ui.Rect
+	Body    ui.Rect
+}
+
+// Popover is a nonmodal anchored surface. It never schedules delayed work.
+type Popover struct {
+	canvas   *ui.Canvas
+	theme    ui.Theme
+	viewport ui.Rect
+	anchor   ui.Rect
+	options  PopoverOptions
+	disabled bool
+}
+
+// BeginPopover creates one source-owned popover declaration.
+func BeginPopover(canvas *ui.Canvas, theme ui.Theme, viewport, anchor ui.Rect, options PopoverOptions) Popover {
+	return Popover{canvas: canvas, theme: theme, viewport: viewport, anchor: anchor, options: options}
+}
+
+// Disabled prevents a disabled trigger from producing popup content.
+func (popover Popover) Disabled() Popover {
+	popover.disabled = true
+	return popover
+}
+
+// Paint paints the standard title/description content and closes its layer.
+func (popover Popover) Paint(title, description string) PopoverLayout {
+	layout := popover.Begin(title, description)
+	popover.End()
+	return layout
+}
+
+// Begin paints the popup and keeps its layer/scope active for custom content.
+func (popover Popover) Begin(title, description string) PopoverLayout {
+	if popover.disabled || popover.canvas == nil || popover.viewport.Width <= 0 || popover.viewport.Height <= 0 {
+		return PopoverLayout{}
+	}
+	popover.canvas.PushLayer(popover.options.Layer)
+	if !popover.options.Scope.IsZero() {
+		popover.canvas.PushFocusScope(popover.options.Scope)
+	}
+	if !popover.options.InitialFocusID.IsZero() {
+		popover.canvas.RequestFocus(popover.options.InitialFocusID)
+	}
+	if !popover.options.DismissID.IsZero() && popover.viewport.Width > 0 && popover.viewport.Height > 0 {
+		popover.canvas.HitWithOptions(popover.options.DismissID, popover.viewport, "Dismiss popover", ui.HitOptions{
+			Role: ui.RoleButton, SkipFocus: true, Backdrop: true, PassPrimary: true, PassSecondary: true,
+		})
+	}
+	metrics := popover.theme.Metrics
+	var scratch overlayLines
+	width := popover.contentWidth()
+	lines := overlayWrap(popover.canvas, &scratch, description, metrics.FontSizeM, ui.WeightRegular, width-2*metrics.PadSurface)
+	headerHeight := popoverHeaderHeight(metrics, len(lines))
+	content, side := popover.contentBounds(width, headerHeight)
+	popover.canvas.BeginPresence(overlayKey(popover.options.DismissID, popover.options.Scope), overlaySurfacePart,
+		popupPresence(popover.theme, overlayDuration, side), popupPivot(content, side, popover.anchor))
+	popover.canvas.Elevate(content, metrics.RadiusControl, ui.ShadowMD) // shadow-md
+	popover.canvas.RoundedBorder(content, metrics.RadiusControl, 1, popover.theme.Border, popover.theme.Popover)
+	// The popup is inside the popover: a press on its padding or header must not
+	// reach the trigger or the page underneath. Controls the caller paints into
+	// the body follow and take their own presses.
+	popover.canvas.Block(content)
+	inner := content.Inset(ui.All(metrics.PadSurface))
+	lineHeight := overlayLineHeight(metrics)
+	popover.canvas.Label(title, ui.Rect{X: inner.X, Y: inner.Y, Width: inner.Width, Height: lineHeight}, ui.TextStyle{
+		Size: metrics.FontSizeM, Weight: ui.WeightMedium, Color: popover.theme.PopoverForeground,
+	})
+	overlayParagraph(popover.canvas, lines, ui.Rect{X: inner.X, Y: inner.Y + lineHeight + popoverTitleGap, Width: inner.Width}, lineHeight, ui.TextStyle{
+		Size: metrics.FontSizeM, Weight: ui.WeightRegular, Color: popover.theme.MutedForeground,
+	}, false)
+	bodyY := inner.Y + headerHeight + popoverBodyGap(metrics)
+	return PopoverLayout{
+		Content: content,
+		Header:  ui.Rect{X: inner.X, Y: inner.Y, Width: inner.Width, Height: headerHeight},
+		Body:    ui.Rect{X: inner.X, Y: bodyY, Width: inner.Width, Height: max(0, inner.Y+inner.Height-bodyY)},
+	}
+}
+
+// popoverTitleGap separates the title from the description (`gap-1`).
+const popoverTitleGap = float32(4)
+
+// popoverBodyGap separates the header from the body (`gap-4`).
+func popoverBodyGap(metrics ui.Metrics) float32 { return metrics.PadSurface }
+
+// popoverHeaderHeight is the title and, under it, the description's lines.
+func popoverHeaderHeight(metrics ui.Metrics, descriptionLines int) float32 {
+	height := overlayLineHeight(metrics)
+	if descriptionLines > 0 {
+		height += popoverTitleGap + float32(descriptionLines)*overlayLineHeight(metrics)
+	}
+	return height
+}
+
+// End closes the nonmodal scope and layer and routes Escape when requested. It
+// also ends what the popover animates in and out.
+func (popover Popover) End() {
+	if popover.disabled || popover.canvas == nil || popover.viewport.Width <= 0 || popover.viewport.Height <= 0 {
+		return
+	}
+	popover.canvas.EndPresence()
+	// Claim Escape while the popover's own scope is still pushed, so it stays
+	// the target when painted inside a dialog.
+	if !popover.options.DismissID.IsZero() {
+		popover.canvas.SetEscapeTarget(popover.options.DismissID)
+	}
+	if !popover.options.Scope.IsZero() {
+		popover.canvas.PopFocusScope()
+	}
+	popover.canvas.PopLayer()
+}
+
+func (popover Popover) contentWidth() float32 {
+	if width := popover.options.ContentSize.Width; width > 0 {
+		return width
+	}
+	return 288
+}
+
+// contentBounds places the popover beside its anchor, on the opposite side when
+// the requested one has no room (see PlaceOverlay).
+func (popover Popover) contentBounds(width, headerHeight float32) (ui.Rect, OverlaySide) {
+	metrics := popover.theme.Metrics
+	height := popover.options.ContentSize.Height
+	if height <= 0 {
+		height = 2*metrics.PadSurface + headerHeight
+		if popover.options.BodyHeight > 0 {
+			height += popoverBodyGap(metrics) + popover.options.BodyHeight
+		}
+	}
+	offset := popover.options.SideOffset
+	if offset == 0 {
+		offset = 4
+	}
+	return PlaceOverlay(popover.anchor, ui.Size{Width: width, Height: height}, popover.viewport, OverlayPlacement{
+		Side: OverlaySide(popover.options.Side), Align: OverlayAlign(popover.options.Align),
+		SideOffset: offset, AlignOffset: popover.options.AlignOffset, Margin: 8,
+	})
+}
+
+// OverlaySide is the edge of an anchor an overlay opens on.
+type OverlaySide uint8
+
+const (
+	OverlayBottom OverlaySide = iota
+	OverlayTop
+	OverlayRight
+	OverlayLeft
+)
+
+// OverlayAlign places an overlay along the anchor's edge it opened on.
+type OverlayAlign uint8
+
+const (
+	OverlayAlignCenter OverlayAlign = iota
+	OverlayAlignStart
+	OverlayAlignEnd
+)
+
+// OverlayPlacement describes where an overlay goes relative to its anchor. It is
+// the Positioner of Base UI's popups: side, align, and the two offsets.
+type OverlayPlacement struct {
+	Side  OverlaySide
+	Align OverlayAlign
+	// SideOffset is the gap between the anchor and the overlay; AlignOffset
+	// shifts the overlay along the anchor's edge.
+	SideOffset  float32
+	AlignOffset float32
+	// Margin is the distance the overlay keeps from the viewport's edges.
+	Margin float32
+}
+
+// PlaceOverlay returns where an overlay of size goes beside anchor inside
+// viewport, and the side it ended up on. It does what the Base UI positioner
+// does on a collision: when the overlay does not fit on the requested side and
+// fits better on the opposite one it flips, then it shifts along the edge and
+// shrinks to stay inside the viewport less Margin. A menu opened at the pointer
+// passes a zero-size anchor at the pointer with OverlayBottom and
+// OverlayAlignStart, and so opens above it when there is no room below.
+func PlaceOverlay(anchor ui.Rect, size ui.Size, viewport ui.Rect, placement OverlayPlacement) (ui.Rect, OverlaySide) {
+	left, top := viewport.X+placement.Margin, viewport.Y+placement.Margin
+	right, bottom := viewport.X+viewport.Width-placement.Margin, viewport.Y+viewport.Height-placement.Margin
+	size.Width = min(size.Width, max(right-left, 0))
+	size.Height = min(size.Height, max(bottom-top, 0))
+
+	side := placement.Side
+	bounds := overlayBeside(anchor, size, side, placement)
+	opposite := overlayOpposite(side)
+	if overlayOverflow(bounds, side, left, top, right, bottom) > 0 {
+		flipped := overlayBeside(anchor, size, opposite, placement)
+		if overlayOverflow(flipped, opposite, left, top, right, bottom) < overlayOverflow(bounds, side, left, top, right, bottom) {
+			bounds, side = flipped, opposite
+		}
+	}
+	return overlayClamp(bounds, viewport, placement.Margin), side
+}
+
+// overlayClamp shrinks bounds to fit viewport less margin and shifts them back
+// inside it.
+func overlayClamp(bounds, viewport ui.Rect, margin float32) ui.Rect {
+	left, top := viewport.X+margin, viewport.Y+margin
+	right, bottom := viewport.X+viewport.Width-margin, viewport.Y+viewport.Height-margin
+	bounds.Width = min(bounds.Width, max(right-left, 0))
+	bounds.Height = min(bounds.Height, max(bottom-top, 0))
+	bounds.X = max(min(bounds.X, right-bounds.Width), left)
+	bounds.Y = max(min(bounds.Y, bottom-bounds.Height), top)
+	return bounds
+}
+
+func overlayOpposite(side OverlaySide) OverlaySide {
+	switch side {
+	case OverlayTop:
+		return OverlayBottom
+	case OverlayRight:
+		return OverlayLeft
+	case OverlayLeft:
+		return OverlayRight
+	}
+	return OverlayTop
+}
+
+// SubmenuPlacement places a submenu beside its trigger row, on the right, top
+// aligned with the row (Base UI's align start and -3px align offset), flipping
+// left or adjusting inside the viewport when there is no room. It is the shared
+// placement a menu's submenu controller uses instead of hand-computed edges.
+func SubmenuPlacement(trigger ui.Rect, size ui.Size, viewport ui.Rect) ui.Rect {
+	bounds, _ := PlaceOverlay(trigger, size, viewport, OverlayPlacement{
+		Side: OverlayRight, Align: OverlayAlignStart, AlignOffset: -3, Margin: 8,
+	})
+	return bounds
+}
+
+// overlayBeside positions the overlay on one side of the anchor, unclamped.
+func overlayBeside(anchor ui.Rect, size ui.Size, side OverlaySide, placement OverlayPlacement) ui.Rect {
+	bounds := ui.Rect{Width: size.Width, Height: size.Height}
+	if side == OverlayTop || side == OverlayBottom {
+		bounds.X = anchor.X + (anchor.Width-size.Width)/2
+		switch placement.Align {
+		case OverlayAlignStart:
+			bounds.X = anchor.X
+		case OverlayAlignEnd:
+			bounds.X = anchor.X + anchor.Width - size.Width
+		}
+		bounds.X += placement.AlignOffset
+		if side == OverlayTop {
+			bounds.Y = anchor.Y - size.Height - placement.SideOffset
+		} else {
+			bounds.Y = anchor.Y + anchor.Height + placement.SideOffset
+		}
+		return bounds
+	}
+	bounds.Y = anchor.Y + (anchor.Height-size.Height)/2
+	switch placement.Align {
+	case OverlayAlignStart:
+		bounds.Y = anchor.Y
+	case OverlayAlignEnd:
+		bounds.Y = anchor.Y + anchor.Height - size.Height
+	}
+	bounds.Y += placement.AlignOffset
+	if side == OverlayLeft {
+		bounds.X = anchor.X - size.Width - placement.SideOffset
+	} else {
+		bounds.X = anchor.X + anchor.Width + placement.SideOffset
+	}
+	return bounds
+}
+
+// overlayOverflow is how far the overlay sticks out of the box on the axis it
+// opened along; zero when it fits.
+func overlayOverflow(bounds ui.Rect, side OverlaySide, left, top, right, bottom float32) float32 {
+	switch side {
+	case OverlayTop:
+		return max(top-bounds.Y, 0)
+	case OverlayLeft:
+		return max(left-bounds.X, 0)
+	case OverlayRight:
+		return max(bounds.X+bounds.Width-right, 0)
+	}
+	return max(bounds.Y+bounds.Height-bottom, 0)
+}
+
+// popupSlide is a popup's `slide-in-from-*-2`, tooltipDuration the 150ms of the
+// `animate-in` a tooltip has no duration class to override.
+const (
+	popupSlide      = float32(8)
+	tooltipDuration = 150 * time.Millisecond
+)
+
+// popupPresence is a popup's `fade-in-0 slide-in-from-*-2`: it comes
+// in from 8px back on the side of its anchor and leaves without sliding.
+func popupPresence(theme ui.Theme, duration time.Duration, side OverlaySide) ui.Presence {
+	if !moving(theme) {
+		return ui.Presence{}
+	}
+	presence := ui.Presence{Motion: ui.Motion{Duration: duration, Easing: ui.EaseCSS}, Fade: true}
+	switch side {
+	case OverlayTop:
+		presence.SlideIn.Y = popupSlide
+	case OverlayRight:
+		presence.SlideIn.X = -popupSlide
+	case OverlayLeft:
+		presence.SlideIn.X = popupSlide
+	default:
+		presence.SlideIn.Y = -popupSlide
+	}
+	return presence
+}
+
+// popupPivot is where a popup grows from (Base UI's --transform-origin): the
+// middle of the edge facing its anchor, or the point of that edge level with the
+// anchor's middle when the anchor is known and the popup is wider than it.
+func popupPivot(content ui.Rect, side OverlaySide, anchor ui.Rect) ui.Point {
+	centerX, centerY := content.X+content.Width/2, content.Y+content.Height/2
+	if anchor.Width > 0 || anchor.Height > 0 {
+		centerX = min(max(anchor.X+anchor.Width/2, content.X), content.X+content.Width)
+		centerY = min(max(anchor.Y+anchor.Height/2, content.Y), content.Y+content.Height)
+	}
+	switch side {
+	case OverlayTop:
+		return ui.Point{X: centerX, Y: content.Y + content.Height}
+	case OverlayRight:
+		return ui.Point{X: content.X, Y: centerY}
+	case OverlayLeft:
+		return ui.Point{X: content.X + content.Width, Y: centerY}
+	}
+	return ui.Point{X: centerX, Y: content.Y}
+}
+
+// popupSideOf is the edge of anchor a popup that the application placed sits on:
+// under it, or over it when it is higher.
+func popupSideOf(content, anchor ui.Rect) OverlaySide {
+	if content.Y+content.Height <= anchor.Y+anchor.Height/2 {
+		return OverlayTop
+	}
+	return OverlayBottom
+}

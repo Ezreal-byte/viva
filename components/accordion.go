@@ -1,0 +1,136 @@
+package components
+
+import "github.com/vivaui/viva/ui"
+
+// Accordion paints a vertical collection of disclosure rows. Expansion state
+// belongs to the application; Item returns the content rectangle so arbitrary
+// source-owned content can be painted without a component registry.
+type Accordion struct {
+	canvas     *ui.Canvas
+	theme      ui.Theme
+	bounds     ui.Rect
+	cursorY    float32
+	disabled   bool
+	headerSize float32
+	items      int
+}
+
+// BeginAccordion starts an accordion declaration. Keep item IDs and call order
+// stable between paints so retained commands and focus targets stay stable.
+func BeginAccordion(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect) Accordion {
+	return Accordion{
+		canvas: canvas, theme: theme, bounds: bounds,
+		cursorY: bounds.Y, headerSize: AccordionHeaderExtent(theme),
+	}
+}
+
+// AccordionHeaderExtent is the height of one item's header row, for a caller
+// that reserves room for an accordion in a layout before painting it.
+func AccordionHeaderExtent(theme ui.Theme) float32 {
+	return max(theme.Metrics.FontSizeM+7, float32(20)) + 32
+}
+
+// Disabled renders every item as inert.
+func (accordion Accordion) Disabled() Accordion {
+	accordion.disabled = true
+	return accordion
+}
+
+// Item paints one disclosure row. contentHeight is reserved only while open;
+// the returned rectangle is where the caller paints the item's arbitrary
+// content. A closed item returns a zero-height rectangle at the same origin.
+func (accordion *Accordion) Item(id ui.ID, title string, open bool, contentHeight float32) ui.Rect {
+	if accordion.canvas == nil || accordion.bounds.Width <= 0 {
+		return ui.Rect{}
+	}
+	if contentHeight < 0 {
+		contentHeight = 0
+	}
+	if accordion.items > 0 {
+		accordion.canvas.Fill(ui.Rect{
+			X: accordion.bounds.X, Y: accordion.cursorY,
+			Width: accordion.bounds.Width, Height: 1,
+		}, accordion.theme.Border)
+		accordion.cursorY++
+	}
+
+	header := ui.Rect{
+		X: accordion.bounds.X, Y: accordion.cursorY,
+		Width: accordion.bounds.Width, Height: accordion.headerSize,
+	}
+	enabled := !accordion.disabled && !id.IsZero()
+	hovered := enabled && accordion.canvas.Hovered() == id
+	focused := enabled && accordion.canvas.FocusVisible() == id
+	radius := accordion.theme.Metrics.RadiusControl
+	accordion.canvas.ContainerWithOptions(header, ui.RoleHeading, title, ui.HitOptions{Level: 3})
+
+	if focused {
+		focus := accordion.theme.Ring
+		focus.Alpha *= 0.50
+		accordion.canvas.Rounded(expand(header, 3), radius+3, focus)
+	}
+
+	iconSize := float32(16)
+	iconX := header.X + header.Width - iconSize
+	iconY := header.Y + (header.Height-iconSize)/2
+	iconColor := accordion.theme.MutedForeground
+	if accordion.disabled {
+		iconColor.Alpha *= 0.50
+	}
+	paintAccordionChevron(accordion.canvas, ui.Rect{X: iconX, Y: iconY, Width: iconSize, Height: iconSize}, open, iconColor)
+
+	foreground := accordion.theme.Foreground
+	if accordion.disabled {
+		foreground.Alpha *= 0.50
+	}
+	titleBounds := ui.Rect{
+		X: header.X, Y: header.Y,
+		Width:  max(header.Width-iconSize-16, float32(0)),
+		Height: header.Height,
+	}
+	accordion.canvas.Label(title, titleBounds, ui.TextStyle{Size: accordion.theme.Metrics.FontSizeM, Weight: ui.WeightMedium, Color: foreground})
+	underline := foreground
+	if !hovered {
+		underline.Alpha = 0
+	}
+	underlineWidth := min(accordion.canvas.TextWidthWeight(title, accordion.theme.Metrics.FontSizeM, ui.WeightMedium), titleBounds.Width)
+	accordion.canvas.Fill(ui.Rect{X: titleBounds.X, Y: titleBounds.Y + titleBounds.Height/2 + 8, Width: underlineWidth, Height: 1}, underline)
+	if !id.IsZero() {
+		accordion.canvas.HitWithOptions(id, header, title, ui.HitOptions{
+			Role: ui.RoleButton, Disabled: accordion.disabled, FocusableWhenDisabled: true, Expanded: open, Expandable: true,
+		})
+	}
+
+	content := ui.Rect{
+		X:     accordion.bounds.X,
+		Y:     header.Y + header.Height,
+		Width: accordion.bounds.Width,
+	}
+	if open {
+		content.Height = contentHeight
+	}
+	separatorY := content.Y + content.Height
+	if open {
+		separatorY += 16
+	}
+	accordion.cursorY = separatorY
+	accordion.items++
+	return content
+}
+
+func paintAccordionChevron(canvas *ui.Canvas, bounds ui.Rect, open bool, color ui.Color) {
+	icon := &chevronDownIcon
+	if open {
+		icon = &chevronUpIcon
+	}
+	paintChevron(canvas, icon, bounds, color)
+}
+
+// RemainingBounds returns the unused portion of the original declaration.
+func (accordion Accordion) RemainingBounds() ui.Rect {
+	height := accordion.bounds.Y + accordion.bounds.Height - accordion.cursorY
+	if height < 0 {
+		height = 0
+	}
+	return ui.Rect{X: accordion.bounds.X, Y: accordion.cursorY, Width: accordion.bounds.Width, Height: height}
+}

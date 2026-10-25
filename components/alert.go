@@ -1,0 +1,100 @@
+package components
+
+import "github.com/vivaui/viva/ui"
+
+// AlertVariant selects the semantic treatment used by an alert surface.
+type AlertVariant uint8
+
+const (
+	AlertDefault AlertVariant = iota
+	AlertDestructive
+)
+
+// AlertData is the content of an alert. Icon is optional (a zero Icon leaves
+// the slot out, like an Alert without an svg child); when set, the text moves
+// right by the icon column.
+type AlertData struct {
+	Variant     AlertVariant
+	Icon        ui.Icon
+	Title       string
+	Description string
+}
+
+// alertMaxLines bounds how many description lines are wrapped and painted.
+const alertMaxLines = 16
+
+// alertLineHeight is text-sm's leading-5 for the theme's body size.
+func alertLineHeight(metrics ui.Metrics) float32 { return metrics.FontSizeM + 7 }
+
+const (
+	alertIconSize = 16
+	alertIconGap  = 10 // gap-x-2.5
+	alertRowGap   = 2  // gap-0.5
+)
+
+// alertTextBounds returns the text column of an alert of the given width: the
+// left edge offset from bounds.X and the column width.
+func alertTextBounds(metrics ui.Metrics, width float32, data AlertData) (offset, textWidth float32) {
+	offset = metrics.PadSurface
+	if data.Icon.ViewBox > 0 {
+		offset += alertIconSize + alertIconGap
+	}
+	return offset, max(width-offset-metrics.PadSurface, 0)
+}
+
+// AlertHeight returns the height of an alert of the given width: py-3 around a
+// title row and, when there is a description, its wrapped lines after a 2px gap.
+func AlertHeight(canvas *ui.Canvas, theme ui.Theme, width float32, data AlertData) float32 {
+	metrics := theme.Metrics
+	line := alertLineHeight(metrics)
+	height := metrics.PadControlX*2 + line
+	if data.Description != "" {
+		_, textWidth := alertTextBounds(metrics, width, data)
+		var scratch [alertMaxLines]string
+		lines := canvas.WrapLines(scratch[:0], data.Description, metrics.FontSizeM, ui.WeightRegular, textWidth, alertMaxLines)
+		height += alertRowGap + float32(len(lines))*line
+	}
+	return height
+}
+
+// Alert paints a Vega alert: a bordered card surface with an optional leading
+// icon, a medium-weight title and a wrapped muted description. A non-positive
+// bounds.Height takes AlertHeight. The AlertAction slot remains caller-owned.
+func Alert(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, data AlertData) {
+	metrics := theme.Metrics
+	line := alertLineHeight(metrics)
+	if bounds.Height <= 0 {
+		bounds.Height = AlertHeight(canvas, theme, bounds.Width, data)
+	}
+
+	titleColor := theme.CardForeground
+	descriptionColor := theme.MutedForeground
+	if data.Variant == AlertDestructive {
+		titleColor = theme.Danger
+		descriptionColor = theme.Danger
+		descriptionColor.Alpha *= 0.90
+	}
+
+	canvas.RoundedBorder(bounds, metrics.RadiusSurface, 1, theme.Border, theme.Card)
+
+	offset, textWidth := alertTextBounds(metrics, bounds.Width, data)
+	textX := bounds.X + offset
+	textY := bounds.Y + metrics.PadControlX
+	if data.Icon.ViewBox > 0 {
+		// The icon spans both rows and sits 2px low (translate-y-0.5).
+		canvas.DrawIcon(data.Icon, ui.Rect{X: bounds.X + metrics.PadSurface, Y: textY + 2, Width: alertIconSize, Height: alertIconSize}, titleColor)
+	}
+	canvas.Label(data.Title, ui.Rect{X: textX, Y: textY, Width: textWidth, Height: line},
+		ui.TextStyle{Size: metrics.FontSizeM, Weight: ui.WeightMedium, Color: titleColor})
+	if data.Description == "" {
+		return
+	}
+	textY += line + alertRowGap
+	remaining := int((bounds.Y + bounds.Height - metrics.PadControlX - textY) / line)
+	var scratch [alertMaxLines]string
+	lines := canvas.WrapLines(scratch[:0], data.Description, metrics.FontSizeM, ui.WeightRegular, textWidth, min(max(remaining, 1), alertMaxLines))
+	for index, text := range lines {
+		canvas.Label(text, ui.Rect{X: textX, Y: textY + float32(index)*line, Width: textWidth, Height: line},
+			ui.TextStyle{Size: metrics.FontSizeM, Weight: ui.WeightRegular, Color: descriptionColor})
+	}
+}

@@ -1,0 +1,97 @@
+package components
+
+import "github.com/vivaui/viva/ui"
+
+// EmptyMediaVariant selects the source recipe's media treatment.
+type EmptyMediaVariant uint8
+
+const (
+	// EmptyMediaDefault draws the icon bare.
+	EmptyMediaDefault EmptyMediaVariant = iota
+	// EmptyMediaIcon draws the icon in a muted rounded box (the "icon" variant).
+	EmptyMediaIcon
+)
+
+// EmptyData is the content of an empty state. Icon is optional (a zero Icon
+// leaves the media out). ContentHeight reserves room for EmptyContent below the
+// description, typically a button row; Empty returns its rectangle.
+type EmptyData struct {
+	Media         EmptyMediaVariant
+	Icon          ui.Icon
+	Title         string
+	Description   string
+	ContentHeight float32
+}
+
+const (
+	emptyMaxLines   = 6
+	emptyMaxWidth   = 384 // max-w-sm
+	emptyIconInBox  = 24  // the icon variant's size-6 svg
+	emptyBareIcon   = 32
+	emptyContentGap = 16 // gap-4
+)
+
+// Empty paints a centered empty state: media, a medium title and a wrapped
+// muted description, all within max-w-sm and p-12. The group is centered
+// vertically in bounds. It returns the EmptyContent rectangle (max-w-sm wide,
+// ContentHeight high, below the description) for the caller to place actions in;
+// the rectangle is empty when ContentHeight is zero. The dashed border of the
+// recipe is not drawn.
+func Empty(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, data EmptyData) ui.Rect {
+	metrics := theme.Metrics
+	boxSize := metrics.ControlHeight + metrics.GapItem // size-10
+	titleSize := metrics.FontSizeM + 5                 // text-lg
+	titleHeight := titleSize + 10
+	descriptionSize := metrics.FontSizeM
+	lineHeight := descriptionSize * 1.625 // text-sm/relaxed
+	contentInset := metrics.PadSurface * 3
+	width := min(max(bounds.Width-contentInset*2, 0), emptyMaxWidth)
+	x := bounds.X + (bounds.Width-width)/2
+
+	var scratch [emptyMaxLines]string
+	var lines []string
+	if data.Description != "" {
+		lines = canvas.WrapLines(scratch[:0], data.Description, descriptionSize, ui.WeightRegular, width, emptyMaxLines)
+	}
+	hasMedia := data.Icon.ViewBox > 0
+	height := titleHeight
+	if hasMedia {
+		// gap-2 in the header plus the media's mb-2.
+		height += boxSize + metrics.GapItem*2
+	}
+	if len(lines) > 0 {
+		height += metrics.GapItem + lineHeight*float32(len(lines))
+	}
+	if data.ContentHeight > 0 {
+		height += emptyContentGap + data.ContentHeight
+	}
+	y := max(bounds.Y+(bounds.Height-height)/2, bounds.Y)
+
+	if hasMedia {
+		media := ui.Rect{X: bounds.X + (bounds.Width-boxSize)/2, Y: y, Width: boxSize, Height: boxSize}
+		iconSize := float32(emptyBareIcon)
+		if data.Media == EmptyMediaIcon {
+			canvas.Rounded(media, metrics.RadiusSurface, theme.Muted)
+			iconSize = emptyIconInBox
+		}
+		canvas.DrawIcon(data.Icon, ui.Rect{
+			X: media.X + (boxSize-iconSize)/2, Y: media.Y + (boxSize-iconSize)/2, Width: iconSize, Height: iconSize,
+		}, theme.Foreground)
+		y += boxSize + metrics.GapItem*2
+	}
+	canvas.LabelCenter(data.Title, ui.Rect{X: x, Y: y, Width: width, Height: titleHeight},
+		ui.TextStyle{Size: titleSize, Weight: ui.WeightMedium, Color: theme.Foreground})
+	y += titleHeight
+	if len(lines) > 0 {
+		y += metrics.GapItem
+		for _, line := range lines {
+			canvas.LabelCenter(line, ui.Rect{X: x, Y: y, Width: width, Height: lineHeight},
+				ui.TextStyle{Size: descriptionSize, Weight: ui.WeightRegular, Color: theme.MutedForeground})
+			y += lineHeight
+		}
+	}
+	if data.ContentHeight <= 0 {
+		return ui.Rect{}
+	}
+	return ui.Rect{X: x, Y: y + emptyContentGap, Width: width, Height: data.ContentHeight}
+}

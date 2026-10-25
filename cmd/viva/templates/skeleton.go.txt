@@ -1,0 +1,74 @@
+package {{PACKAGE}}
+
+import "github.com/vivaui/viva/ui"
+
+// Skeleton is one static loading placeholder. It intentionally has no timer or
+// shimmer worker: applications that want animation must explicitly schedule it.
+type Skeleton struct {
+	canvas *ui.Canvas
+	theme  ui.Theme
+	bounds ui.Rect
+	radius float32
+	phase  float32
+	pulsed bool
+}
+
+// Phase explicitly supplies a repeating 0..1 animation phase. The component
+// never schedules frames itself; callers opt into animation and repaint only
+// while a loading transition is active.
+func (skeleton Skeleton) Phase(phase float32) Skeleton {
+	for phase < 0 {
+		phase++
+	}
+	for phase > 1 {
+		phase--
+	}
+	skeleton.phase = phase
+	skeleton.pulsed = true
+	return skeleton
+}
+
+// BeginSkeleton starts a neutral placeholder declaration.
+func BeginSkeleton(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect) Skeleton {
+	return Skeleton{canvas: canvas, theme: theme, bounds: bounds, radius: theme.Metrics.RadiusControl}
+}
+
+// Radius overrides the corner radius.
+func (skeleton Skeleton) Radius(radius float32) Skeleton {
+	if radius < 0 {
+		radius = 0
+	}
+	skeleton.radius = radius
+	return skeleton
+}
+
+// Circle makes the placeholder circular within the shorter bound.
+func (skeleton Skeleton) Circle() Skeleton {
+	size := skeleton.bounds.Width
+	if skeleton.bounds.Height < size {
+		size = skeleton.bounds.Height
+	}
+	if size < 0 {
+		size = 0
+	}
+	skeleton.bounds.Width = size
+	skeleton.bounds.Height = size
+	skeleton.radius = size / 2
+	return skeleton
+}
+
+// Paint emits one quiet neutral surface and no interaction region.
+func (skeleton Skeleton) Paint() {
+	if skeleton.canvas == nil || skeleton.bounds.Width <= 0 || skeleton.bounds.Height <= 0 {
+		return
+	}
+	color := skeleton.theme.Muted
+	if skeleton.pulsed {
+		triangle := skeleton.phase * 2
+		if triangle > 1 {
+			triangle = 2 - triangle
+		}
+		color.Alpha *= 1 - triangle*0.50
+	}
+	skeleton.canvas.Rounded(skeleton.bounds, skeleton.radius, color)
+}

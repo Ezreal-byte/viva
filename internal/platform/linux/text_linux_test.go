@@ -1,0 +1,206 @@
+package linux
+
+import (
+	"math"
+	"testing"
+
+	"github.com/vivaui/viva/internal/platform"
+	"github.com/vivaui/viva/ui"
+)
+
+func TestMeasureTextSupportsSystemFallback(t *testing.T) {
+	measure, close, err := NewTextMeasurer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer close()
+	for _, value := range []string{"Viva", "原生界面", "Viva 原生界面 👩‍💻"} {
+		metrics, err := measure(value, 16, 0)
+		if err != nil {
+			t.Fatalf("measure(%q): %v", value, err)
+		}
+		if metrics.Width <= 0 || metrics.Height <= 0 || metrics.Ascent <= 0 || metrics.Descent < 0 {
+			t.Fatalf("metrics for %q = %+v", value, metrics)
+		}
+	}
+}
+
+func TestMeasureTextRejectsInvalidFontSize(t *testing.T) {
+	for _, size := range []float32{0, -1, float32(math.NaN()), float32(math.Inf(1))} {
+		if _, err := MeasureText("Viva", size, 0); err == nil {
+			t.Fatalf("invalid font size %v accepted", size)
+		}
+	}
+}
+
+func TestMeasureMonoReportsStableCell(t *testing.T) {
+	width, height, err := MeasureMono(16, ui.MonoSystem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if width <= 0 || height <= 0 || width >= height {
+		t.Fatalf("monospace cell = %vx%v", width, height)
+	}
+}
+
+func TestRasterizeTextSystemFallbackAndRuns(t *testing.T) {
+	services, err := newTextServices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer services.close()
+	labels := []platform.TextLabel{
+		{Value: "Viva 原生界面", Width: 240, Height: 32, FontSize: 16, Color: platform.Color{Red: 0.8, Green: 0.6, Blue: 0.4, Alpha: 0.75}},
+		{Value: "A中", Width: 40, Height: 24, FontSize: 16, Mono: true, CellWidth: 10, Runs: []ui.TextRun{
+			{Bytes: 1, Cells: 1, Color: ui.Color{Red: 1, Alpha: 1}, Underline: true},
+			{Column: 1, Bytes: 3, Cells: 2, Color: ui.Color{Green: 1, Alpha: 0.8}, Weight: 0.35, Italic: true, Strike: true},
+		}},
+	}
+	for _, label := range labels {
+		pixels, _, err := services.rasterize(label, 1, int(label.Width), int(label.Height), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		visible := false
+		for index := 0; index < len(pixels); index += 4 {
+			alpha := pixels[index+3]
+			visible = visible || alpha != 0
+			if pixels[index] > alpha || pixels[index+1] > alpha || pixels[index+2] > alpha {
+				t.Fatal("Cairo returned non-premultiplied text pixels")
+			}
+		}
+		if !visible {
+			t.Fatalf("rasterization of %q produced an empty bitmap", label.Value)
+		}
+	}
+}
+
+func TestRasterizeTextCentersInTallerBounds(t *testing.T) {
+	services, err := newTextServices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer services.close()
+	label := platform.TextLabel{Value: "Viva", Width: 80, Height: 28, FontSize: 16, Color: platform.Color{Red: 1, Green: 1, Blue: 1, Alpha: 1}}
+	top := rasterAlphaBounds(t, services, label)
+	label.Height += 20
+	taller := rasterAlphaBounds(t, services, label)
+	if shift := taller.minY - top.minY; shift != 10 {
+		t.Fatalf("a label 20 pixels taller shifted text by %d pixels, want 10", shift)
+	}
+}
+
+func TestRasterizeFixedPitchASCIIStartsAtItsColumn(t *testing.T) {
+	services, err := newTextServices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer services.close()
+	label := platform.TextLabel{
+		Value: "A", Width: 32, Height: 32, FontSize: 20, Mono: true, CellWidth: 32,
+		Runs: []ui.TextRun{{Bytes: 1, Cells: 1, Color: ui.Color{Red: 1, Green: 1, Blue: 1, Alpha: 1}}},
+	}
+	bounds := rasterAlphaBounds(t, services, label)
+	if bounds.minX > 3 {
+		t.Fatalf("fixed-pitch ASCII starts at x=%d, want its column origin", bounds.minX)
+	}
+}
+
+type alphaBounds struct{ minX, minY, maxX, maxY int }
+
+func rasterAlphaBounds(t *testing.T, services *textServices, label platform.TextLabel) alphaBounds {
+	t.Helper()
+	return rasterAlphaBoundsAt(t, services, label, 1)
+}
+
+func rasterAlphaBoundsAt(t *testing.T, services *textServices, label platform.TextLabel, scale float32) alphaBounds {
+	t.Helper()
+	width, height := int(math.Ceil(float64(label.Width*scale))), int(math.Ceil(float64(label.Height*scale)))
+	pixels, _, err := services.rasterize(label, scale, width, height, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounds := alphaBounds{minX: width, minY: height, maxX: -1, maxY: -1}
+	for y := range height {
+		for x := range width {
+			if pixels[(y*width+x)*4+3] == 0 {
+				continue
+			}
+			bounds.minX = min(bounds.minX, x)
+			bounds.minY = min(bounds.minY, y)
+			bounds.maxX = max(bounds.maxX, x)
+			bounds.maxY = max(bounds.maxY, y)
+		}
+	}
+	if bounds.maxX < 0 {
+		t.Fatal("text rasterization produced no alpha")
+	}
+	return bounds
+}
+
+func TestTextRunsMustCoverUTF8Label(t *testing.T) {
+	services, err := newTextServices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer services.close()
+	label := platform.TextLabel{Value: "中", Width: 20, Height: 20, FontSize: 14, CellWidth: 10, Runs: []ui.TextRun{{Bytes: 1, Cells: 1}}}
+	if _, _, err := services.rasterize(label, 1, 20, 20, false); err == nil {
+		t.Fatal("a run splitting UTF-8 was accepted")
+	}
+}
+
+func BenchmarkMeasureTextMixed(benchmark *testing.B) {
+	measure, close, err := NewTextMeasurer()
+	if err != nil {
+		benchmark.Fatal(err)
+	}
+	defer close()
+	benchmark.ReportAllocs()
+	benchmark.ResetTimer()
+	for range benchmark.N {
+		if _, err := measure("Viva 原生界面 👩‍💻", 16, 0); err != nil {
+			benchmark.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkRasterizeTextMixed(benchmark *testing.B) {
+	services, err := newTextServices()
+	if err != nil {
+		benchmark.Fatal(err)
+	}
+	defer services.close()
+	label := platform.TextLabel{
+		Value: "Viva 原生界面 👩‍💻", Width: 240, Height: 32, FontSize: 16,
+		Color: platform.Color{Red: 1, Green: 1, Blue: 1, Alpha: 1},
+	}
+	benchmark.ReportAllocs()
+	benchmark.ResetTimer()
+	for range benchmark.N {
+		if _, _, err := services.rasterize(label, 1, 240, 32, false); err != nil {
+			benchmark.Fatal(err)
+		}
+	}
+}
+
+// A heavier weight is a wider line, and a label fitted at the regular weight
+// would clip at the heavier one.
+func TestMeasureTextIsWiderAtAHeavierWeight(t *testing.T) {
+	measure, close, err := NewTextMeasurer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer close()
+	regular, err := measure("Import SSH Config", 14, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bold, err := measure("Import SSH Config", 14, 0.40)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bold.Width <= regular.Width {
+		t.Fatalf("bold %.2f is not wider than regular %.2f", bold.Width, regular.Width)
+	}
+}

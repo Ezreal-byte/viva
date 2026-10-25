@@ -1,0 +1,43 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import { siteText } from '../lib/site';
+import type { Locale } from '../lib/i18n';
+import type { Heading, NavGroup, Section } from '../lib/routes';
+
+// Guides and API pages: a navigation list, the prose, and its headings.
+interface Props {
+  title: string;
+  summary: string;
+  locale: Locale;
+  section: Section;
+  alternates: Record<Locale, string>;
+  navigation: NavGroup[];
+  headings?: Heading[];
+}
+
+const { title, summary, locale, section, alternates, navigation, headings = [] } = Astro.props;
+const text = siteText(locale);
+const outline = headings.filter(heading => heading.depth === 2 || heading.depth === 3);
+---
+
+<BaseLayout {locale} {title} {summary} {section} {alternates}>
+  <div class="docs-grid docs-grid-guide">
+    <aside class="sidebar">
+      <div class="sidebar-shell"><nav class="sidebar-panel guide-navigation" aria-label={navigation[0]?.heading}>
+        {navigation.map(group => <div class="component-group">
+          <h2 class="component-group-title">{group.heading}</h2>
+          <ul class="component-list">{group.links.map(link => <li><a class="nav-link" href={link.href} aria-current={link.current ? 'page' : undefined}><span>{link.label}</span>{link.current && <span class="nav-active-mark" aria-hidden="true"></span>}</a></li>)}</ul>
+        </div>)}
+      </nav></div>
+    </aside>
+    <main class="main-content" id="main-content" tabindex="-1"><slot /></main>
+    <aside class="on-this-page">{outline.length > 0 && <nav aria-label={text.onThisPage}><p class="toc-heading">{text.onThisPage}</p>{outline.map(heading => <a class:list={{ 'toc-example': heading.depth === 3 }} href={`#${heading.slug}`}>{heading.text}</a>)}</nav>}</aside>
+  </div>
+</BaseLayout>
+
+<script is:inline>
+  // Bring the current page into view in a long list without moving the page itself.
+  const panel = document.querySelector('.guide-navigation');
+  const current = panel && panel.querySelector('[aria-current]');
+  if (panel && current) panel.scrollTop = Math.max(0, current.offsetTop - panel.clientHeight / 2);
+</script>

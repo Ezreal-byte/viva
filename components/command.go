@@ -1,0 +1,259 @@
+package components
+
+import "github.com/vivaui/viva/ui"
+
+// CommandVariant selects the compact embedded command surface or the roomier
+// command-palette geometry used by the official dialog composition.
+type CommandVariant uint8
+
+const (
+	CommandDefault CommandVariant = iota
+	CommandDialog
+)
+
+// CommandOptions describes caller-owned command input and overlay state.
+type CommandOptions struct {
+	InputID     ui.ID
+	Label       string
+	Query       string
+	Placeholder string
+	Hint        string
+	Disabled    bool
+	Invalid     bool
+	Variant     CommandVariant
+	Layer       uint16
+	Scope       ui.ID
+	DismissID   ui.ID
+	// Scroll is the scroll position of a result list taller than the room under
+	// the input (see MenuScroll); the surface's height is where the list is cut,
+	// as Vega's `max-h-72` cuts it. Without one only the results at the top show.
+	// Set its Offset to zero when the query changes.
+	Scroll *MenuScroll
+}
+
+// CommandItem describes one caller-filtered command result.
+type CommandItem struct {
+	ID       ui.ID
+	Label    string
+	Value    string
+	Hint     string
+	Shortcut string
+	Selected bool
+	Checked  bool
+	Disabled bool
+	// Icon, when it has any geometry, is painted before the label. A single-color
+	// icon takes the item's text color; a multi-color one keeps its own.
+	Icon ui.Icon
+}
+
+// Command paints one command snapshot. Filtering, selection, and keyboard
+// movement remain explicit application state.
+type Command struct {
+	canvas  *ui.Canvas
+	theme   ui.Theme
+	bounds  ui.Rect
+	options CommandOptions
+	// list lays the results out under the input row, scrolled by options.Scroll.
+	list    menuSurface
+	row     float32
+	visible bool
+}
+
+// BeginCommand paints the command surface and input row.
+func BeginCommand(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, options CommandOptions) Command {
+	command := Command{canvas: canvas, theme: theme, bounds: bounds, options: options}
+	if canvas == nil || bounds.Width <= 0 || bounds.Height <= 0 {
+		return command
+	}
+	inputHeight := float32(36)
+	command.row = 32
+	if options.Variant == CommandDialog {
+		inputHeight = 48
+		command.row = 44
+	}
+	command.visible = true
+	command.list = menuSurface{
+		canvas: canvas, theme: theme, bounds: bounds,
+		options: menuSurfaceOptions{layer: options.Layer, scope: options.Scope, scroll: options.Scroll},
+		top:     bounds.Y + inputHeight, bottom: bounds.Y + bounds.Height - 4,
+	}
+	command.list.beginScroll()
+	command.list.pushOverlay()
+	// Claim after pushing the palette's scope, so it stays the keyboard's
+	// owner when painted inside a dialog.
+	if !options.Scope.IsZero() {
+		canvas.TrapFocus(options.Scope)
+	}
+	if !options.DismissID.IsZero() {
+		canvas.SetEscapeTarget(options.DismissID)
+	}
+	// The surface itself is inside the command list: a press on its padding or a
+	// disabled row must not reach whatever is behind it.
+	canvas.Block(bounds)
+	canvas.Container(bounds, ui.RoleListBox, options.Label)
+	canvas.RoundedBorder(bounds, theme.Metrics.RadiusPopup(), 1, theme.Border, theme.Popover)
+	input := ui.Rect{X: bounds.X, Y: bounds.Y, Width: bounds.Width, Height: inputHeight}
+	canvas.Fill(ui.Rect{X: bounds.X, Y: bounds.Y + inputHeight - 1, Width: bounds.Width, Height: 1}, theme.Border)
+	iconColor := theme.MutedForeground
+	textColor := theme.PopoverForeground
+	if options.Disabled {
+		iconColor.Alpha *= 0.50
+		textColor.Alpha *= 0.50
+	}
+	iconColor.Alpha *= 0.50 // Vega: `size-4 opacity-50`
+	canvas.DrawIcon(searchIcon, ui.Rect{X: input.X + 12, Y: input.Y + (input.Height-16)/2, Width: 16, Height: 16}, iconColor)
+	value := options.Query
+	if value == "" {
+		value = options.Placeholder
+		textColor = theme.MutedForeground
+		if options.Disabled {
+			textColor.Alpha *= 0.50
+		}
+	}
+	canvas.Label(value, ui.Rect{X: input.X + 36, Y: input.Y, Width: max(0, input.Width-50), Height: input.Height}, ui.TextStyle{
+		Size: theme.Metrics.FontSizeM, Weight: ui.WeightRegular, Color: textColor,
+	})
+	if !options.InputID.IsZero() {
+		canvas.HitWithOptions(options.InputID, input, options.Label, ui.HitOptions{
+			Role: ui.RoleCombobox, Value: options.Query, Hint: options.Hint,
+			Disabled: options.Disabled, Expanded: true,
+		})
+	}
+	command.list.popOverlay()
+	return command
+}
+
+// Bounds returns the command surface geometry.
+func (command Command) Bounds() ui.Rect { return command.bounds }
+
+// NextItemBounds returns the next result row without mutating paint state.
+func (command Command) NextItemBounds() ui.Rect { return command.list.rowBounds(command.row) }
+
+// AddGroup paints an official compact group heading.
+func (command *Command) AddGroup(label string) ui.Rect {
+	bounds, ok := command.next(28)
+	if !ok {
+		return ui.Rect{}
+	}
+	command.list.paintRow(bounds, func() {
+		command.canvas.Label(label, ui.Rect{X: bounds.X + 8, Y: bounds.Y, Width: max(0, bounds.Width-16), Height: bounds.Height}, ui.TextStyle{
+			Size: command.theme.Metrics.FontSizeS, Weight: ui.WeightMedium, Color: command.theme.MutedForeground,
+		})
+	})
+	return bounds
+}
+
+// AddItem paints one command result with selected, checked, and disabled state.
+// The rectangle is empty when the row is scrolled out of the list.
+func (command *Command) AddItem(item CommandItem) ui.Rect {
+	bounds, ok := command.nextItem(item.ID, item.Label, item.Disabled)
+	if !ok {
+		return ui.Rect{}
+	}
+	command.list.paintRow(bounds, func() { command.paintItem(bounds, item) })
+	return bounds
+}
+
+func (command *Command) paintItem(bounds ui.Rect, item CommandItem) {
+	active := item.Selected || (!item.Disabled && !item.ID.IsZero() && (command.canvas.Hovered() == item.ID || command.canvas.Pressed() == item.ID || command.canvas.FocusVisible() == item.ID))
+	if active {
+		command.canvas.Rounded(bounds, command.theme.Metrics.RadiusItem(), command.theme.Muted)
+	}
+	foreground := command.theme.PopoverForeground
+	shortcut := command.theme.MutedForeground
+	if item.Disabled {
+		foreground.Alpha *= 0.50
+		shortcut.Alpha *= 0.50
+	}
+	left := float32(8)
+	right := float32(12)
+	if item.Checked {
+		paintCheck(command.canvas, ui.Rect{X: bounds.X + bounds.Width - 24, Y: bounds.Y, Width: 14, Height: bounds.Height}, 14, foreground)
+		right = 34
+	}
+	if item.Shortcut != "" {
+		width := command.canvas.TextWidth(item.Shortcut, command.theme.Metrics.FontSizeS)
+		command.canvas.Label(item.Shortcut, ui.Rect{X: bounds.X + bounds.Width - width - 10, Y: bounds.Y, Width: width, Height: bounds.Height}, ui.TextStyle{
+			Size: command.theme.Metrics.FontSizeS, Weight: ui.WeightRegular, Color: shortcut,
+		})
+		right = width + 22
+	}
+	if len(item.Icon.Commands) > 0 || len(item.Icon.Layers) > 0 {
+		side := min(menuIconSize, bounds.Height)
+		command.canvas.DrawIcon(item.Icon, ui.Rect{X: bounds.X + left, Y: bounds.Y + (bounds.Height-side)/2, Width: side, Height: side}, foreground)
+		left += menuIconSize + menuIconGap
+	}
+	command.canvas.Label(item.Label, ui.Rect{X: bounds.X + left, Y: bounds.Y, Width: max(0, bounds.Width-right-left), Height: bounds.Height}, ui.TextStyle{
+		Size: command.theme.Metrics.FontSizeM, Weight: ui.WeightRegular, Color: foreground,
+	})
+	if !item.ID.IsZero() {
+		hit := bounds
+		hit.Width -= command.list.hitInset
+		command.canvas.HitWithOptions(item.ID, hit, item.Label, ui.HitOptions{
+			Role: ui.RoleOption, Value: item.Value, Hint: item.Hint,
+			Disabled: item.Disabled, Checked: item.Checked, Selected: item.Selected,
+		})
+	}
+}
+
+// AddSeparator paints the one-pixel group divider.
+func (command *Command) AddSeparator() ui.Rect {
+	bounds, ok := command.next(9)
+	if !ok {
+		return ui.Rect{}
+	}
+	command.list.paintRow(bounds, func() {
+		command.canvas.Fill(ui.Rect{X: command.bounds.X, Y: bounds.Y + 4, Width: command.bounds.Width, Height: 1}, command.theme.Border)
+	})
+	return bounds
+}
+
+// AddEmpty paints the official centered empty-result state (`py-6 text-sm`).
+func (command *Command) AddEmpty(label string) ui.Rect {
+	bounds, ok := command.next(68)
+	if !ok {
+		return ui.Rect{}
+	}
+	command.list.paintRow(bounds, func() {
+		command.canvas.LabelCenter(label, bounds, ui.TextStyle{Size: command.theme.Metrics.FontSizeM, Weight: ui.WeightRegular, Color: command.theme.PopoverForeground})
+	})
+	return bounds
+}
+
+// End paints the scrollbar of a list whose results did not all fit, after the
+// last result. A list that fits needs no End.
+func (command *Command) End() {
+	if command.visible {
+		command.list.end()
+	}
+}
+
+// next reserves a row and reports whether any of it shows.
+func (command *Command) next(height float32) (ui.Rect, bool) {
+	if !command.visible || height <= 0 {
+		return ui.Rect{}, false
+	}
+	row := command.list.rowBounds(height)
+	return row, command.list.take(row)
+}
+
+// nextItem reserves a result row like next, and lists it with the scroll
+// position as one the keyboard can move to.
+func (command *Command) nextItem(id ui.ID, label string, disabled bool) (ui.Rect, bool) {
+	if !command.visible {
+		return ui.Rect{}, false
+	}
+	row := command.list.rowBounds(command.row)
+	return row, command.list.takeItem(row, id, label, disabled)
+}
+
+// searchIcon is Lucide's magnifier.
+var searchIcon = ui.Icon{ViewBox: 24, Stroke: 2, Cap: ui.CapRound, Join: ui.JoinRound, Commands: []ui.PathCommand{
+	ui.MoveTo(21, 21), ui.LineTo(16.66, 16.66),
+	ui.MoveTo(19, 11),
+	ui.CubicTo(19, 15.418, 15.418, 19, 11, 19),
+	ui.CubicTo(6.582, 19, 3, 15.418, 3, 11),
+	ui.CubicTo(3, 6.582, 6.582, 3, 11, 3),
+	ui.CubicTo(15.418, 3, 19, 6.582, 19, 11),
+	ui.ClosePath(),
+}}

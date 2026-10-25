@@ -1,0 +1,472 @@
+package components
+
+import "github.com/vivaui/viva/ui"
+
+const (
+	messageScrollerBarWidth float32 = 6
+	messageScrollerThumbMin float32 = 18
+	messageScrollerButton   float32 = 32
+	messageScrollerInset    float32 = 16
+)
+
+// MessageScrollerEdgeThreshold is how close to an end the viewport counts as being
+// at it, the official scrollEdgeThreshold. Inside it the jump button for that end
+// is not offered, so a reply that grows by a line while streaming does not make
+// the button flicker.
+const MessageScrollerEdgeThreshold float32 = 8
+
+// MessageScrollerGap is the space between transcript items, the official
+// MessageScrollerContent gap-8: 32px at the default density.
+func MessageScrollerGap(metrics ui.Metrics) float32 { return metrics.ControlHeight }
+
+// MessageScrollerDirection identifies one explicit jump control.
+type MessageScrollerDirection uint8
+
+const (
+	MessageScrollerStart MessageScrollerDirection = iota
+	MessageScrollerEnd
+)
+
+// MessageScrollerGeometry exposes the translated content, scrollbar thumb,
+// and both stable button bounds for an externally controlled message stream.
+type MessageScrollerGeometry struct {
+	Bounds      ui.Rect
+	Viewport    ui.Rect
+	Content     ui.Rect
+	Track       ui.Rect
+	Thumb       ui.Rect
+	StartButton ui.Rect
+	EndButton   ui.Rect
+	Offset      float32
+	MaxOffset   float32
+	CanStart    bool
+	CanEnd      bool
+}
+
+// MessageScrollerItemGeometry maps one caller-owned item from content space to
+// viewport space. Items are never retained or virtualized by the component.
+type MessageScrollerItemGeometry struct {
+	Index         int
+	ContentOffset float32
+	Extent        float32
+	Bounds        ui.Rect
+	Visible       bool
+}
+
+// MessageScroller is a vertical, source-owned scrolling recipe. The caller
+// owns the offset, item list, content extent, and any auto-follow policy.
+// Scoped wheel routing, pointer capture, inertia, observers, timers, and
+// virtualization are runtime responsibilities and are not faked here.
+type MessageScroller struct {
+	canvas              *ui.Canvas
+	theme               ui.Theme
+	bounds              ui.Rect
+	contentExtent       float32
+	offset              float32
+	scrollbarID         ui.ID
+	scrollbarLabel      string
+	scrollbarValue      string
+	startID             ui.ID
+	startLabel          string
+	endID               ui.ID
+	endLabel            string
+	disabled            bool
+	contentClipIsActive bool
+}
+
+// BeginMessageScroller declares a vertically clipped message viewport.
+func BeginMessageScroller(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, contentExtent, offset float32) MessageScroller {
+	return MessageScroller{canvas: canvas, theme: theme, bounds: bounds, contentExtent: contentExtent, offset: offset}
+}
+
+// Scrollbar configures the optional thin scrollbar as a typed slider.
+func (scroller MessageScroller) Scrollbar(id ui.ID, label, value string) MessageScroller {
+	scroller.scrollbarID = id
+	scroller.scrollbarLabel = label
+	scroller.scrollbarValue = value
+	return scroller
+}
+
+// Buttons configures start/end jump actions. Visibility is derived from the
+// clamped offset; inactive controls keep geometry but emit no paint or hit.
+func (scroller MessageScroller) Buttons(startID ui.ID, startLabel string, endID ui.ID, endLabel string) MessageScroller {
+	scroller.startID = startID
+	scroller.startLabel = startLabel
+	scroller.endID = endID
+	scroller.endLabel = endLabel
+	return scroller
+}
+
+// Disabled preserves deterministic geometry while suppressing all actions.
+func (scroller MessageScroller) Disabled() MessageScroller {
+	scroller.disabled = true
+	return scroller
+}
+
+// Geometry returns the complete clamped layout without changing Canvas state.
+func (scroller MessageScroller) Geometry() MessageScrollerGeometry {
+	viewport := messageScrollerNormalizeRect(scroller.bounds)
+	contentExtent := messageScrollerFiniteNonNegative(scroller.contentExtent)
+	if contentExtent < viewport.Height {
+		contentExtent = viewport.Height
+	}
+	maximum := messageScrollerMax(contentExtent-viewport.Height, 0)
+	offset := messageScrollerClamp(scroller.offset, 0, maximum)
+	geometry := MessageScrollerGeometry{
+		Bounds: viewport, Viewport: viewport,
+		Content: ui.Rect{X: viewport.X, Y: viewport.Y - offset, Width: viewport.Width, Height: contentExtent},
+		Offset:  offset, MaxOffset: maximum,
+		CanStart: !scroller.disabled && offset > MessageScrollerEdgeThreshold,
+		CanEnd:   !scroller.disabled && offset < maximum-MessageScrollerEdgeThreshold,
+	}
+	geometry.StartButton = ui.Rect{
+		X:     viewport.X + (viewport.Width-messageScrollerButton)/2,
+		Y:     viewport.Y + messageScrollerInset,
+		Width: messageScrollerButton, Height: messageScrollerButton,
+	}
+	geometry.EndButton = ui.Rect{
+		X:     geometry.StartButton.X,
+		Y:     viewport.Y + viewport.Height - messageScrollerInset - messageScrollerButton,
+		Width: messageScrollerButton, Height: messageScrollerButton,
+	}
+	if maximum > 0 && viewport.Width > 0 && viewport.Height > 0 {
+		geometry.Track = ui.Rect{
+			X: viewport.X + viewport.Width - messageScrollerBarWidth,
+			Y: viewport.Y, Width: messageScrollerBarWidth, Height: viewport.Height,
+		}
+		thumbExtent := viewport.Height * viewport.Height / contentExtent
+		thumbExtent = messageScrollerClamp(thumbExtent, messageScrollerMin(messageScrollerThumbMin, viewport.Height), viewport.Height)
+		travel := viewport.Height - thumbExtent
+		geometry.Thumb = ui.Rect{
+			X: geometry.Track.X + 1, Y: viewport.Y + travel*offset/maximum,
+			Width: messageScrollerMax(messageScrollerBarWidth-2, 0), Height: thumbExtent,
+		}
+	}
+	return geometry
+}
+
+// ItemGeometry translates one caller-supplied item offset and extent. The
+// index is carried unchanged so stable application identity stays explicit.
+func (scroller MessageScroller) ItemGeometry(index int, contentOffset, extent float32) MessageScrollerItemGeometry {
+	geometry := scroller.Geometry()
+	contentOffset = messageScrollerFiniteNonNegative(contentOffset)
+	extent = messageScrollerFiniteNonNegative(extent)
+	bounds := ui.Rect{
+		X: geometry.Content.X, Y: geometry.Content.Y + contentOffset,
+		Width: geometry.Content.Width, Height: extent,
+	}
+	return MessageScrollerItemGeometry{
+		Index: index, ContentOffset: contentOffset, Extent: extent,
+		Bounds: bounds, Visible: messageScrollerIntersects(bounds, geometry.Viewport),
+	}
+}
+
+// BeginContent pushes the viewport clip for caller-painted message items.
+func (scroller *MessageScroller) BeginContent() MessageScrollerGeometry {
+	geometry := scroller.Geometry()
+	if scroller.canvas != nil && !scroller.contentClipIsActive && geometry.Viewport.Width > 0 && geometry.Viewport.Height > 0 {
+		scroller.canvas.Clip(geometry.Viewport)
+		scroller.contentClipIsActive = true
+	}
+	return geometry
+}
+
+// EndContent closes the clip, then paints the thin thumb and active jump buttons.
+func (scroller *MessageScroller) EndContent() MessageScrollerGeometry {
+	geometry := scroller.Geometry()
+	if scroller.canvas == nil {
+		return geometry
+	}
+	if scroller.contentClipIsActive {
+		scroller.canvas.Unclip()
+		scroller.contentClipIsActive = false
+	}
+	scroller.paintThumb(geometry)
+	if geometry.CanStart {
+		scroller.paintButton(geometry.StartButton, scroller.startID, scroller.startLabel, MessageScrollerStart)
+	}
+	if geometry.CanEnd {
+		scroller.paintButton(geometry.EndButton, scroller.endID, scroller.endLabel, MessageScrollerEnd)
+	}
+	return geometry
+}
+
+func (scroller MessageScroller) paintThumb(geometry MessageScrollerGeometry) {
+	if geometry.Thumb.Width <= 0 || geometry.Thumb.Height <= 0 {
+		return
+	}
+	color := scroller.theme.Border
+	if scroller.canvas.Hovered() == scroller.scrollbarID || scroller.canvas.Pressed() == scroller.scrollbarID {
+		color = scroller.theme.MutedForeground
+		color.Alpha *= 0.72
+	}
+	if !scroller.disabled && scroller.canvas.FocusVisible() == scroller.scrollbarID {
+		ring := scroller.theme.Ring
+		ring.Alpha *= 0.50
+		scroller.canvas.Rounded(messageScrollerExpand(geometry.Thumb, 2), geometry.Thumb.Width/2+2, ring)
+	}
+	if scroller.disabled {
+		color.Alpha *= 0.50
+	}
+	scroller.canvas.Rounded(geometry.Thumb, geometry.Thumb.Width/2, color)
+	if !scroller.scrollbarID.IsZero() {
+		scroller.canvas.HitWithOptions(scroller.scrollbarID, geometry.Track, scroller.scrollbarLabel, ui.HitOptions{
+			Role: ui.RoleSlider, Value: scroller.scrollbarValue,
+			Disabled: scroller.disabled,
+		})
+	}
+}
+
+func (scroller MessageScroller) paintButton(bounds ui.Rect, id ui.ID, label string, direction MessageScrollerDirection) {
+	if id.IsZero() || bounds.Width <= 0 || bounds.Height <= 0 {
+		return
+	}
+	background := scroller.theme.Background
+	if scroller.canvas.Hovered() == id {
+		background = scroller.theme.Muted
+	}
+	if scroller.canvas.FocusVisible() == id {
+		ring := scroller.theme.Ring
+		ring.Alpha *= 0.50
+		scroller.canvas.Rounded(messageScrollerExpand(bounds, 3), scroller.theme.Metrics.RadiusControl+3, ring)
+	}
+	scroller.canvas.RoundedBorder(bounds, scroller.theme.Metrics.RadiusControl, 1, scroller.theme.Border, background)
+	icon := &arrowDownIcon
+	if direction == MessageScrollerStart {
+		icon = &arrowUpIcon
+	}
+	size := scroller.theme.Metrics.ControlHeight / 2
+	scroller.canvas.DrawIcon(*icon, ui.Rect{X: bounds.X + (bounds.Width-size)/2, Y: bounds.Y + (bounds.Height-size)/2, Width: size, Height: size}, scroller.theme.Foreground)
+	if label == "" {
+		label = "Scroll to end"
+		if direction == MessageScrollerStart {
+			label = "Scroll to start"
+		}
+	}
+	scroller.canvas.HitWithOptions(id, bounds, label, ui.HitOptions{Role: ui.RoleButton})
+}
+
+// The jump buttons' arrows: Lucide's ArrowDown and ArrowUp.
+var (
+	arrowDownIcon = ui.Icon{ViewBox: 24, Stroke: 2, Cap: ui.CapRound, Join: ui.JoinRound, Commands: []ui.PathCommand{ui.MoveTo(12, 5), ui.LineTo(12, 19), ui.MoveTo(19, 12), ui.LineTo(12, 19), ui.LineTo(5, 12)}}
+	arrowUpIcon   = ui.Icon{ViewBox: 24, Stroke: 2, Cap: ui.CapRound, Join: ui.JoinRound, Commands: []ui.PathCommand{ui.MoveTo(12, 19), ui.LineTo(12, 5), ui.MoveTo(5, 12), ui.LineTo(12, 5), ui.LineTo(19, 12)}}
+)
+
+func messageScrollerIntersects(bounds, viewport ui.Rect) bool {
+	return bounds.Width > 0 && bounds.Height > 0 &&
+		bounds.X < viewport.X+viewport.Width && bounds.X+bounds.Width > viewport.X &&
+		bounds.Y < viewport.Y+viewport.Height && bounds.Y+bounds.Height > viewport.Y
+}
+
+func messageScrollerNormalizeRect(bounds ui.Rect) ui.Rect {
+	bounds.X = messageScrollerFinite(bounds.X)
+	bounds.Y = messageScrollerFinite(bounds.Y)
+	bounds.Width = messageScrollerFiniteNonNegative(bounds.Width)
+	bounds.Height = messageScrollerFiniteNonNegative(bounds.Height)
+	return bounds
+}
+
+func messageScrollerFinite(value float32) float32 {
+	if value != value || value > 3.4028235e+38 || value < -3.4028235e+38 {
+		return 0
+	}
+	return value
+}
+
+func messageScrollerFiniteNonNegative(value float32) float32 {
+	value = messageScrollerFinite(value)
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func messageScrollerClamp(value, minimum, maximum float32) float32 {
+	value = messageScrollerFinite(value)
+	if value < minimum {
+		return minimum
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
+}
+
+func messageScrollerMax(left, right float32) float32 {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+func messageScrollerMin(left, right float32) float32 {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+func messageScrollerExpand(bounds ui.Rect, amount float32) ui.Rect {
+	return ui.Rect{
+		X: bounds.X - amount, Y: bounds.Y - amount,
+		Width: bounds.Width + amount*2, Height: bounds.Height + amount*2,
+	}
+}
+
+// MessageScrollPreviousPeek is the slice of the previous item the official
+// scroller keeps above an anchored turn, scrollPreviousItemPeek.
+const MessageScrollPreviousPeek float32 = 64
+
+// MessageScrollState is the scroll policy of a chat transcript, the part of the
+// official MessageScroller provider that is not a DOM observer: it follows the live
+// edge while the reader is there, anchors a new turn near the top of the viewport,
+// and keeps the reader's place when older rows are prepended. It owns one number, the
+// offset, and moves it only from what the caller tells it, so it needs no timer and
+// schedules no frame; the caller paints the transcript at Offset and asks for a
+// frame itself when its content changes.
+//
+// The caller feeds it three kinds of input:
+//
+//   - the reader's scrolling (ScrollBy, ScrollTo), which releases the live edge when
+//     it moves away from it and takes hold of it again on reaching it;
+//   - commands (ScrollToEnd, ScrollToStart, AnchorTurn, Prepended);
+//   - the sizes of the viewport and the content, once per paint, in Resolve, which
+//     returns the offset to paint at.
+//
+// The zero value sits at the start, follows nothing and keeps no peek.
+//
+//	state := components.MessageScrollState{AutoScroll: true}
+//	state.ScrollToEnd()                      // open at the newest message
+//	offset := state.Resolve(viewport.Height, content) // every paint
+//	state.ScrollBy(wheelDelta)               // on a wheel event
+type MessageScrollState struct {
+	// AutoScroll keeps the transcript at its end while the reader is at the end:
+	// the official autoScroll. Off, the offset only moves when told to.
+	AutoScroll bool
+	// PreviousPeek is how much of the item before an anchored turn stays visible
+	// above it; MessageScrollPreviousPeek is the official 64.
+	PreviousPeek float32
+
+	offset    float32
+	viewport  float32
+	extent    float32 // content height including the room an anchored turn grows into
+	following bool
+	toEnd     bool
+	anchoring bool
+	anchorTop float32
+	shift     float32
+}
+
+// Offset is the offset resolved by the last Resolve, after the reader's scrolling since.
+func (state *MessageScrollState) Offset() float32 { return state.offset }
+
+// Extent is the content height Resolve last settled on: the caller's, or more while a
+// turn is anchored, so that there is room below the anchor for the reply to grow into.
+// Give it to BeginMessageScroller as the content extent.
+func (state *MessageScrollState) Extent() float32 { return state.extent }
+
+// Following reports whether the transcript is pinned to its end and follows new content.
+func (state *MessageScrollState) Following() bool { return state.following }
+
+// AtEnd reports whether the viewport is within MessageScrollerEdgeThreshold of the
+// end of the content as of the last Resolve.
+func (state *MessageScrollState) AtEnd() bool {
+	return state.offset >= state.maximum()-MessageScrollerEdgeThreshold
+}
+
+func (state *MessageScrollState) maximum() float32 {
+	return max(state.extent-state.viewport, 0)
+}
+
+// ScrollBy moves the offset by delta, positive toward the end, as the reader's wheel,
+// keys or scrollbar do. Moving toward the start releases the live edge; reaching the
+// end takes hold of it again. Any reader scrolling releases an anchored turn.
+func (state *MessageScrollState) ScrollBy(delta float32) {
+	state.anchoring = false
+	state.toEnd = false
+	if delta != delta {
+		return
+	}
+	maximum := state.maximum()
+	state.offset = min(max(state.offset+delta, 0), maximum)
+	if delta < 0 {
+		state.following = false
+	} else if state.AutoScroll && state.offset >= maximum-MessageScrollerEdgeThreshold {
+		state.following = true
+	}
+}
+
+// ScrollTo moves the offset to an absolute position the reader chose, such as a
+// dragged scrollbar thumb. It follows the same rules as ScrollBy.
+func (state *MessageScrollState) ScrollTo(offset float32) {
+	state.ScrollBy(offset - state.offset)
+}
+
+// ScrollToEnd jumps to the end at the next Resolve and, with AutoScroll, follows the
+// content from there: the jump button, a sent message, opening at the newest message.
+func (state *MessageScrollState) ScrollToEnd() {
+	state.anchoring = false
+	state.toEnd = true
+	state.following = state.AutoScroll
+}
+
+// ScrollToStart jumps to the start and releases the live edge.
+func (state *MessageScrollState) ScrollToStart() {
+	state.anchoring = false
+	state.toEnd = false
+	state.following = false
+	state.offset = 0
+}
+
+// AnchorTurn puts the item whose top is at top (in content space) near the top of the
+// viewport, PreviousPeek below it, and holds it there while its reply streams in
+// below. With AutoScroll the transcript follows the end once the reply has grown to
+// fill the viewport; without it the turn stays where it is until the reader moves.
+func (state *MessageScrollState) AnchorTurn(top float32) {
+	state.anchoring = true
+	state.toEnd = false
+	state.following = false
+	state.anchorTop = top
+}
+
+// Prepended tells the state that height of content was inserted above what it was
+// showing, older history loaded while the reader looks at the transcript. The offset
+// moves by the same amount at the next Resolve so the rows on screen stay where they
+// are. A transcript that follows its end needs no correction.
+func (state *MessageScrollState) Prepended(height float32) {
+	if height > 0 && height == height {
+		state.shift += height
+	}
+}
+
+// Resolve settles the offset for a viewport and content of the given heights, applying
+// the commands given since the last call, and returns it. Call it once per paint.
+func (state *MessageScrollState) Resolve(viewport, extent float32) float32 {
+	viewport, extent = messageScrollerFiniteNonNegative(viewport), messageScrollerFiniteNonNegative(extent)
+	if state.shift != 0 {
+		if !state.following && !state.toEnd {
+			state.offset += state.shift
+		}
+		state.shift = 0
+	}
+	maximum := max(extent-viewport, 0)
+	switch {
+	case state.anchoring:
+		target := max(state.anchorTop-state.PreviousPeek, 0)
+		if maximum > target && state.AutoScroll {
+			// The reply has filled the viewport: the live edge takes over from the anchor.
+			state.anchoring, state.following = false, true
+			state.offset = maximum
+		} else {
+			state.offset = target
+			extent = max(extent, target+viewport)
+			maximum = extent - viewport
+		}
+	case state.toEnd || state.following:
+		state.offset = maximum
+		state.toEnd = false
+	}
+	state.offset = min(max(state.offset, 0), maximum)
+	state.viewport, state.extent = viewport, extent
+	return state.offset
+}

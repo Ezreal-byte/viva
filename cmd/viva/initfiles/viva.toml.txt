@@ -1,0 +1,6 @@
+[app]
+name = "{{NAME}}"
+id = "dev.example.{{ID}}"
+version = "0.1.0"
+executable = "{{ID}}"
+package = "."

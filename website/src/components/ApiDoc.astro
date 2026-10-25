@@ -1,0 +1,21 @@
+---
+import { apiHref, type DocBlock } from '../lib/api';
+import type { Locale } from '../lib/i18n';
+
+// A doc comment, rendered from the blocks the generator parsed out of it.
+interface Props { blocks: DocBlock[]; locale: Locale }
+const { blocks, locale } = Astro.props;
+---
+
+{blocks.map(block => {
+  if (block.kind === 'code') return <pre class="doc-code" tabindex="0"><code>{block.code}</code></pre>;
+  if (block.kind === 'list') {
+    const List = block.ordered ? 'ol' : 'ul';
+    return <List>{block.items?.map(item => <li><Astro.self blocks={item} {locale} /></li>)}</List>;
+  }
+  const Tag = block.kind === 'heading' ? 'h4' : 'p';
+  return <Tag>{block.text?.map(part => {
+    const content = part.code ? <code>{part.text}</code> : part.italic ? <em>{part.text}</em> : part.text;
+    return part.href ? <a href={apiHref(locale, part.href)}>{content}</a> : content;
+  })}</Tag>;
+})}

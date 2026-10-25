@@ -1,0 +1,26 @@
+---
+import type { GetStaticPaths } from 'astro';
+import { render } from 'astro:content';
+import DocPageLayout from '../../../layouts/DocPageLayout.astro';
+import { locales, isLocale, type Locale } from '../../../lib/i18n';
+import { docsPath } from '../../../lib/routes';
+import { guidesFor, guideSlug, guideNavigation } from '../../../lib/content';
+
+export const getStaticPaths = (async () => {
+  const paths = [];
+  for (const lang of locales) for (const entry of await guidesFor(lang)) paths.push({ params: { lang, slug: guideSlug(entry) } });
+  return paths;
+}) satisfies GetStaticPaths;
+const locale = Astro.params.lang;
+if (!isLocale(locale)) throw new Error('Unsupported locale');
+const guides = await guidesFor(locale);
+const entry = guides.find(guide => guideSlug(guide) === Astro.params.slug)!;
+const { Content, headings } = await render(entry);
+const alternates = Object.fromEntries(locales.map(language => [language, docsPath(language, Astro.params.slug)])) as Record<Locale, string>;
+const navigation = guideNavigation(guides, locale, entry.id);
+---
+
+<DocPageLayout {locale} title={entry.data.title} summary={entry.data.summary} section="docs" {alternates} {navigation} {headings}>
+  <div class="page-heading"><h1>{entry.data.title}</h1><p class="page-summary">{entry.data.summary}</p></div>
+  <div class="markdown"><Content /></div>
+</DocPageLayout>

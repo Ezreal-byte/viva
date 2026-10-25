@@ -1,0 +1,255 @@
+package components
+
+import (
+	"time"
+
+	"github.com/vivaui/viva/ui"
+)
+
+// HoverCardSide selects the anchor edge used by a hover card.
+type HoverCardSide uint8
+
+const (
+	HoverCardBottom HoverCardSide = iota
+	HoverCardTop
+	HoverCardRight
+	HoverCardLeft
+)
+
+// HoverCardAlign selects placement along the anchor's cross axis.
+type HoverCardAlign uint8
+
+const (
+	HoverCardAlignCenter HoverCardAlign = iota
+	HoverCardAlignStart
+	HoverCardAlignEnd
+)
+
+// HoverCardState is caller-owned preview visibility. Its zero value is closed.
+// Transitions are synchronous value operations and never schedule work.
+type HoverCardState bool
+
+// IsOpen reports whether the hover card should be painted.
+func (state HoverCardState) IsOpen() bool { return bool(state) }
+
+// Open returns the open state.
+func (HoverCardState) Open() HoverCardState { return true }
+
+// Close returns the closed state.
+func (HoverCardState) Close() HoverCardState { return false }
+
+// Toggle returns the opposite visibility state.
+func (state HoverCardState) Toggle() HoverCardState { return !state }
+
+// Dismiss closes the hover card after an application-owned dismiss action.
+func (HoverCardState) Dismiss() HoverCardState { return false }
+
+// Escape closes the hover card after the runtime routes an Escape key press.
+func (HoverCardState) Escape() HoverCardState { return false }
+
+// OutsidePress closes the hover card after the runtime identifies an outside press.
+func (HoverCardState) OutsidePress() HoverCardState { return false }
+
+// HoverCardDelays defines caller-selected delays. The application remains
+// responsible for scheduling and cancelling deadline delivery.
+type HoverCardDelays struct {
+	Open  time.Duration
+	Close time.Duration
+}
+
+// OpenDeadline returns the earliest time at which an open transition may run.
+func (delays HoverCardDelays) OpenDeadline(now time.Time) time.Time {
+	return hoverCardDeadline(now, delays.Open)
+}
+
+// CloseDeadline returns the earliest time at which a close transition may run.
+func (delays HoverCardDelays) CloseDeadline(now time.Time) time.Time {
+	return hoverCardDeadline(now, delays.Close)
+}
+
+func hoverCardDeadline(now time.Time, delay time.Duration) time.Time {
+	if delay <= 0 {
+		return now
+	}
+	return now.Add(delay)
+}
+
+// HoverIntent is caller-owned hover-rest state for a control that opens
+// something on hover, such as a hover card, a submenu trigger, a menubar
+// trigger while another menu is open, or a navigation menu. Its zero value is
+// ready for the first target. Call Rest with the hovered identity each frame:
+// it returns the identity once it has rested for delay, and otherwise how long
+// the caller should wait before asking again. Moving to another target, or
+// passing zero, starts over, so the caller schedules no timer of its own.
+type HoverIntent struct {
+	target ui.ID
+	since  time.Time
+}
+
+// Rest advances the intent to target at now. It returns target and zero once the
+// target has rested for delay; until then it returns zero and the remaining
+// wait. A zero target clears the candidate. A non-positive delay makes the
+// target ready at once.
+func (intent *HoverIntent) Rest(target ui.ID, now time.Time, delay time.Duration) (ui.ID, time.Duration) {
+	if target.IsZero() {
+		*intent = HoverIntent{}
+		return ui.ID{}, 0
+	}
+	if target != intent.target || now.Before(intent.since) {
+		intent.target, intent.since = target, now
+	}
+	if delay <= 0 {
+		return target, 0
+	}
+	if elapsed := now.Sub(intent.since); elapsed >= delay {
+		return target, 0
+	} else {
+		return ui.ID{}, delay - elapsed
+	}
+}
+
+// Reset forgets the current candidate, as leaving the control does.
+func (intent *HoverIntent) Reset() { *intent = HoverIntent{} }
+
+// HoverCardOptions describes one synchronous preview surface.
+type HoverCardOptions struct {
+	Layer uint16
+	// ID names the card for its entrance and exit: while the application paints
+	// the card under one ID it fades in, and once it stops it fades out. Leave it
+	// zero for a card that appears and disappears at once.
+	ID ui.ID
+	// DismissID, when set with ID, makes the card dismiss on Escape and on a
+	// press outside it. The press is passed on to the control beneath, as a
+	// non-modal preview card's is. The card surface is a group hit, so the
+	// pointer can move into it and keep it open.
+	DismissID  ui.ID
+	Side       HoverCardSide
+	Align      HoverCardAlign
+	SideOffset float32
+	// AlignOffset shifts the card along the anchor's edge; zero means Base UI's
+	// default of 4 (HoverCardContent's alignOffset).
+	AlignOffset float32
+	// ContentSize.Width defaults to 256 (`w-64`). A zero ContentSize.Height sizes
+	// the card to its parts: the header (its description wraps to the width) and,
+	// under it, BodyHeight.
+	ContentSize ui.Size
+	BodyHeight  float32
+}
+
+// HoverCardLayout exposes its surface and caller-owned body slot.
+type HoverCardLayout struct {
+	Content ui.Rect
+	Body    ui.Rect
+}
+
+// HoverCard is a nonmodal preview card with no timers or background work.
+type HoverCard struct {
+	canvas   *ui.Canvas
+	theme    ui.Theme
+	viewport ui.Rect
+	anchor   ui.Rect
+	options  HoverCardOptions
+	disabled bool
+}
+
+// BeginHoverCard creates one preview declaration.
+func BeginHoverCard(canvas *ui.Canvas, theme ui.Theme, viewport, anchor ui.Rect, options HoverCardOptions) HoverCard {
+	return HoverCard{canvas: canvas, theme: theme, viewport: viewport, anchor: anchor, options: options}
+}
+
+// Disabled suppresses a preview opened from a disabled trigger.
+func (card HoverCard) Disabled() HoverCard {
+	card.disabled = true
+	return card
+}
+
+// Paint paints standard title and description content.
+func (card HoverCard) Paint(title, description string) HoverCardLayout {
+	layout := card.Begin(title, description)
+	card.End()
+	return layout
+}
+
+// Begin paints the preview and leaves its layer active for custom content.
+func (card HoverCard) Begin(title, description string) HoverCardLayout {
+	if card.disabled || card.canvas == nil || card.viewport.Width <= 0 || card.viewport.Height <= 0 {
+		return HoverCardLayout{}
+	}
+	card.canvas.PushLayer(card.options.Layer)
+	if !card.options.ID.IsZero() && !card.options.DismissID.IsZero() && card.viewport.Width > 0 && card.viewport.Height > 0 {
+		card.canvas.HitWithOptions(card.options.DismissID, card.viewport, "Dismiss preview", ui.HitOptions{
+			Role: ui.RoleButton, SkipFocus: true, Backdrop: true, PassPrimary: true, PassSecondary: true,
+		})
+	}
+	metrics := card.theme.Metrics
+	var scratch overlayLines
+	width := card.contentWidth()
+	lines := overlayWrap(card.canvas, &scratch, description, metrics.FontSizeM, ui.WeightRegular, width-2*metrics.PadSurface)
+	headerHeight := popoverHeaderHeight(metrics, len(lines))
+	content, side := card.contentBounds(width, headerHeight)
+	card.canvas.BeginPresence(overlayKey(card.options.ID), overlaySurfacePart,
+		popupPresence(card.theme, overlayDuration, side), popupPivot(content, side, card.anchor))
+	card.canvas.Elevate(content, metrics.RadiusPopup(), ui.ShadowMD) // shadow-md
+	card.canvas.RoundedBorder(content, metrics.RadiusPopup(), 1, card.theme.Border, card.theme.Popover)
+	if !card.options.ID.IsZero() {
+		card.canvas.HitWithOptions(card.options.ID, content, title, ui.HitOptions{Role: ui.RoleGroup, SkipFocus: true})
+	}
+	inner := content.Inset(ui.All(metrics.PadSurface))
+	lineHeight := overlayLineHeight(metrics)
+	card.canvas.Label(title, ui.Rect{X: inner.X, Y: inner.Y, Width: inner.Width, Height: lineHeight}, ui.TextStyle{
+		Size: metrics.FontSizeM, Weight: ui.WeightMedium, Color: card.theme.PopoverForeground,
+	})
+	overlayParagraph(card.canvas, lines, ui.Rect{X: inner.X, Y: inner.Y + lineHeight + popoverTitleGap, Width: inner.Width}, lineHeight, ui.TextStyle{
+		Size: metrics.FontSizeM, Weight: ui.WeightRegular, Color: card.theme.MutedForeground,
+	}, false)
+	bodyY := inner.Y + headerHeight + popoverBodyGap(metrics)
+	return HoverCardLayout{
+		Content: content,
+		Body:    ui.Rect{X: inner.X, Y: bodyY, Width: inner.Width, Height: max(0, inner.Y+inner.Height-bodyY)},
+	}
+}
+
+// End closes the preview layer opened by Begin. It also ends what the card
+// animates in and out.
+func (card HoverCard) End() {
+	if card.disabled || card.canvas == nil || card.viewport.Width <= 0 || card.viewport.Height <= 0 {
+		return
+	}
+	card.canvas.EndPresence()
+	if !card.options.DismissID.IsZero() {
+		card.canvas.SetEscapeTarget(card.options.DismissID)
+	}
+	card.canvas.PopLayer()
+}
+
+func (card HoverCard) contentWidth() float32 {
+	if width := card.options.ContentSize.Width; width > 0 {
+		return width
+	}
+	return 256
+}
+
+// contentBounds places the card beside its anchor, on the opposite side when the
+// requested one has no room (see PlaceOverlay).
+func (card HoverCard) contentBounds(width, headerHeight float32) (ui.Rect, OverlaySide) {
+	metrics := card.theme.Metrics
+	height := card.options.ContentSize.Height
+	if height <= 0 {
+		height = 2*metrics.PadSurface + headerHeight
+		if card.options.BodyHeight > 0 {
+			height += popoverBodyGap(metrics) + card.options.BodyHeight
+		}
+	}
+	offset := card.options.SideOffset
+	if offset == 0 {
+		offset = 4
+	}
+	alignOffset := card.options.AlignOffset
+	if alignOffset == 0 {
+		alignOffset = 4
+	}
+	return PlaceOverlay(card.anchor, ui.Size{Width: width, Height: height}, card.viewport, OverlayPlacement{
+		Side: OverlaySide(card.options.Side), Align: OverlayAlign(card.options.Align),
+		SideOffset: offset, AlignOffset: alignOffset, Margin: 8,
+	})
+}

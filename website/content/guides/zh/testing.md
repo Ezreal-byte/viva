@@ -1,0 +1,102 @@
+---
+title: 无需窗口的测试
+summary: 在测试里驱动应用、用行协议编写脚本，并检查各平台是否仍然一致。
+order: 13
+group: distribute
+---
+
+验证桌面应用通常意味着打开一个窗口：它会打断你，取决于窗口落在哪块显示器上，也不能无人值守地运行。Viva 提供三层避免这些问题的能力，每一层都可以不依赖下一层单独使用。
+
+## app.Driver
+
+`app.NewDriver` 用显式调用运行应用真实的绘制器、输入路由和焦点规则：`Move`、`Click`、`Key`、`Type`、`Shortcut`、`Scroll`、`Resize` 和 `Advance`。它不含任何平台代码，动画时钟只在你要求时才前进。`Snapshot` 返回绘制出来的内容：图元、标签、命中区域和焦点。下面的测试驱动的就是[开始使用](/zh/docs/getting-started/)里的那个程序：
+
+<!-- example: hello/main_test.go -->
+```go
+package main
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/vivaui/viva/app"
+	"github.com/vivaui/viva/ui"
+)
+
+func hasLabel(snapshot app.Snapshot, want string) bool {
+	for _, label := range snapshot.Labels {
+		if strings.Contains(label.Value, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// clickID presses the middle of the control with the given identity.
+func clickID(t *testing.T, driver *app.Driver, id ui.ID) {
+	t.Helper()
+	for _, hit := range driver.Snapshot().Hits {
+		if hit.ID == id {
+			b := hit.Bounds
+			if err := driver.Click(b.X+b.Width/2, b.Y+b.Height/2); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+	}
+	t.Fatalf("no control %v on screen", id)
+}
+
+func TestClickCounts(t *testing.T) {
+	var canvas ui.Canvas
+	driver, err := app.NewDriver(newConfig(&model{}), &canvas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer driver.Close()
+
+	if !hasLabel(driver.Snapshot(), "Clicked 0 times") {
+		t.Fatal("the button should start at zero")
+	}
+	clickID(t, driver, click)
+	if !hasLabel(driver.Snapshot(), "Clicked 1 times") {
+		t.Fatal("the click did not reach the button")
+	}
+}
+```
+
+后台 goroutine 只能通过 `Config.Invalidator` 触及 driver，和触及窗口的方式完全一样，由 `Pump` 应用唤醒。`examples/guides/background/main_test.go` 是一个用这种方式等待工作 goroutine 结果的测试。driver 模拟文本系统的编辑命令以及 Command-A、C、X、V 快捷键，但不模拟输入法组合输入。
+
+## 行协议
+
+在带构建标签的文件里引入 `github.com/vivaui/viva/headless/auto`，这样发布构建永远不会包含它：
+
+```go
+//go:build vivahead
+
+package main
+
+import _ "github.com/vivaui/viva/headless/auto"
+```
+
+用 `-tags vivahead` 构建，并以 `VIVA_HEADLESS=1` 启动程序。此时 `RunCanvas` 会从标准输入读取命令，而不是打开窗口。控件通过标签而不是坐标寻址：
+
+```text
+click "New Host"
+type example.com
+key tab
+waitfor "Connected" 5000
+texts
+shot /tmp/frame.png
+quit
+```
+
+每个请求得到零行或多行数据，以及一行最终的 `ok` 或 `error`，所以脚本、其他程序或编码智能体都可以在不碰屏幕的情况下驱动并检查应用。完整命令列表在 `headless/control.go` 的文档注释里。
+
+`layout` 会检查当前帧里几乎必然是错误的几何，每个问题输出一行：被裁剪截断的文字、超出所在按钮或输入框的文字、同一层上互相覆盖的两行文字、跑出窗口的文字，以及互相交叉而不是一个包含另一个的可聚焦控件。它从不失败，所以每次改完界面都可以运行它；几行文字比一张图更快读完。它按 Viva 布局所用的参考度量判断文字宽度，所以平台把一行画得宽几个百分点不会被报告。
+
+**截图只在 macOS 上可用。** 那里的离屏渲染器使用窗口自己的 Metal 管线，所以截图在构造上就是窗口的像素。在 Windows 和 Linux 上，协议可以操作并回答查询，但截图会返回 `ErrNoRenderer`。
+
+## 平台一致性
+
+`cmd/viva-conformance` 通过公开的 `app` 包，在每个平台上运行同一组生命周期场景，并对每个场景输出 PASS、FAIL 或 SKIP：从其他 goroutine 关闭、空闲窗口不做事、`Invalidate` 只唤醒一次、隐藏窗口、面板、状态栏图标，以及无论窗口怎么说 `Quit` 都能结束循环。每一项检查的存在，都是因为某个真实平台曾经在那里出过错。它会打开真实窗口，所以需要桌面会话。它检查不了什么、这些如何手动检查，见仓库中的 `docs/conformance.md`。

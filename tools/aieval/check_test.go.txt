@@ -1,0 +1,375 @@
+package main
+
+// Written into a generated project by tools/aieval. It runs the page's own newConfig and
+// newModel in a headless session, performs the task's ops in order and writes one result
+// per op to $AIEVAL_RESULT. Ops (see tools/aieval/README.md):
+//   text X / not-text X   a painted text contains X / none does
+//   hits N                at least N interactive regions
+//   click L / click-at X Y / type T / key K / wait MS   input, by what a user does
+//   drag h|v D            drag the region with a resize cursor by D pixels (press, move, release)
+//   before A|B            text A is painted above text B
+//   right-of A|B          text A starts at least 20 px further right than text B (alignment)
+//   moved                 after drag: some painted text changed position
+//   resizable             a region with a resize cursor exists
+//   animates [MS]         painted shapes change as the animation clock moves
+//   bg-mark / bg-changed  the window background (largest filled shape) differs from at the mark
+//   layout                at 640x480 and 1200x800: nothing partly off the window, no two texts or
+//                         regions overlap partly
+
+import (
+	"encoding/json"
+	"fmt"
+	"image"
+	"image/png"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/vivaui/viva/app"
+	"github.com/vivaui/viva/headless"
+	"github.com/vivaui/viva/ui"
+)
+
+type aiOp struct{ Op, Arg string }
+type aiResult struct {
+	Name   string
+	OK     bool
+	Detail string
+}
+
+func TestAIEvalCheck(t *testing.T) {
+	var ops []aiOp
+	data, err := os.ReadFile(os.Getenv("AIEVAL_TASK"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &ops); err != nil {
+		t.Fatal(err)
+	}
+	var results []aiResult
+	defer func() {
+		out, _ := json.Marshal(results)
+		os.WriteFile(os.Getenv("AIEVAL_RESULT"), out, 0o644)
+	}()
+	fail := func(name, format string, args ...any) {
+		results = append(results, aiResult{name, false, fmt.Sprintf(format, args...)})
+	}
+	pass := func(name string) { results = append(results, aiResult{name, true, ""}) }
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fail("run", "panic: %v", r)
+			}
+		}()
+		s, err := headless.Open(newConfig(newModel()), nil, headless.Options{Scale: 1})
+		if err != nil {
+			fail("open", "%v", err)
+			return
+		}
+		defer s.Close()
+		if path := os.Getenv("AIEVAL_PNG"); path != "" {
+			if img, err := s.Image(); err == nil {
+				saveAIPNG(path, img)
+			}
+		}
+		var markBG ui.Color
+		var before, dragBefore string
+		for _, op := range ops {
+			name := strings.TrimSpace(op.Op + " " + op.Arg)
+			var err error
+			switch op.Op {
+			case "text":
+				if !s.HasText(op.Arg) {
+					fail(name, "not painted; painted: %.300q", s.Texts())
+					continue
+				}
+			case "not-text":
+				if s.HasText(op.Arg) {
+					fail(name, "still painted")
+					continue
+				}
+			case "hits":
+				n, _ := strconv.Atoi(op.Arg)
+				count := 0
+				for _, h := range s.Snapshot().Hits {
+					if !h.ID.IsZero() && !h.Block {
+						count++
+					}
+				}
+				if count < n {
+					fail(name, "only %d interactive regions", count)
+					continue
+				}
+			case "click":
+				if err = s.ClickLabel(op.Arg); err != nil {
+					err = clickByHint(s, op.Arg, err)
+				}
+			case "click-at":
+				var x, y float32
+				fmt.Sscan(op.Arg, &x, &y)
+				err = s.Click(x, y)
+			case "type":
+				err = s.Type(op.Arg)
+			case "key":
+				err = s.Keys(op.Arg)
+			case "wait":
+				ms, _ := strconv.Atoi(op.Arg)
+				err = s.Wait(time.Duration(ms) * time.Millisecond)
+			case "resizable":
+				if _, ok := resizeHit(s, "h"); !ok {
+					if _, ok = resizeHit(s, "v"); !ok {
+						fail(name, "no region with a resize cursor")
+						continue
+					}
+				}
+			case "drag":
+				dir, dist, _ := strings.Cut(op.Arg, " ")
+				d, _ := strconv.Atoi(dist)
+				hit, ok := resizeHit(s, dir)
+				if !ok {
+					fail(name, "no region with a resize cursor to drag")
+					return
+				}
+				dragBefore = textPositions(s)
+				cx, cy := hit.Bounds.X+hit.Bounds.Width/2, hit.Bounds.Y+hit.Bounds.Height/2
+				dx, dy := float32(d), float32(0)
+				if dir == "v" {
+					dx, dy = 0, float32(d)
+				}
+				if err = s.Press(cx, cy); err == nil {
+					for step := float32(1); step <= 4 && err == nil; step++ {
+						err = s.Move(cx+dx*step/4, cy+dy*step/4)
+					}
+				}
+				if err == nil {
+					err = s.Release(cx+dx, cy+dy)
+				}
+			case "moved":
+				if textPositions(s) == dragBefore {
+					fail(name, "nothing moved after the drag")
+					continue
+				}
+			case "animates":
+				ms := 400
+				if op.Arg != "" {
+					ms, _ = strconv.Atoi(op.Arg)
+				}
+				before = shapes(s)
+				if err = s.Wait(time.Duration(ms) * time.Millisecond); err == nil && shapes(s) == before {
+					fail(name, "the picture did not change over %d ms of animation clock", ms)
+					continue
+				}
+			case "before":
+				upper, lower, _ := strings.Cut(op.Arg, "|")
+				u, l := textY(s, strings.TrimSpace(upper)), textY(s, strings.TrimSpace(lower))
+				if u < 0 || l < 0 || u >= l {
+					fail(name, "%q is at y=%.0f, %q at y=%.0f (-1: not painted)", upper, u, lower, l)
+					continue
+				}
+			case "right-of":
+				a, b, _ := strings.Cut(op.Arg, "|")
+				ax, bx := textX(s, strings.TrimSpace(a)), textX(s, strings.TrimSpace(b))
+				if ax < 0 || bx < 0 || ax <= bx+20 {
+					fail(name, "%q starts at x=%.0f, %q at x=%.0f (-1: not painted)", a, ax, b, bx)
+					continue
+				}
+			case "bg-mark":
+				markBG = background(s)
+			case "bg-changed":
+				if background(s) == markBG {
+					fail(name, "background unchanged")
+					continue
+				}
+			case "layout":
+				var problems []string
+				for _, size := range [][2]int{{640, 480}, {1200, 800}} {
+					if err = s.Resize(size[0], size[1]); err != nil {
+						break
+					}
+					for _, p := range layoutProblems(s.Snapshot()) {
+						problems = append(problems, fmt.Sprintf("%dx%d: %s", size[0], size[1], p))
+					}
+				}
+				if err == nil && len(problems) > 0 {
+					if len(problems) > 6 {
+						problems = append(problems[:6], fmt.Sprintf("and %d more", len(problems)-6))
+					}
+					fail(name, "%s", strings.Join(problems, "; "))
+					continue
+				}
+			}
+			if err != nil {
+				fail(name, "%v", err)
+				return // later ops depend on this one
+			}
+			pass(name)
+		}
+	}()
+}
+
+func resizeHit(s *headless.Session, dir string) (ui.Hit, bool) {
+	want := ui.PointerCursorResizeHorizontal
+	if dir == "v" {
+		want = ui.PointerCursorResizeVertical
+	}
+	hits := s.Snapshot().Hits
+	for i := len(hits) - 1; i >= 0; i-- {
+		if hits[i].Cursor == want {
+			return hits[i], true
+		}
+	}
+	return ui.Hit{}, false
+}
+
+func textY(s *headless.Session, value string) float32 {
+	for _, tx := range s.Snapshot().Texts {
+		if strings.Contains(tx.Value, value) {
+			return tx.Bounds.Y
+		}
+	}
+	return -1
+}
+
+// textX is where the first text containing value starts (-1: none painted).
+func textX(s *headless.Session, value string) float32 {
+	for _, tx := range s.Snapshot().Texts {
+		if strings.Contains(tx.Value, value) {
+			return inked(tx.Value, tx.Style.Size, tx.Bounds).X
+		}
+	}
+	return -1
+}
+
+func textPositions(s *headless.Session) string {
+	var b strings.Builder
+	for _, l := range s.Snapshot().Labels {
+		fmt.Fprintf(&b, "%s@%.0f,%.0f,%.0f;", l.Value, l.Bounds.X, l.Bounds.Y, l.Bounds.Width)
+	}
+	return b.String()
+}
+
+func shapes(s *headless.Session) string {
+	var b strings.Builder
+	snap := s.Snapshot()
+	for _, p := range snap.Primitives {
+		fmt.Fprintf(&b, "%v%.1f,%.1f,%.1f,%.1f%v;", p.Kind, p.Bounds.X, p.Bounds.Y, p.Bounds.Width, p.Bounds.Height, p.Color)
+	}
+	for _, l := range snap.Labels {
+		fmt.Fprintf(&b, "%s@%.1f,%.1f;", l.Value, l.Bounds.X, l.Bounds.Y)
+	}
+	return b.String()
+}
+
+func background(s *headless.Session) ui.Color {
+	snap := s.Snapshot()
+	best, area := ui.Color{}, float32(-1)
+	for _, p := range snap.Primitives {
+		if a := p.Bounds.Width * p.Bounds.Height; a > area {
+			best, area = p.Color, a
+		}
+	}
+	return best
+}
+
+// inked is the part of a text's rectangle its glyphs can occupy. A centered label reports
+// the start of its glyphs with the width of the whole rectangle it is centered in, so the
+// width is capped by an estimate of the text's own (half an em per character, an em for CJK).
+func inked(value string, size float32, b ui.Rect) ui.Rect {
+	var width float32
+	for _, r := range value {
+		if r >= 0x2E80 {
+			width += size
+		} else {
+			width += size * 0.5
+		}
+	}
+	b.Width = min(b.Width, width)
+	return b
+}
+
+func layoutProblems(snap app.Snapshot) []string {
+	var out []string
+	w, h := float32(snap.Width), float32(snap.Height)
+	for _, tx := range snap.Texts {
+		b := inked(tx.Value, tx.Style.Size, tx.Bounds)
+		if !tx.HasClip && (b.X < -1 || b.Y < -1 || b.X+b.Width > w+1 || b.Y+b.Height > h+1) {
+			out = append(out, fmt.Sprintf("text %.40q is partly outside the window", tx.Value))
+		}
+	}
+	for i, a := range snap.Labels {
+		for _, b := range snap.Labels[i+1:] {
+			if a.Layer == b.Layer && overlap(inked(a.Value, a.FontSize, a.Bounds), inked(b.Value, b.FontSize, b.Bounds)) {
+				out = append(out, fmt.Sprintf("texts %.30q and %.30q overlap", a.Value, b.Value))
+			}
+		}
+	}
+	for i, a := range snap.Hits {
+		if a.ID.IsZero() || a.Block {
+			continue
+		}
+		for _, b := range snap.Hits[i+1:] {
+			if b.ID.IsZero() || b.Block || a.Layer != b.Layer || !overlapMost(a.Bounds, b.Bounds) || contains(a.Bounds, b.Bounds) || contains(b.Bounds, a.Bounds) {
+				continue
+			}
+			out = append(out, fmt.Sprintf("regions %.30q and %.30q overlap", a.Label, b.Label))
+		}
+	}
+	return out
+}
+
+func overlap(a, b ui.Rect) bool {
+	x := min(a.X+a.Width, b.X+b.Width) - max(a.X, b.X)
+	y := min(a.Y+a.Height, b.Y+b.Height) - max(a.Y, b.Y)
+	return x > 2 && y > 2
+}
+
+// clickByHint is what a user does when a field has no name of its own: click the text
+// field that shows the words asked for (its placeholder, or the text typed in it). A page
+// whose field has an empty accessible label is a slip the page's author can fix, but the
+// task is about what the page does, so the click still goes to the field; first is the
+// error of the label lookup, returned when nothing matches either.
+func clickByHint(s *headless.Session, want string, first error) error {
+	lower := strings.ToLower(want)
+	snapshot := s.Snapshot()
+	for index := len(snapshot.Hits) - 1; index >= 0; index-- {
+		hit := snapshot.Hits[index]
+		if hit.Block || hit.ID.IsZero() || hit.Role != ui.RoleTextField {
+			continue
+		}
+		match := strings.Contains(strings.ToLower(hit.Value), lower) || strings.Contains(strings.ToLower(hit.Hint), lower)
+		for _, painted := range snapshot.Texts {
+			center := ui.Rect{X: painted.Bounds.X + painted.Bounds.Width/2, Y: painted.Bounds.Y + painted.Bounds.Height/2}
+			inside := center.X >= hit.Bounds.X && center.X < hit.Bounds.X+hit.Bounds.Width && center.Y >= hit.Bounds.Y && center.Y < hit.Bounds.Y+hit.Bounds.Height
+			if inside && strings.Contains(strings.ToLower(painted.Value), lower) {
+				match = true
+			}
+		}
+		if match {
+			return s.Click(hit.Bounds.X+hit.Bounds.Width/2, hit.Bounds.Y+hit.Bounds.Height/2)
+		}
+	}
+	return first
+}
+
+// overlapMost is a region sharing a quarter of the smaller one's area: a control's click
+// target may reach a few pixels past its neighbour's without the two being on top of each other.
+func overlapMost(a, b ui.Rect) bool {
+	x := min(a.X+a.Width, b.X+b.Width) - max(a.X, b.X)
+	y := min(a.Y+a.Height, b.Y+b.Height) - max(a.Y, b.Y)
+	return x > 0 && y > 0 && x*y > 0.25*min(a.Width*a.Height, b.Width*b.Height)
+}
+
+func contains(outer, inner ui.Rect) bool {
+	return inner.X >= outer.X-1 && inner.Y >= outer.Y-1 && inner.X+inner.Width <= outer.X+outer.Width+1 && inner.Y+inner.Height <= outer.Y+outer.Height+1
+}
+
+func saveAIPNG(path string, img *image.RGBA) {
+	f, err := os.Create(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	png.Encode(f, img)
+}
