@@ -530,6 +530,7 @@ type Canvas struct {
 	ringPoints      []Point
 	ringEnds        []int32
 	earcut          earcutScratch
+	rings           []ringCacheEntry
 	parentScratch   []int32
 	consumedScratch []bool
 	areasScratch    []float64

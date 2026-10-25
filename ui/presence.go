@@ -289,20 +289,70 @@ func vectorizeBorderBackings(canvas *Canvas, first int) {
 	}
 }
 
+// ringKey names one border ring's geometry: only the two rounded rectangles
+// decide its triangles, not the color the fade multiplies into them.
+type ringKey struct {
+	backing, fill             Rect
+	backingRadius, fillRadius float32
+}
+
+// ringCacheEntry keeps the triangles of one border ring. A fade vectorizes the
+// same geometry on every frame, so the ear clipping is done once instead.
+type ringCacheEntry struct {
+	key       ringKey
+	triangles []Triangle
+}
+
+// ringCacheCap bounds the retained rings; an overlay uses one or two, and a
+// page that cycles through many distinct borders must not keep them all.
+const ringCacheCap = 8
+
 func appendRoundedBorderRing(canvas *Canvas, backing, fill Rectangle, rectsBefore uint32) {
-	canvas.ringPoints = appendRoundedRectContour(canvas.ringPoints[:0], backing.Bounds, backing.Radius)
-	canvas.ringEnds = append(canvas.ringEnds[:0], int32(len(canvas.ringPoints)))
-	canvas.ringPoints = appendRoundedRectContour(canvas.ringPoints, fill.Bounds, fill.Radius)
-	canvas.ringEnds = append(canvas.ringEnds, int32(len(canvas.ringPoints)))
+	key := ringKey{backing: backing.Bounds, fill: fill.Bounds, backingRadius: backing.Radius, fillRadius: fill.Radius}
+	var cached []Triangle
+	for index := range canvas.rings {
+		if canvas.rings[index].key == key {
+			cached = canvas.rings[index].triangles
+			break
+		}
+	}
 
 	first := len(canvas.triangles)
-	canvas.earClipRings(backing.Color)
+	if cached != nil {
+		for _, triangle := range cached {
+			canvas.triangles = append(canvas.triangles, Triangle{
+				Points:  triangle.Points,
+				Color:   backing.Color,
+				Layer:   backing.Layer,
+				ClipOf:  backing.ClipOf,
+				HasClip: backing.HasClip,
+			})
+		}
+	} else {
+		canvas.ringPoints = appendRoundedRectContour(canvas.ringPoints[:0], backing.Bounds, backing.Radius)
+		canvas.ringEnds = append(canvas.ringEnds[:0], int32(len(canvas.ringPoints)))
+		canvas.ringPoints = appendRoundedRectContour(canvas.ringPoints, fill.Bounds, fill.Radius)
+		canvas.ringEnds = append(canvas.ringEnds, int32(len(canvas.ringPoints)))
+		canvas.earClipRings(backing.Color)
+	}
 	last := len(canvas.triangles)
 	for index := first; index < last; index++ {
 		triangle := &canvas.triangles[index]
 		triangle.Layer = backing.Layer
 		triangle.ClipOf, triangle.HasClip = backing.ClipOf, backing.HasClip
 		triangle.RectsBefore = rectsBefore
+	}
+	if cached == nil && last-first > 0 && last-first <= 4096 {
+		entry := ringCacheEntry{key: key, triangles: make([]Triangle, last-first)}
+		for index := range entry.triangles {
+			triangle := canvas.triangles[first+index]
+			entry.triangles[index] = Triangle{Points: triangle.Points}
+		}
+		if len(canvas.rings) >= ringCacheCap {
+			copy(canvas.rings, canvas.rings[1:])
+			canvas.rings = canvas.rings[:len(canvas.rings)-1]
+		}
+		canvas.rings = append(canvas.rings, entry)
 	}
 	if first == last {
 		return
