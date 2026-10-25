@@ -1,6 +1,10 @@
 package input
 
-import "github.com/vivaui/viva/ui"
+import (
+	"slices"
+
+	"github.com/vivaui/viva/ui"
+)
 
 // Target is a stable application-defined interaction identity.
 type Target = ui.ID
@@ -137,6 +141,12 @@ type Router struct {
 // SetRegions replaces paint-order hit regions while preserving a still-valid
 // focused target. Destination storage is reused across calls.
 func (router *Router) SetRegions(regions []Region) {
+	// A repaint that declares the same regions (the common steady state) needs
+	// no copy and no focus rescan: the retained list already routes input and
+	// the focused slot is still valid.
+	if len(router.regions) == len(regions) && slices.Equal(router.regions, regions) {
+		return
+	}
 	router.regions = append(router.regions[:0], regions...)
 	router.focusedSlot = 0
 	if !router.focused.IsZero() {

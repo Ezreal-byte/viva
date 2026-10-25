@@ -1,12 +1,14 @@
 package app
 
 import (
+	"bytes"
 	"cmp"
 	"fmt"
 	"math"
 	"slices"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/vivaui/viva/internal/input"
 	"github.com/vivaui/viva/internal/platform"
@@ -62,26 +64,45 @@ type painter struct {
 	changes         []scene.Change
 	semanticChanges []semantic.Change
 	resyncs         int        // times the renderer had to be rebuilt after a failed batch
+	reusedHits      int        // publishes that kept the previous regions and semantics
 	shapeIDs        []scene.ID // one scene node per entry of order, in paint order
 	labels          []platform.TextLabel
 	paintedIDs      []ui.ID // hit IDs of the previous paint, for Autofocus
+	paintedScratch  []ui.ID // the next paint's IDs, so one pass can read the old ones
 	lastTexts       []ui.Text
 	lastRuns        []ui.TextRun // the runs lastTexts refer to, copied out of the application's memory
 	lastImages      []ui.Image
 	stateBySlot     []instanceState
 	// layerShift is 1 while the frame has a backdrop, which takes platform layer
 	// zero; every canvas layer then travels one higher. It is 0 otherwise.
-	layerShift    uint16
-	hitScratch    []ui.Hit
-	labelNames    map[ui.ID]string
-	labelNamePeak int
-	clipRects     [4]ui.Rect
-	clipped       []ui.Rectangle
-	clippedPaths  []ui.Triangle
-	clippedSoft   []ui.Shadow
-	order         []shapeRef // clipped, clippedPaths and clippedSoft interleaved in paint order
-	clippedTexts  []ui.Text
-	clippedImages []ui.Image
+	layerShift uint16
+	hitScratch []ui.Hit
+	// publishedHits is the hit list the regions and the semantic tree were last
+	// built from. Comparing it byte for byte (the strings keep the previous
+	// allocations alive, so equal pointers mean equal bytes) lets a repaint that
+	// declared the same hits reuse both instead of mirroring the list again.
+	publishedHits      []ui.Hit
+	publishedFocus     ui.ID
+	publishedTrap      ui.ID
+	publishedInitial   ui.ID
+	publishedEscape    ui.ID
+	publishedRequest   ui.ID
+	publishedText      string
+	publishedSelection TextRange
+	publishedCompose   TextRange
+	publishedComposing bool
+	publishedTextField bool
+	hitsPublished      bool
+	semanticsDirty     bool
+	labelNames         map[ui.ID]string
+	labelNamePeak      int
+	clipRects          [4]ui.Rect
+	clipped            []ui.Rectangle
+	clippedPaths       []ui.Triangle
+	clippedSoft        []ui.Shadow
+	order              []shapeRef // clipped, clippedPaths and clippedSoft interleaved in paint order
+	clippedTexts       []ui.Text
+	clippedImages      []ui.Image
 	// controls draws the window buttons of a custom titlebar, on platforms where
 	// Viva does; it is nil otherwise.
 	controls *windowControls
@@ -796,17 +817,29 @@ func (painter *painter) publish() (platform.Frame, error) {
 		frame.TextLabels = painter.labels
 	}
 
-	painter.syncRegions()
+	regionsUnchanged := painter.hitStructuresUnchanged()
+	if regionsUnchanged {
+		painter.reusedHits++
+	} else {
+		painter.syncRegions()
+	}
 	if err := painter.syncCursor(); err != nil {
 		return platform.Frame{}, err
 	}
 	// The text input comes first: the caret a text field reports to assistive
 	// technology is the one the editor holds now.
 	frame.TextInput = painter.syncTextInput()
-	painter.syncSemantics()
-	if !sameAccessibility(painter.accessibility, painter.lastAccess) {
-		painter.lastAccess = append(painter.lastAccess[:0], painter.accessibility...)
-		frame.Accessibility = painter.accessibility
+	// The semantic payload follows the text input, because the caret a text
+	// field reports to assistive technology is the one the editor holds now.
+	// A repaint that changed neither the hits, the focus, nor the text state
+	// keeps the payload from the previous publish.
+	if !regionsUnchanged || !painter.structuresUnchanged() {
+		painter.syncSemantics()
+		painter.recordHitStructures()
+		if !sameAccessibility(painter.accessibility, painter.lastAccess) {
+			painter.lastAccess = append(painter.lastAccess[:0], painter.accessibility...)
+			frame.Accessibility = painter.accessibility
+		}
 	}
 	// The frame is built; the platform will consume it before the next paint.
 	// Release capacities left behind by a previous, larger page so a one-off
@@ -835,16 +868,19 @@ func (painter *painter) trim() {
 		painter.semantics = semantic.NewWithCapacity("Viva", len(painter.hitScratch)+1)
 		painter.semanticIDs = painter.semanticIDs[:0]
 		painter.semanticChanges = painter.semanticChanges[:0]
+		painter.semanticsDirty = true
 	}
 	painter.canvas.Trim()
 	painter.regions = trimPainterCapacity(painter.regions)
 	painter.shapeIDs = trimPainterCapacity(painter.shapeIDs)
 	painter.labels = trimPainterCapacity(painter.labels)
 	painter.paintedIDs = trimPainterCapacity(painter.paintedIDs)
+	painter.paintedScratch = trimPainterCapacity(painter.paintedScratch)
 	painter.lastTexts = trimPainterCapacity(painter.lastTexts)
 	painter.lastRuns = trimPainterCapacity(painter.lastRuns)
 	painter.lastImages = trimPainterCapacity(painter.lastImages)
 	painter.hitScratch = trimPainterCapacity(painter.hitScratch)
+	painter.publishedHits = trimPainterCapacity(painter.publishedHits)
 	painter.clipped = trimPainterCapacity(painter.clipped)
 	painter.clippedPaths = trimPainterCapacity(painter.clippedPaths)
 	painter.clippedSoft = trimPainterCapacity(painter.clippedSoft)
@@ -1387,20 +1423,22 @@ func (painter *painter) setRectangle(id scene.ID, rectangle ui.Rectangle) {
 // (HitOptions.Autofocus) and was not painted last time. A trapped focus scope
 // keeps its own say: an autofocus outside the active scope cannot take focus.
 func (painter *painter) applyAutofocus() {
-	for _, hit := range painter.canvas.Hits() {
-		if !hit.Autofocus || hit.ID.IsZero() || painter.wasPainted(hit.ID) {
-			continue
+	hits := painter.canvas.Hits()
+	next := painter.paintedScratch[:0]
+	focused := false
+	for index := range hits {
+		hit := &hits[index]
+		if !focused && hit.Autofocus && !hit.ID.IsZero() && !painter.wasPainted(hit.ID) {
+			if painter.router.Focus(input.Target(hit.ID)) {
+				focused = true
+			}
 		}
-		if painter.router.Focus(input.Target(hit.ID)) {
-			break
-		}
-	}
-	painter.paintedIDs = painter.paintedIDs[:0]
-	for _, hit := range painter.canvas.Hits() {
 		if !hit.ID.IsZero() {
-			painter.paintedIDs = append(painter.paintedIDs, hit.ID)
+			next = append(next, hit.ID)
 		}
 	}
+	painter.paintedScratch = next
+	painter.paintedIDs, painter.paintedScratch = next, painter.paintedIDs[:0]
 }
 
 // wasPainted reports whether the previous paint declared a hit with this ID.
@@ -1420,7 +1458,9 @@ func compareRegionLayers(left, right input.Region) int {
 // syncRegions feeds the canvas hit list into the retained input router.
 func (painter *painter) syncRegions() {
 	painter.regions = painter.regions[:0]
-	for _, hit := range painter.canvas.Hits() {
+	hits := painter.canvas.Hits()
+	for index := range hits {
+		hit := &hits[index]
 		if hit.Container {
 			continue // semantic regions are not interaction targets
 		}
@@ -1479,6 +1519,90 @@ func (painter *painter) syncRegions() {
 	}
 }
 
+// hitStructuresUnchanged reports whether the paint produced exactly the input
+// the regions and the semantic tree were last built from, so both can be kept.
+// It compares every field those structures read, plus the focus, scope, escape
+// and text-selection state they carry outside the hit list. A page that only
+// changes colors, or does not change at all, therefore costs no per-hit
+// bookkeeping; any semantic change opens the gate and the full mirror runs.
+func (painter *painter) hitStructuresUnchanged() bool {
+	if !painter.structuresUnchanged() {
+		return false
+	}
+	hits := painter.canvas.Hits()
+	if len(hits) != len(painter.publishedHits) {
+		return false
+	}
+	return sameHits(painter.publishedHits, hits)
+}
+
+// structuresUnchanged is hitStructuresUnchanged without the hit comparison: the
+// focus, trap, escape and text state that also feed the semantic tree. The
+// publish uses it for the second check, after syncTextInput has had its say;
+// the hits cannot change in between, so the expensive memcmp runs once.
+func (painter *painter) structuresUnchanged() bool {
+	if !painter.hitsPublished || painter.semanticsDirty || !painter.pendingFocus.IsZero() {
+		return false
+	}
+	if painter.focused != painter.publishedFocus ||
+		painter.canvas.TrappedFocusScope() != painter.publishedTrap ||
+		painter.canvas.InitialFocus() != painter.publishedInitial ||
+		painter.canvas.EscapeTarget() != painter.publishedEscape ||
+		painter.canvas.FocusRequest() != painter.publishedRequest {
+		return false
+	}
+	if painter.activeText == nil {
+		if painter.publishedTextField {
+			return false
+		}
+	} else if !painter.publishedTextField ||
+		painter.activeText.State.Value != painter.publishedText ||
+		painter.activeText.State.Selection != painter.publishedSelection ||
+		painter.activeText.State.Composition != painter.publishedCompose ||
+		painter.activeText.State.Composing != painter.publishedComposing {
+		return false
+	}
+	return true
+}
+
+// sameHits reports whether two hit lists are field for field identical. It
+// compares the structs as bytes: Go strings are immutable, and the published
+// list keeps the previous string allocations reachable, so a matching pointer
+// cannot name different bytes. Padding bytes can only make the comparison
+// stricter (an unnecessary publish), never more permissive.
+func sameHits(published, current []ui.Hit) bool {
+	if len(published) != len(current) {
+		return false
+	}
+	if len(published) == 0 {
+		return true
+	}
+	size := int(unsafe.Sizeof(ui.Hit{}))
+	left := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(published))), len(published)*size)
+	right := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(current))), len(current)*size)
+	return bytes.Equal(left, right)
+}
+
+// recordHitStructures keeps the state that lets the next repaint skip the
+// region and semantic mirror when nothing that feeds them changed.
+func (painter *painter) recordHitStructures() {
+	painter.publishedHits = append(painter.publishedHits[:0], painter.canvas.Hits()...)
+	painter.publishedFocus = painter.focused
+	painter.publishedTrap = painter.canvas.TrappedFocusScope()
+	painter.publishedInitial = painter.canvas.InitialFocus()
+	painter.publishedEscape = painter.canvas.EscapeTarget()
+	painter.publishedRequest = painter.canvas.FocusRequest()
+	painter.publishedTextField = painter.activeText != nil
+	if painter.activeText != nil {
+		painter.publishedText = painter.activeText.State.Value
+		painter.publishedSelection = painter.activeText.State.Selection
+		painter.publishedCompose = painter.activeText.State.Composition
+		painter.publishedComposing = painter.activeText.State.Composing
+	}
+	painter.hitsPublished = true
+	painter.semanticsDirty = false
+}
+
 // syncSemantics mirrors the canvas hit list into the retained semantic tree
 // and the flattened accessibility payload.
 func (painter *painter) syncSemantics() {
@@ -1487,12 +1611,48 @@ func (painter *painter) syncSemantics() {
 	// are no nodes either; their words name the control they label.
 	hits := painter.hitScratch[:0]
 	labelled := false
+	needsLabelMap := false
+	patchedLabel := false
+	lastAppended := -1
+	// A label declared before its control is held here until that control is
+	// appended. Forms paint a title label, then the field, so this is the common
+	// order; the map fallback is only for labels that never meet their control,
+	// a second label for the same control, or more pending labels than fit.
+	var pending [8]labelPair
+	pendingCount := 0
 	trap := painter.canvas.TrappedFocusScope()
-	for _, hit := range painter.canvas.Hits() {
+	canvasHits := painter.canvas.Hits()
+	for index := range canvasHits {
+		hit := &canvasHits[index]
 		switch {
 		case hit.Block, hit.MovesWindow:
 		case hit.IsLabel:
 			labelled = true
+			switch {
+			case hit.ID.IsZero():
+				// nameFromLabels ignores an anonymous label too.
+			case len(hits) > 0 && lastAppended == index-1 && !patchedLabel && hits[len(hits)-1].ID == hit.ID:
+				// The label follows its control: patch the words in place.
+				hits[len(hits)-1].Label = hit.Label
+				patchedLabel = true
+			case len(hits) > 0 && lastAppended == index-1 && patchedLabel && hits[len(hits)-1].ID == hit.ID:
+				// A second label for one control: the first wins, as before.
+				needsLabelMap = true
+			case pendingCount == len(pending):
+				needsLabelMap = true
+			default:
+				known := false
+				for pendingIndex := 0; pendingIndex < pendingCount; pendingIndex++ {
+					if pending[pendingIndex].id == hit.ID {
+						known = true // keep the first label, as nameFromLabels does
+						break
+					}
+				}
+				if !known {
+					pending[pendingCount] = labelPair{id: hit.ID, words: hit.Label}
+					pendingCount++
+				}
+			}
 		case hit.Backdrop:
 			// A dismiss backdrop is not a control, and it must not be announced
 			// as a window-sized button.
@@ -1500,10 +1660,21 @@ func (painter *painter) syncSemantics() {
 			// A modal makes the page behind it inert to assistive technology,
 			// as Base UI's aria-hidden does, rather than only to the pointer.
 		default:
-			hits = append(hits, hit)
+			current := *hit
+			for pendingIndex := 0; pendingIndex < pendingCount; pendingIndex++ {
+				if pending[pendingIndex].id == current.ID {
+					current.Label = pending[pendingIndex].words
+					pending[pendingIndex] = pending[pendingCount-1]
+					pendingCount--
+					break
+				}
+			}
+			hits = append(hits, current)
+			lastAppended = index
+			patchedLabel = false
 		}
 	}
-	if labelled {
+	if labelled && (needsLabelMap || pendingCount > 0) {
 		painter.nameFromLabels(hits)
 	}
 	painter.hitScratch = hits
@@ -1566,6 +1737,12 @@ func (painter *painter) syncSemantics() {
 		}
 		painter.accessibility = append(painter.accessibility, node)
 	}
+}
+
+// labelPair is a label hit waiting for the control it names.
+type labelPair struct {
+	id    ui.ID
+	words string
 }
 
 // nameFromLabels gives each control that has a label hit the words of the first
