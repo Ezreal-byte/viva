@@ -1,0 +1,95 @@
+name: release
+
+# Publishes the Draft Release the releasing agent created for a version tag.
+# The agent owns the tag and the notes; this workflow owns going public: the full
+# gate from ci.yml must pass first, then the draft's title, body and empty asset
+# list are checked and the draft is flipped to published. The process this
+# implements is docs/releases.md; re-running a single tag is
+#   gh workflow run release.yml -f tag=v<version>
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Annotated tag whose draft Release should be published
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # The same gate main runs: the tag commit is tested before anything goes public.
+  gate:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+
+      - name: the tag is annotated and points into main
+        run: |
+          case "$TAG" in
+            v[0-9]*) ;;
+            *) echo "not a version tag: $TAG" >&2; exit 1 ;;
+          esac
+          test "$(git cat-file -t "refs/tags/$TAG")" = tag || {
+            echo "$TAG is not an annotated tag" >&2; exit 1; }
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor HEAD FETCH_HEAD || {
+            echo "$TAG does not point into main" >&2; exit 1; }
+
+      - name: wait for the agent's draft Release
+        id: draft
+        run: |
+          release=""
+          for _ in $(seq 1 40); do
+            if release=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,title,assets,body 2>/dev/null); then
+              break
+            fi
+            release=""
+            sleep 15
+          done
+          test -n "$release" || {
+            echo "no Release for $TAG after 10 minutes; the agent creates the draft first:" >&2
+            echo "  gh release create $TAG --draft --title \"Viva $TAG\" --notes-file <notes>" >&2
+            exit 1; }
+          if ! jq -e '.isDraft' <<<"$release" >/dev/null; then
+            echo "$TAG is already published; nothing to do" >&2
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test "$(jq -r '.title' <<<"$release")" = "Viva $TAG" || {
+            echo "release title must be 'Viva $TAG'" >&2; exit 1; }
+          test "$(jq '.assets | length' <<<"$release")" = 0 || {
+            echo "release has assets; Viva publishes none" >&2; exit 1; }
+          test -n "$(jq -r '.body' <<<"$release")" || {
+            echo "release body is empty" >&2; exit 1; }
+          echo "draft=true" >> "$GITHUB_OUTPUT"
+
+      - name: publish
+        if: steps.draft.outputs.draft == 'true'
+        run: |
+          prerelease=""
+          case "$TAG" in *-*) prerelease="--prerelease" ;; esac
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false $prerelease
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json url,isDraft,isPrerelease,title,assets \
+            --jq '"published \(.url) draft=\(.isDraft) prerelease=\(.isPrerelease)"' \
+            | tee -a "$GITHUB_STEP_SUMMARY"

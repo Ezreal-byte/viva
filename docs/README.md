@@ -24,6 +24,8 @@ can run its programs.
   do.
 - [issue-commands.md](issue-commands.md) — the `/claim`, `/unclaim` and `/close`
   commands on issues, and the optional bot identity.
+- [releases.md](releases.md) — who writes the notes, who publishes the Release,
+  and what the tag-triggered workflow does and cannot check.
 - [windows-text-editing.md](windows-text-editing.md) — what the Windows text
   field overlay owns, how its texture is bounded, and what still needs a real
   window.
