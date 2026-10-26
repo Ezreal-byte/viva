@@ -7,8 +7,41 @@ import (
 
 	"github.com/vivaui/viva/internal/input"
 	"github.com/vivaui/viva/internal/platform"
+	"github.com/vivaui/viva/text"
 	"github.com/vivaui/viva/ui"
 )
+
+func TestEditingPriorityBelongsToTheBackend(t *testing.T) {
+	editor := text.NewEditor("value")
+	calls := 0
+	driver, err := NewDriver(Config{
+		Width: 320, Height: 180,
+		Paint: func(canvas *ui.Canvas, _ ui.Size) {
+			canvas.HitWithOptions(ui.Item(1), ui.Rect{X: 10, Y: 10, Width: 200, Height: 32}, "Field", ui.HitOptions{Role: ui.RoleTextField})
+		},
+		TextInput:  func(TextInputContext) *TextInput { return &TextInput{Editor: editor} },
+		OnShortcut: func(ui.KeyEvent) ui.EventResult { calls++; return ui.EventResult{Handled: true} },
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer driver.Close()
+	if err := driver.Click(20, 20); err != nil {
+		t.Fatal(err)
+	}
+	if handled, err := driver.ShortcutChord(ui.ModifierControl, 'a'); !handled || err != nil {
+		t.Fatalf("select all: %v, %v", handled, err)
+	}
+	if calls != 0 || editor.Selection() != (text.Range{End: 5}) {
+		t.Fatal("application stole the driver's editing shortcut")
+	}
+	// A native backend that offers a chord has made its own routing decision.
+	// The shared painter must not discard it using another platform's key map.
+	_, handled, err := driver.painter.shortcut(platform.KeyEvent{Modifiers: input.ModifierControl, Text: "a"})
+	if !handled || err != nil || calls != 1 {
+		t.Fatalf("backend callback suppressed: handled=%v calls=%d err=%v", handled, calls, err)
+	}
+}
 
 func TestDriverOffersGlobalShortcutsBeforeTerminalAndTextPaths(t *testing.T) {
 	var shortcuts []ui.KeyEvent

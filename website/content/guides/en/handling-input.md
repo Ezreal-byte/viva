@@ -184,7 +184,7 @@ To move focus yourself, return `Focus` (and `FocusVisible`) in the `EventResult`
 
 ## Shortcuts
 
-`OnShortcut` receives Control- or Command-modified printable chords before the native text system sees them. Return `Handled` only for chords your application owns: an unhandled chord continues through normal text editing, so Command-C still copies inside a text field. The example compares `Modifiers` against a `primary()` helper because the conventional key is Command on macOS and Control elsewhere.
+`OnShortcut` receives Control- or Command-modified printable chords before the native text system sees them. Return `Handled` only for chords your application owns: an unhandled chord continues through normal text editing, so Command-C still copies inside a text field. On Windows, a focused ordinary text field claims the standard editing and clipboard chords (copy, cut, paste, select all, undo, redo, Home/End, word and document navigation) before `OnShortcut`; terminals and `Placed` editors do not. The example compares `Modifiers` against a `primary()` helper because the conventional key is Command on macOS and Control elsewhere.
 
 ## Scrolling
 

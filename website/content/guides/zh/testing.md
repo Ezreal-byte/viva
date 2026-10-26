@@ -65,7 +65,7 @@ func TestClickCounts(t *testing.T) {
 }
 ```
 
-后台 goroutine 只能通过 `Config.Invalidator` 触及 driver，和触及窗口的方式完全一样，由 `Pump` 应用唤醒。`examples/guides/background/main_test.go` 是一个用这种方式等待工作 goroutine 结果的测试。driver 模拟文本系统的编辑命令以及 Command-A、C、X、V 快捷键，但不模拟输入法组合输入。
+后台 goroutine 只能通过 `Config.Invalidator` 触及 driver，和触及窗口的方式完全一样，由 `Pump` 应用唤醒。`examples/guides/background/main_test.go` 是一个用这种方式等待工作 goroutine 结果的测试。driver 模拟文本系统的编辑命令（Home/End、按词和按文档移动、按词删除、撤销与重做）以及 Command-A、C、X、V 快捷键，并且像 Windows 一样，把获得焦点的普通文本框的编辑组合交给它先处理，再交给 `OnShortcut`，但不模拟输入法组合输入。
 
 ## 行协议
 

@@ -80,6 +80,10 @@ type windowState struct {
 	clicks                                 input.ClickCounter
 	cursor                                 atomic.Uintptr
 	textState                              platform.TextState
+	textScroll                             float32
+	textMask                               string
+	textDragging                           bool
+	textDragAnchor                         int
 	textInput                              platform.TextInput
 	textEnabled, caretVisible, focused     bool
 	caretTimer                             uintptr
@@ -454,6 +458,9 @@ func windowProc(window, kind, first, second uintptr) (result uintptr) {
 			state.fail(err)
 		}
 		return 0
+	case wmCaptureChanged:
+		state.textDragging = false
+		return 0
 	case wmSetCursor:
 		// Over a resize edge of a custom-titlebar window the system's resize
 		// cursor is right, not the application's.
@@ -642,6 +649,7 @@ func windowProc(window, kind, first, second uintptr) (result uintptr) {
 		state.captionPress.end()
 		if kind == wmKillFocus {
 			state.focused = false
+			state.textDragging = false
 			state.stopCaretTimer()
 			state.focusLost()
 		}
@@ -655,6 +663,9 @@ func windowProc(window, kind, first, second uintptr) (result uintptr) {
 			return 0
 		}
 	case wmKeyDown, wmSysKeyDown:
+		if state.textEnabled && state.imeComposing {
+			break // IME candidate keys must not submit or dismiss the surrounding form.
+		}
 		modifiers := modifiers()
 		wanted := state.wantsKeyReleases()
 		if wanted && !state.imeComposing {

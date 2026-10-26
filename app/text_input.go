@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/vivaui/viva/internal/platform"
 	"github.com/vivaui/viva/text"
 	"github.com/vivaui/viva/ui"
 )
@@ -13,10 +14,12 @@ type TextRange struct {
 
 // TextState is the complete application-owned native editor state.
 type TextState struct {
-	Value       string
-	Selection   TextRange
-	Composition TextRange
-	Composing   bool
+	// SelectionReversed preserves the moving end of a backwards selection.
+	SelectionReversed bool
+	Value             string
+	Selection         TextRange
+	Composition       TextRange
+	Composing         bool
 	// Redraw asks for a frame after the event although the editor looks the same,
 	// because the application changed something else in response. A terminal
 	// uses it when typed text appears ahead of the server's echo; ordinary
@@ -57,6 +60,21 @@ const (
 	TextInsertLineBreak
 	TextUndo
 	TextRedo
+	TextSelectAll
+	TextMoveLineStart
+	TextMoveLineEnd
+	TextMoveLineStartAndModifySelection
+	TextMoveLineEndAndModifySelection
+	TextMoveDocumentStart
+	TextMoveDocumentEnd
+	TextMoveDocumentStartAndModifySelection
+	TextMoveDocumentEndAndModifySelection
+	TextMoveWordLeft
+	TextMoveWordRight
+	TextMoveWordLeftAndModifySelection
+	TextMoveWordRightAndModifySelection
+	TextDeleteWordBackward
+	TextDeleteWordForward
 )
 
 // TextEvent contains rune-indexed selection and replacement ranges.
@@ -140,53 +158,27 @@ func TextStateOf(editor *text.Editor) TextState {
 	selection := editor.Selection()
 	composition, composing := editor.Composition()
 	return TextState{
-		Value:       editor.String(),
-		Selection:   appTextRange(selection),
-		Composition: appTextRange(composition),
-		Composing:   composing,
+		Value:             editor.String(),
+		Selection:         appTextRange(selection),
+		SelectionReversed: selection.Start != selection.End && editor.Caret() == selection.Start,
+		Composition:       appTextRange(composition),
+		Composing:         composing,
 	}
 }
 
-// Apply routes one native text event into editor.
+// Apply routes one native text event into editor. The event kinds and commands are
+// the platform's, value for value, so the one switch that maps them lives in
+// internal/platform rather than in a second copy here.
 func (event TextEvent) Apply(editor *text.Editor) {
-	if event.HasReplacement {
-		editor.SetSelection(platformTextRange(event.Replacement))
-	}
-	switch event.Kind {
-	case TextInsert:
-		editor.Insert(event.Text)
-	case TextPaste:
-		editor.Paste(event.Text)
-	case TextSetMarked:
-		editor.SetMarkedText(event.Text, platformTextRange(event.MarkedSelection))
-	case TextUnmark:
-		editor.Unmark()
-	case TextSetSelection:
-		editor.SetSelection(platformTextRange(event.Selection))
-	case TextCommandEvent:
-		switch event.Command {
-		case TextDeleteBackward:
-			editor.DeleteBackward()
-		case TextDeleteForward:
-			editor.DeleteForward()
-		case TextMoveLeft:
-			editor.MoveLeft(false)
-		case TextMoveRight:
-			editor.MoveRight(false)
-		case TextMoveLeftAndModifySelection:
-			editor.MoveLeft(true)
-		case TextMoveRightAndModifySelection:
-			editor.MoveRight(true)
-		case TextInsertNewline, TextInsertLineBreak:
-			editor.Insert("\n")
-		case TextInsertTab:
-			editor.Insert("\t")
-		case TextUndo:
-			editor.Undo()
-		case TextRedo:
-			editor.Redo()
-		}
-	}
+	platform.TextEvent{
+		Kind:            platform.TextEventKind(event.Kind),
+		Text:            event.Text,
+		Selection:       platformTextRange(event.Selection),
+		MarkedSelection: platformTextRange(event.MarkedSelection),
+		Replacement:     platformTextRange(event.Replacement),
+		HasReplacement:  event.HasReplacement,
+		Command:         platform.TextCommand(event.Command),
+	}.Apply(editor)
 }
 
 func platformTextRange(value TextRange) text.Range {

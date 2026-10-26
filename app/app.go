@@ -104,7 +104,10 @@ type Config struct {
 	// OnShortcut receives Control- or Meta-modified printable chords before
 	// the native text system. Return Handled only for chords the application
 	// owns; an unhandled chord continues through normal text and IME handling.
-	// Named keys remain OnKey events. This callback runs on the window thread.
+	// Named keys remain OnKey events. On Windows an ordinary (non-terminal,
+	// non-Placed) text field that has focus takes the standard editing and
+	// clipboard chords first, so the application does not see them there.
+	// This callback runs on the window thread.
 	OnShortcut func(event ui.KeyEvent) ui.EventResult
 	// OnScroll receives normalized pixel deltas and the hovered hit target.
 	// Handled suppresses the window's default canvas scroll offset.

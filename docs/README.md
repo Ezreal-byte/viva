@@ -24,6 +24,9 @@ can run its programs.
   do.
 - [issue-commands.md](issue-commands.md) — the `/claim`, `/unclaim` and `/close`
   commands on issues, and the optional bot identity.
+- [windows-text-editing.md](windows-text-editing.md) — what the Windows text
+  field overlay owns, how its texture is bounded, and what still needs a real
+  window.
 - [benchmarks/](benchmarks/) — every measurement, with the machine, the build
   mode, and the method recorded alongside the numbers.
 - [benchmarks/2026-10-25-performance-audit-darwin-arm64.md](benchmarks/2026-10-25-performance-audit-darwin-arm64.md)

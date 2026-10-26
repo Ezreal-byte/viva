@@ -33,7 +33,7 @@ var (
 | --- | --- |
 | `OnPointer` | 按下、移动、抬起、离开事件，附带目标和逻辑坐标。一次按下会在对应的移动和抬起事件中保持原来的目标。 |
 | `OnKey` | 焦点目标的键盘事件。 |
-| `OnShortcut` | 带 Control 或 Command 的可打印按键组合，早于原生文本系统收到。 |
+| `OnShortcut` | 带 Control 或 Command 的可打印按键组合，早于原生文本系统收到。Windows 上获得焦点的普通文本框会先拿走标准编辑组合。 |
 | `OnScroll` | 像素增量，附带窗口位置、修饰键和目标。 |
 
 `ui.EventResult` 说明应用对事件做了什么。`Handled` 取消该事件的内置行为，`Repaint` 请求一次同步绘制，`Focus`、`Blur` 和 `FocusVisible` 用来移动焦点。事件没有改变任何东西时，返回零值就不会重绘。

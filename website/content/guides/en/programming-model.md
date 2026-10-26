@@ -33,7 +33,7 @@ A button is handled where it is declared: `f.Button(save, "Save").Clicked()` is 
 | --- | --- |
 | `OnPointer` | Down, move, up and exit events with the target and logical coordinates. A press keeps its original target through the matching move and up events. |
 | `OnKey` | Keyboard events for the focused target. |
-| `OnShortcut` | Control- or Command-modified printable chords, before the native text system sees them. |
+| `OnShortcut` | Control- or Command-modified printable chords, before the native text system sees them. A focused ordinary text field on Windows takes the standard editing chords first. |
 | `OnScroll` | Pixel deltas with the window position, modifiers and target. |
 
 A `ui.EventResult` says what the application did with the event. `Handled` suppresses the built-in behavior for that event, `Repaint` asks for one synchronous paint, and `Focus`, `Blur` and `FocusVisible` move focus. Returning the zero value from an event that changed nothing performs no repaint.

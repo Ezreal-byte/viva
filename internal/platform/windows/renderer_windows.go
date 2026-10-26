@@ -480,7 +480,12 @@ func (renderer *renderer) draw(width, height int, scale float32) error {
 				if label.label.Width <= 0 || label.label.Height <= 0 || label.label.Value == "" && len(label.label.Bitmap) == 0 {
 					continue
 				}
-				if label.view == 0 || label.scale != scale {
+				skip, windowWidth, shown := label.window(scale)
+				if !shown {
+					label.close()
+					continue
+				}
+				if label.view == 0 || label.scale != scale || label.skip != skip || skip > 0 && label.width != windowWidth {
 					if err := renderer.rasterize(label, scale); err != nil {
 						return fmt.Errorf("rasterize label %d: %w", index, err)
 					}

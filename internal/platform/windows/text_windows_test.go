@@ -55,7 +55,7 @@ func rasterizeProportional(t testing.TB, label platform.TextLabel, scale float32
 	if err != nil {
 		t.Fatal(err)
 	}
-	pixels, lcd, err = rasterizer.rasterize(label, scale, width, height, allowLCD)
+	pixels, lcd, err = rasterizer.rasterize(label, scale, width, height, allowLCD, 0)
 	if err != nil {
 		rasterizer.close()
 		t.Fatal(err)
