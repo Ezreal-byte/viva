@@ -111,6 +111,8 @@ func (r *recorder) run(name string, arguments ...string) (string, error) {
 		return `{"issues":[{"message":"The binary is not signed with a valid Developer ID certificate."}]}`, nil
 	case strings.Contains(line, "find-identity"):
 		return "  1) 0123456789ABCDEF0123456789ABCDEF01234567 \"Developer ID Application: Example (TEAM1234)\"\n     1 valid identities found", nil
+	case strings.Contains(line, "list-keychains") && !strings.Contains(line, " -s "):
+		return "    \"/Users/example/Library/Keychains/login.keychain-db\"\n", nil
 	}
 	return "", nil
 }
@@ -281,10 +283,8 @@ func TestACertificateIsImportedIntoAKeychainOfItsOwnAndRemoved(t *testing.T) {
 	if identity != "0123456789ABCDEF0123456789ABCDEF01234567" || !strings.HasSuffix(keychain, "viva-signing.keychain-db") {
 		t.Fatalf("identity %q, keychain %q", identity, keychain)
 	}
-	for _, command := range r.commands {
-		if strings.Contains(command, "list-keychains") || strings.Contains(command, "default-keychain") {
-			t.Errorf("the user's keychains were changed: %s", command)
-		}
+	if r.index("security list-keychains -d user -s "+keychain) < 0 {
+		t.Errorf("the keychain was not added to the search list:\n%s", strings.Join(r.commands, "\n"))
 	}
 	if r.index("security import ") < 0 || r.index("security set-key-partition-list ") < 0 {
 		t.Fatalf("commands:\n%s", strings.Join(r.commands, "\n"))
@@ -292,6 +292,9 @@ func TestACertificateIsImportedIntoAKeychainOfItsOwnAndRemoved(t *testing.T) {
 	cleanup()
 	if r.index("security delete-keychain ") < 0 {
 		t.Error("the keychain was left behind")
+	}
+	if r.index("security list-keychains -d user -s /Users/example/Library/Keychains/login.keychain-db") < 0 {
+		t.Errorf("the search list was not restored:\n%s", strings.Join(r.commands, "\n"))
 	}
 	if _, err := os.Stat(filepath.Dir(keychain)); !os.IsNotExist(err) {
 		t.Error("the scratch directory was left behind")

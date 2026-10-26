@@ -140,8 +140,10 @@ func notaryCredentials(environment func(string) string) []string {
 }
 
 // importCertificate puts a base64 .p12 into a keychain of its own, in a scratch
-// directory, and names the identity in it. The user's keychains are not touched:
-// codesign is pointed at this one. cleanup deletes it.
+// directory, and names the identity in it. The keychain is added to the user's
+// search list while the build runs, because codesign resolves an identity there
+// and only uses --keychain to reach its key; cleanup puts the old list back and
+// deletes the keychain.
 func importCertificate(run toolRunner, encoded, password string) (keychain, identity string, cleanup func(), err error) {
 	cleanup = func() {}
 	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
@@ -182,6 +184,26 @@ func importCertificate(run toolRunner, encoded, password string) (keychain, iden
 		}
 	}
 	_ = os.Remove(file)
+	// codesign looks the identity up in the keychain search list, so the scratch
+	// keychain has to be in it for the build; cleanup restores the list before it
+	// deletes the keychain.
+	before, err := run("security", "list-keychains", "-d", "user")
+	if err != nil {
+		cleanup()
+		return "", "", func() {}, fmt.Errorf("reading the keychain search list: %w", err)
+	}
+	listed := keychainPaths(before)
+	if _, err := run("security", append([]string{"list-keychains", "-d", "user", "-s", keychain}, listed...)...); err != nil {
+		cleanup()
+		return "", "", func() {}, fmt.Errorf("adding the keychain to the search list: %w", err)
+	}
+	cleanup = func() {
+		if len(listed) > 0 {
+			_, _ = run("security", append([]string{"list-keychains", "-d", "user", "-s"}, listed...)...)
+		}
+		_, _ = run("security", "delete-keychain", keychain)
+		_ = os.RemoveAll(dir)
+	}
 	listing, err := run("security", "find-identity", "-v", "-p", "codesigning", keychain)
 	if err != nil {
 		cleanup()
@@ -197,6 +219,18 @@ func importCertificate(run toolRunner, encoded, password string) (keychain, iden
 		return "", "", func() {}, errors.New(reason)
 	}
 	return keychain, identity, cleanup, nil
+}
+
+// keychainPaths pulls the quoted paths out of a `security list-keychains` listing.
+func keychainPaths(listing string) []string {
+	var paths []string
+	for _, line := range strings.Split(listing, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) >= 2 && line[0] == '"' && line[len(line)-1] == '"' {
+			paths = append(paths, line[1:len(line)-1])
+		}
+	}
+	return paths
 }
 
 var identityLine = regexp.MustCompile(`^\s*\d+\)\s+([0-9A-Fa-f]{40})\s+"`)
