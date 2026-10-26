@@ -37,5 +37,8 @@ jobs:
       - name: Windows IME lifecycle
         if: runner.os == 'Windows'
         run: go test ./internal/platform/windows -run 'TestComposition|TestDynamicTextInput' -count=1
+      - name: Windows console key records
+        if: runner.os == 'Windows'
+        run: go test ./internal/platform/windows -run 'TestTerminalControlKeysCarryConsoleCharacters|TestConsoleKeyCharacterTranslatesControlChords|TestAltGrLeavesPrintableCharactersToText|TestCharCompletesTheConsoleRecord' -count=1
       - name: Native static checks
         run: go vet ./app/... ./internal/platform/...
