@@ -2115,6 +2115,7 @@ static void viva_encode_scene(
     // outside the clip is never painted. The scale maps logical pixels to the
     // target's.
     CGFloat targetScale = viewport.width > 0 ? (CGFloat)targetWidth / viewport.width : 1.0;
+    float sceneViewport[4] = {(float)viewport.width, (float)viewport.height, (float)(1.0 / targetScale), 0};
     MTLScissorRect fullTarget = {0, 0, targetWidth, targetHeight};
     for (NSUInteger index = 0; index < commandCount; index++) {
         viva_composite_command command = commands[index];
@@ -2142,7 +2143,7 @@ static void viva_encode_scene(
             }
             [encoder setRenderPipelineState:rectanglePipeline];
             [encoder setVertexBuffer:rectangleBuffer offset:0 atIndex:0];
-            [encoder setVertexBytes:&viewportSize length:sizeof(viewportSize) atIndex:1];
+            [encoder setVertexBytes:&sceneViewport length:sizeof(sceneViewport) atIndex:1];
             [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                         vertexStart:0
                         vertexCount:6

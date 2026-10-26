@@ -24,11 +24,24 @@ struct VertexOutput {
     uint triangleMask [[flat]];
 };
 
+static float cross2(float2 a, float2 b) { return a.x*b.y - a.y*b.x; }
+// Expand silhouette edges only; shared edges keep their supporting line.
+static float2 fringeVertex(float2 previous, float2 position, float2 next, uint previousEdge, uint nextEdge, uint mask, float pixelSize) {
+    float2 before = position - previous, after = next - position;
+    float area = cross2(before, after);
+    if (abs(area) < 1e-8 || mask == 0u) return position;
+    float orientation = area > 0.0 ? 1.0 : -1.0;
+    float h = 0.5 * pixelSize * orientation;
+    float first = (mask & previousEdge) != 0u ? -h * length(before) : 0.0;
+    float second = (mask & nextEdge) != 0u ? -h * length(after) : 0.0;
+    return position + (first * after - second * before) / area;
+}
+
 vertex VertexOutput viva_rectangle_vertex(
     uint vertexID [[vertex_id]],
     uint instanceID [[instance_id]],
     const device RectangleInstance *instances [[buffer(0)]],
-    constant float2 &viewportSize [[buffer(1)]]) {
+    constant float4 &viewportSize [[buffer(1)]]) {
     constexpr float2 corners[6] = {
         float2(0.0, 0.0),
         float2(1.0, 0.0),
@@ -60,8 +73,18 @@ vertex VertexOutput viva_rectangle_vertex(
             instance.bounds.zw,
             instance.style.xz,
         };
-        pixel = vertexID < 3 ? points[vertexID] : points[0];
-        color = vertexID == 1 ? instance.shade1 : (vertexID == 2 ? instance.shade2 : instance.color);
+        uint index = vertexID < 3 ? vertexID : 0u;
+        uint edgeMask = uint(instance.style.w + 0.5) - 1u;
+        uint previous = (index + 2u) % 3u;
+        pixel = fringeVertex(points[previous], points[index], points[(index + 1u) % 3u], 1u << previous, 1u << index, edgeMask, viewportSize.z);
+        // Extrapolate corner colors so interpolation stays on the original mesh.
+        float2 ab = points[1] - points[0], ac = points[2] - points[0];
+        float area = cross2(ab, ac);
+        if (abs(area) >= 1e-8) {
+            float2 delta = pixel - points[0];
+            color = instance.color + cross2(delta, ac) / area * (instance.shade1 - instance.color)
+                + cross2(ab, delta) / area * (instance.shade2 - instance.color);
+        }
         localPixel = 0.0;
         size = 0.0;
         radius = 0.0;
