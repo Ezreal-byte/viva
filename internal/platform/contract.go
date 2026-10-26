@@ -576,6 +576,11 @@ type CloseRequestHandler func(allow func())
 // deliberately supports one focused editor while the multi-view runtime API is
 // still being designed.
 type TextInput struct {
+	// Target identifies the focused Canvas hit. Geometry can change while an
+	// input method is composing; a different target must end that composition
+	// even when both fields have identical text and presentation. Standalone
+	// platform clients may leave it zero when they have only one editor.
+	Target   ui.ID
 	X        float32
 	Y        float32
 	Width    float32

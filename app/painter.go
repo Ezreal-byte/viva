@@ -1048,7 +1048,8 @@ func (painter *painter) syncTextInput() platform.TextInputUpdate {
 		tint = context.TextColor
 	}
 	native := platform.TextInput{
-		X: bounds.X, Y: bounds.Y,
+		Target: context.ID,
+		X:      bounds.X, Y: bounds.Y,
 		Width: bounds.Width, Height: bounds.Height,
 		FontSize: fontSize, Layer: painter.platformLayer(context.Layer), Multiline: context.Multiline, Secure: context.Secure, Terminal: context.Terminal,
 		AltSendsEscape: input.AltSendsEscape, KeyReleases: context.Terminal && input.KeyReleases, MonoFace: input.MonoFace,
@@ -1128,7 +1129,7 @@ func (painter *painter) applyTextEvent(event platform.TextEvent) (platform.TextS
 }
 
 func samePlatformTextInput(left, right platform.TextInput) bool {
-	return left.X == right.X && left.Y == right.Y && left.Width == right.Width && left.Height == right.Height &&
+	return left.Target == right.Target && left.X == right.X && left.Y == right.Y && left.Width == right.Width && left.Height == right.Height &&
 		left.FontSize == right.FontSize && left.Layer == right.Layer && left.Multiline == right.Multiline && left.Secure == right.Secure && left.Terminal == right.Terminal && left.MonoFace == right.MonoFace &&
 		left.AltSendsEscape == right.AltSendsEscape && left.KeyReleases == right.KeyReleases &&
 		left.Placed == right.Placed && left.CaretX == right.CaretX && left.CaretY == right.CaretY &&
