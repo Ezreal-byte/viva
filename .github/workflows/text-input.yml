@@ -39,3 +39,6 @@ jobs:
         run: go test ./internal/platform/windows -run 'TestComposition|TestDynamicTextInput' -count=1
       - name: Native static checks
         run: go vet ./app/... ./internal/platform/...
+      - name: Windows fixed-pitch text
+        if: runner.os == 'Windows'
+        run: go test ./internal/platform/windows -run '^TestFixedPitchTrailingSpacesDoNotStretchText$' -v -count=1
