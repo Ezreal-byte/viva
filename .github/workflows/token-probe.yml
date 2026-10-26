@@ -1,6 +1,7 @@
 name: token probe
 
-on: workflow_dispatch:
+on:
+  workflow_dispatch:
 
 permissions:
   contents: write
