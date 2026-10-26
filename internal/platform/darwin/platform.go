@@ -183,7 +183,7 @@ func (state *runState) textInputAlreadyUpdated(input *TextInput) bool {
 }
 
 func sameTextInputPresentation(left, right TextInput) bool {
-	return left.X == right.X && left.Y == right.Y &&
+	return left.Target == right.Target && left.X == right.X && left.Y == right.Y &&
 		left.Width == right.Width && left.Height == right.Height &&
 		left.FontSize == right.FontSize && left.Layer == right.Layer && left.Multiline == right.Multiline && left.Secure == right.Secure &&
 		left.Terminal == right.Terminal && left.MonoFace == right.MonoFace && left.AltSendsEscape == right.AltSendsEscape && left.KeyReleases == right.KeyReleases && left.Color == right.Color &&

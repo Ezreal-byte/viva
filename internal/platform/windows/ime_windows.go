@@ -355,10 +355,19 @@ func (state *windowState) applyTextInputUpdate(update platform.TextInputUpdate) 
 		return false, false, err
 	}
 	wasEnabled := state.textEnabled
-	if wasEnabled {
+	// A placed/multiline editor updates its caret after every preedit. The
+	// text event has already installed the acknowledged state before redraw;
+	// moving that same editor must not send CPS_CANCEL to the input method.
+	replaced := update.Input == nil || state.textInput.Target != update.Input.Target ||
+		state.textInput.Multiline != update.Input.Multiline || state.textInput.Secure != update.Input.Secure ||
+		state.textInput.Terminal != update.Input.Terminal || state.textInput.Placed != update.Input.Placed ||
+		state.textState != update.Input.State.WithoutRedraw()
+	if wasEnabled && replaced {
 		state.cancelComposition()
 	}
-	state.pendingHighSurrogate = 0
+	if replaced {
+		state.pendingHighSurrogate = 0
+	}
 	if update.Input == nil {
 		state.textDragging = false
 		state.textScroll = 0

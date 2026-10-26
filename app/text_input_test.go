@@ -161,7 +161,7 @@ func TestEditorBackedTextInputMirrorsEditorAndAppliesNativeEvents(t *testing.T) 
 			enabled = frame.TextInput.Input
 		}
 	}
-	if enabled == nil || enabled.State.Value != "Go" {
+	if enabled == nil || enabled.State.Value != "Go" || enabled.Target != ui.Item(field) {
 		t.Fatalf("native input was not mirrored from the editor: %+v", enabled)
 	}
 	if context.Layer != fieldLayer || enabled.Layer != fieldLayer {
@@ -177,6 +177,36 @@ func TestEditorBackedTextInputMirrorsEditorAndAppliesNativeEvents(t *testing.T) 
 	}
 	if state.Selection != (text.Range{Start: 3, End: 3}) {
 		t.Fatalf("caret = %+v, want it after the inserted rune", state.Selection)
+	}
+}
+
+func TestTextInputTargetChangeWithIdenticalPresentation(t *testing.T) {
+	var canvas ui.Canvas
+	editor := text.NewEditor("same")
+	input := &TextInput{Editor: editor, Bounds: ui.Rect{Width: 100, Height: 24}, FontSize: 13}
+	painter := newTestPainter(t, &canvas, Config{
+		Title: "targets", Width: 200, Height: 100,
+		Paint: func(c *ui.Canvas, _ ui.Size) {
+			for i := 1; i <= 2; i++ {
+				c.HitWithOptions(ui.Item(i), ui.Rect{X: float32((i - 1) * 100), Width: 100, Height: 24}, "field", ui.HitOptions{Role: ui.RoleTextField})
+			}
+		},
+		TextInput: func(TextInputContext) *TextInput { return input },
+	})
+	for i := 1; i <= 2; i++ {
+		changed := false
+		for _, kind := range []platform.PointerEventKind{platform.PointerMove, platform.PointerDown, platform.PointerUp} {
+			frame, err := painter.pointer(platform.PointerEvent{Kind: kind, X: float32((i-1)*100 + 10), Y: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if frame.TextInput.Changed && frame.TextInput.Input != nil {
+				changed = frame.TextInput.Input.Target == ui.Item(i)
+			}
+		}
+		if !changed {
+			t.Fatalf("target %d was not sent to the native editor", i)
+		}
 	}
 }
 

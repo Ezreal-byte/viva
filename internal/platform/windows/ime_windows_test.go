@@ -2,6 +2,7 @@ package windows
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"unicode/utf8"
 
@@ -233,6 +234,59 @@ func TestDynamicTextInputSwitchClearsComposition(t *testing.T) {
 	}
 }
 
+func TestCompositionSurvivesCaretAndLayoutUpdates(t *testing.T) {
+	for _, scale := range []float32{1, 1.25, 1.5, 1.75, 2, 2.5, 3} {
+		t.Run(fmt.Sprint(scale), func(t *testing.T) {
+			state := dynamicTextState(0, 0)
+			state.scale = scale
+			field := testTextInput("", 0)
+			field.Placed, field.Multiline = true, true
+			field.CaretHeight = 20
+			editor := text.NewEditor("")
+			field.OnEvent = func(event platform.TextEvent) (platform.TextState, error) {
+				event.Apply(editor)
+				composition, composing := editor.Composition()
+				return platform.TextState{Value: editor.String(), Selection: editor.Selection(), Composition: composition, Composing: composing}, nil
+			}
+			if _, _, err := state.prepareFrame(platform.Frame{TextInput: platform.TextInputUpdate{Changed: true, Input: &field}}, false); err != nil {
+				t.Fatal(err)
+			}
+			state.config.OnRedraw = func() (platform.Frame, error) {
+				next := state.textInput
+				next.CaretX += 10
+				next.CaretY += 20 // a wrapped line also changes the candidate anchor
+				next.Height += 20
+				return platform.Frame{TextInput: platform.TextInputUpdate{Changed: true, Input: &next}}, nil
+			}
+			for _, value := range []string{"n", "ni", "nih", "nihao"} {
+				state.imeComposing, state.imeHasTarget = true, true
+				state.imeTarget = text.Range{End: 1}
+				frame, changed, err := state.textEventFrame(platform.TextEvent{Kind: platform.TextSetMarked, Text: value, MarkedSelection: text.Range{Start: len(value), End: len(value)}})
+				if err != nil || !changed {
+					t.Fatalf("preedit: changed=%v err=%v", changed, err)
+				}
+				if _, _, err := state.prepareFrame(frame, true); err != nil {
+					t.Fatal(err)
+				}
+				if !state.imeComposing || !state.imeHasTarget || !state.textState.Composing || state.textState.Value != value {
+					t.Fatalf("caret update cancelled %q: ime=%v target=%v text=%+v", value, state.imeComposing, state.imeHasTarget, state.textState)
+				}
+			}
+			state.imeComposing, state.imeHasTarget = false, false
+			frame, _, err := state.textEventFrame(platform.TextEvent{Kind: platform.TextInsert, Text: "你好"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := state.prepareFrame(frame, true); err != nil {
+				t.Fatal(err)
+			}
+			if state.textState.Value != "你好" || state.textState.Composing {
+				t.Fatalf("commit = %+v", state.textState)
+			}
+		})
+	}
+}
+
 func TestTextEventRefreshesCanvasOnceAfterStateUpdate(t *testing.T) {
 	handlerCalls, redrawCalls := 0, 0
 	state := dynamicTextState(0, 0)
@@ -267,6 +321,58 @@ func TestTextEventRefreshesCanvasOnceAfterStateUpdate(t *testing.T) {
 	}
 	if redrawCalls != 1 {
 		t.Fatal("failed text update triggered Canvas redraw")
+	}
+}
+
+func TestCompositionUpdateLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		update   func(*platform.TextInput) *platform.TextInput
+		preserve bool
+	}{
+		{"move", func(next *platform.TextInput) *platform.TextInput { next.X++; next.CaretY++; return next }, true},
+		{"style", func(next *platform.TextInput) *platform.TextInput { next.FontSize++; next.Color.Red = 1; return next }, true},
+		{"target", func(next *platform.TextInput) *platform.TextInput { next.Target = ui.Item(2); return next }, false},
+		{"disable", func(next *platform.TextInput) *platform.TextInput { return nil }, false},
+		{"value", func(next *platform.TextInput) *platform.TextInput { next.State.Value = "xy"; return next }, false},
+		{"selection", func(next *platform.TextInput) *platform.TextInput { next.State.Selection = text.Range{}; return next }, false},
+		{"unmark", func(next *platform.TextInput) *platform.TextInput { next.State.Composing = false; return next }, false},
+		{"secure", func(next *platform.TextInput) *platform.TextInput { next.Secure = true; return next }, false},
+		{"terminal", func(next *platform.TextInput) *platform.TextInput { next.Terminal = true; return next }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := dynamicTextState(0, 0)
+			field := testTextInput("ni", 0)
+			field.Target = ui.Item(1)
+			field.State.Composing = true
+			field.State.Composition = text.Range{End: 2}
+			state.textInput, state.textState, state.textEnabled = field, field.State, true
+			state.imeComposing, state.imeHasTarget = true, true
+			state.pendingHighSurrogate = 0xd83d
+			if _, _, err := state.applyTextInputUpdate(platform.TextInputUpdate{Changed: true, Input: tc.update(&field)}); err != nil {
+				t.Fatal(err)
+			}
+			if state.imeComposing != tc.preserve || state.imeHasTarget != tc.preserve || (state.pendingHighSurrogate != 0) != tc.preserve {
+				t.Fatalf("preserve=%v: ime=%v target=%v surrogate=%x", tc.preserve, state.imeComposing, state.imeHasTarget, state.pendingHighSurrogate)
+			}
+		})
+	}
+}
+
+func BenchmarkTextInputCaretUpdate(b *testing.B) {
+	state := dynamicTextState(0, 0)
+	field := testTextInput("nihao", 0)
+	field.State.Composing = true
+	field.State.Composition = text.Range{End: 5}
+	state.textInput, state.textState, state.textEnabled = field, field.State, true
+	state.imeComposing = true
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		field.CaretX++
+		if _, _, err := state.applyTextInputUpdate(platform.TextInputUpdate{Changed: true, Input: &field}); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
