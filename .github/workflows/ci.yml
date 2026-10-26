@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,6 +14,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  windows-text-input:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Native input lifecycle and application state
+        run: go test ./internal/platform/windows ./app -run 'TestComposition|TestDynamicTextInput|TestTextInputTarget|TestEditorBackedTextInput|TestFocusedTextField' -count=1
+
   # The full gate on the platform the macOS backend needs.
   darwin:
     runs-on: macos-latest
