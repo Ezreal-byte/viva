@@ -17,12 +17,14 @@ func TestVectorCoverageAtDeviceScales(t *testing.T) {
 	}
 	r := newRenderer()
 	defer r.close()
-	for _, scale := range []float64{1, 1.25, 1.5, 1.75, 2, 2.5, 3, 1.25} {
+	for _, scale := range []float64{1, 1.1, 1.25, 1.3, 1.5, 1.75, 2, 2.5, 3, 1.25} {
 		t.Run(fmt.Sprintf("%gx", scale), func(t *testing.T) {
 			point := func(x, y float32) ui.Point { return ui.Point{X: x / float32(scale), Y: y / float32(scale)} }
 			draw := func(primitives ...app.Primitive) *image.RGBA {
 				t.Helper()
-				pixels, err := r.render(app.Snapshot{Width: 40, Height: 40, Clear: app.Color{Alpha: 1}, Primitives: primitives}, scale)
+				// Unequal, odd dimensions exercise backing-size rounding independently
+				// on both axes; an integral 40*scale used to hide fractional-DPI drift.
+				pixels, err := r.render(app.Snapshot{Width: 41, Height: 37, Clear: app.Color{Alpha: 1}, Primitives: primitives}, scale)
 				if err != nil {
 					t.Fatal(err)
 				}
