@@ -5818,8 +5818,12 @@ int viva_measure_mono(double font_size, int mono_face, double *advance, double *
     pass.colorAttachments[0].clearColor = _clear;
     id<MTLCommandBuffer> commandBuffer = [_queue commandBuffer];
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
+    // Rounding the backing texture up must add spare pixels, not stretch the
+    // requested logical scene independently on x/y. Match the window's scale
+    // and the D3D/Vulkan offscreen mapping, including the half-pixel AA fringe.
+    NSSize viewport = NSMakeSize((CGFloat)pixelWidth / _scale, (CGFloat)pixelHeight / _scale);
     viva_encode_scene(encoder, _rectanglePipeline, _textPipeline, _rectangleBuffer,
-                     _commands, _commandCount, _labels, _inputTexture, _inputFrame, _inputLayer, _size,
+                     _commands, _commandCount, _labels, _inputTexture, _inputFrame, _inputLayer, viewport,
                      pixelWidth, pixelHeight);
     [encoder endEncoding];
     [commandBuffer commit];

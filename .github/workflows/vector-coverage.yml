@@ -36,6 +36,8 @@ jobs:
       - name: Install Vulkan software renderer and compiler
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y glslc mesa-vulkan-drivers libvulkan1 libfontconfig1 libfreetype6 libharfbuzz0b
+      - name: Native coverage with shipped shaders
+        run: go test -tags vivahead ./headless -run '^TestVectorCoverageAtDeviceScales$' -v -count=1
       - name: Compile D3D11 shaders
         if: runner.os == 'Windows'
         run: go run ./tools/windows-shaders

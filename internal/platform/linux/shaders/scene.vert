@@ -59,17 +59,21 @@ void main() {
     vec4 color = inColor;
     if (inStyle.w > 0.5) {
         vec2 points[3] = vec2[](inBounds.xy, inBounds.zw, inStyle.xz);
-        uint index = gl_VertexIndex < 3 ? uint(gl_VertexIndex) : 0u;
-        uint edgeMask = uint(inStyle.w + 0.5) - 1u;
-        uint previous = (index + 2u) % 3u;
-        pixel = fringeVertex(points[previous], points[index], points[(index + 1u) % 3u], 1u << previous, 1u << index, edgeMask);
-        // Extrapolate corner colors so interpolation stays on the original mesh.
-        vec2 ab = points[1] - points[0], ac = points[2] - points[0];
-        float area = cross2(ab, ac);
-        if (abs(area) >= 1e-8) {
-            vec2 delta = pixel - points[0];
-            color = inColor + cross2(delta, ac) / area * (inShade1 - inColor)
-                + cross2(ab, delta) / area * (inShade2 - inColor);
+        // The second primitive is degenerate; skip its fringe/color math.
+        pixel = points[0];
+        if (gl_VertexIndex < 3) {
+            uint index = uint(gl_VertexIndex);
+            uint edgeMask = uint(inStyle.w + 0.5) - 1u;
+            uint previous = (index + 2u) % 3u;
+            pixel = fringeVertex(points[previous], points[index], points[(index + 1u) % 3u], 1u << previous, 1u << index, edgeMask);
+            // Extrapolate corner colors so interpolation stays on the original mesh.
+            vec2 ab = points[1] - points[0], ac = points[2] - points[0];
+            float area = cross2(ab, ac);
+            if (abs(area) >= 1e-8) {
+                vec2 delta = pixel - points[0];
+                color = inColor + cross2(delta, ac) / area * (inShade1 - inColor)
+                    + cross2(ab, delta) / area * (inShade2 - inColor);
+            }
         }
         localPixel = vec2(0.0);
         size = vec2(0.0);

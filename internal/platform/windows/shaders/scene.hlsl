@@ -54,18 +54,22 @@ Vertex rectangleVertex(uint vertex : SV_VertexID, uint instance : SV_InstanceID)
             rectangle.bounds.zw,
             rectangle.style.xz,
         };
-        uint index = vertex < 3 ? vertex : 0;
-        uint edgeMask = (uint)(rectangle.style.w + 0.5) - 1;
-        uint previous = (index + 2) % 3;
-        pixel = fringeVertex(points[previous], points[index], points[(index + 1) % 3], 1u << previous, 1u << index, edgeMask);
-        // The rasterizer interpolates the corner colors across the face, so a flat
-        // triangle (all three equal) is unchanged.
-        float2 ab = points[1] - points[0], ac = points[2] - points[0];
-        float area = cross2(ab, ac);
-        if (abs(area) >= 1e-8) {
-            float2 delta = pixel - points[0];
-            color = rectangle.color + cross2(delta, ac) / area * (rectangle.shade1 - rectangle.color)
-                + cross2(ab, delta) / area * (rectangle.shade2 - rectangle.color);
+        // The second primitive is degenerate; skip its fringe/color math.
+        pixel = points[0];
+        if (vertex < 3) {
+            uint index = vertex;
+            uint edgeMask = (uint)(rectangle.style.w + 0.5) - 1;
+            uint previous = (index + 2) % 3;
+            pixel = fringeVertex(points[previous], points[index], points[(index + 1) % 3], 1u << previous, 1u << index, edgeMask);
+            // The rasterizer interpolates the corner colors across the face, so a flat
+            // triangle (all three equal) is unchanged.
+            float2 ab = points[1] - points[0], ac = points[2] - points[0];
+            float area = cross2(ab, ac);
+            if (abs(area) >= 1e-8) {
+                float2 delta = pixel - points[0];
+                color = rectangle.color + cross2(delta, ac) / area * (rectangle.shade1 - rectangle.color)
+                    + cross2(ab, delta) / area * (rectangle.shade2 - rectangle.color);
+            }
         }
         local = 0;
         size = 0;
