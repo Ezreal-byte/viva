@@ -1,5 +1,5 @@
 {
-  "source_sha256": "33856ac8f032be9b2c56c3f7925fa5bf95a9bedc184c2566c1cacf89711de2cb",
+  "source_sha256": "269390ded50d0e096c67bd4976224e3c62c813ccb392767707150ac656961e7c",
   "compiler": "d3dcompiler_47.dll",
   "flags": 34816,
   "entries": [
@@ -12,8 +12,8 @@
     {
       "name": "rectangleFragment",
       "profile": "ps_5_0",
-      "sha256": "1f4f3d262bc7fdf25c7784e98c7346516075de42c5dd84925cd93d5baa5c9b0e",
-      "bytes": 4452
+      "sha256": "2a0cd71a23763b784333d6ab90ecb3238fa7d82baa78b341320bde42b68c347b",
+      "bytes": 5252
     },
     {
       "name": "textVertex",

@@ -17,6 +17,11 @@ float edgeDistance(float2 p, float2 a, float2 b) {
     return (edge.x*(p.y-a.y) - edge.y*(p.x-a.x)) / length;
 }
 float cross2(float2 a, float2 b) { return a.x*b.y - a.y*b.x; }
+float segmentDistance(float2 p, float2 a, float2 b) {
+    float2 edge = b - a;
+    float along = saturate(dot(p - a, edge) / max(dot(edge, edge), 1e-12));
+    return length(p - a - along * edge);
+}
 // Move only silhouette edges out by half a device pixel. Unmarked shared edges
 // keep their original supporting line, so the hardware top-left rule still
 // assigns each fragment to exactly one triangle. Fragment distances and color
@@ -144,8 +149,17 @@ float4 rectangleFragment(Vertex input) : SV_Target {
         float d1 = (edgeMask & 2u) != 0 ? sign * edgeDistance(input.frag, input.triB, input.triC) : 1e6;
         float d2 = (edgeMask & 4u) != 0 ? sign * edgeDistance(input.frag, input.triC, input.triA) : 1e6;
         float inside = min(d0, min(d1, d2));
+        if (inside < 0) {
+            // Offset supporting lines have long miters at acute vertices. Only
+            // the half-pixel neighborhood of the actual segments is coverage.
+            float s0 = (edgeMask & 1u) != 0 ? segmentDistance(input.frag, input.triA, input.triB) : 1e6;
+            float s1 = (edgeMask & 2u) != 0 ? segmentDistance(input.frag, input.triB, input.triC) : 1e6;
+            float s2 = (edgeMask & 4u) != 0 ? segmentDistance(input.frag, input.triC, input.triA) : 1e6;
+            inside = -min(s0, min(s1, s2));
+        }
         float coverage = edgeMask == 0 ? 1 : saturate(0.5 + inside / meshPixel);
-        return float4(input.color.rgb*coverage*input.color.a, input.color.a*coverage);
+        float4 shade = saturate(input.color);
+        return float4(shade.rgb*coverage*shade.a, shade.a*coverage);
     }
     if (input.triB.y > 0) {
         return shadowColor(input, shapePixel);

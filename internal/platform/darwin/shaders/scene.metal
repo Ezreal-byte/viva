@@ -25,6 +25,11 @@ struct VertexOutput {
 };
 
 static float cross2(float2 a, float2 b) { return a.x*b.y - a.y*b.x; }
+static float segmentDistance(float2 p, float2 a, float2 b) {
+    float2 edge = b - a;
+    float along = saturate(dot(p - a, edge) / max(dot(edge, edge), 1e-12));
+    return length(p - a - along * edge);
+}
 // Expand silhouette edges only; shared edges keep their supporting line.
 static float2 fringeVertex(float2 previous, float2 position, float2 next, uint previousEdge, uint nextEdge, uint mask, float pixelSize) {
     float2 before = position - previous, after = next - position;
@@ -185,8 +190,17 @@ fragment float4 viva_rectangle_fragment(VertexOutput input [[stage_in]]) {
         float d1 = (edgeMask & 2u) != 0u ? sign * edgeDistance(input.fragPixel, input.triB, input.triC) : 1e6;
         float d2 = (edgeMask & 4u) != 0u ? sign * edgeDistance(input.fragPixel, input.triC, input.triA) : 1e6;
         float inside = min(d0, min(d1, d2));
-        float coverage = edgeMask == 0 ? 1.0 : saturate(0.5 + inside / devicePixel(input.fragPixel));
-        return float4(input.color.rgb, input.color.a * coverage);
+        float pixel = devicePixel(input.fragPixel);
+        if (inside < 0.0) {
+            // Acute offset-line miters must not paint beyond the actual ends.
+            float s0 = (edgeMask & 1u) != 0u ? segmentDistance(input.fragPixel, input.triA, input.triB) : 1e6;
+            float s1 = (edgeMask & 2u) != 0u ? segmentDistance(input.fragPixel, input.triB, input.triC) : 1e6;
+            float s2 = (edgeMask & 4u) != 0u ? segmentDistance(input.fragPixel, input.triC, input.triA) : 1e6;
+            inside = -min(s0, min(s1, s2));
+        }
+        float coverage = edgeMask == 0 ? 1.0 : saturate(0.5 + inside / pixel);
+        float4 shade = saturate(input.color);
+        return float4(shade.rgb, shade.a * coverage);
     }
     if (input.triB.y > 0.0) {
         return shadowColor(input);

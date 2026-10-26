@@ -48,6 +48,22 @@ func TestVectorCoverageAtDeviceScales(t *testing.T) {
 			pixels := draw(diagonal)
 			near(pixels.RGBAAt(14, 14).R, 255*(0.5-0.25/math.Sqrt2))
 			near(pixels.RGBAAt(15, 15).R, 0)
+			// An acute tip's offset lines meet far away. That miter is geometry,
+			// not coverage: it must not draw a spike past the real endpoint.
+			needle := tri
+			needle.Points = [3]ui.Point{point(20, 20), point(4, 19.8), point(4, 20.2)}
+			pixels = draw(needle)
+			for x := 21; x < 30; x++ {
+				near(pixels.RGBAAt(x, 20).R, 0)
+			}
+			// A zero-area face must stay empty, even with boundary feathering.
+			needle.Points = [3]ui.Point{point(4, 4), point(4, 4), point(4, 4)}
+			pixels = draw(needle)
+			for y := 0; y < pixels.Rect.Dy(); y++ {
+				for x := 0; x < pixels.Rect.Dx(); x++ {
+					near(pixels.RGBAAt(x, y).R, 0)
+				}
+			}
 			// Expansion must not change alpha or move the original gradient.
 			tri.Shaded = true
 			tri.Color = ui.Color{Red: 1, Alpha: 0.5}
