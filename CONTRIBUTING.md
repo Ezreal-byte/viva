@@ -14,6 +14,14 @@ regression even when the feature works.
   worth agreeing on before the code exists.
 - **Small fixes:** send the pull request directly.
 
+## Claiming an issue
+
+Comment `/claim` on an issue to take it: the bot assigns you and posts a
+confirmation. Comment `/unclaim` (or `/unclaimed`) to release it. Once the pull
+request that fixes it has merged, the assignee comments `/close` if GitHub did
+not close the issue itself. What each command refuses, and how to run the bot as
+a GitHub App, is in [docs/issue-commands.md](docs/issue-commands.md).
+
 ## Reporting a bug
 
 Include what you ran, what you expected, and what happened. For anything visual
