@@ -60,7 +60,7 @@ jobs:
           release=""
           for _ in $(seq 1 40); do
             if release=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --json isDraft,title,assets,body 2>/dev/null); then
+              --json isDraft,name,assets,body,databaseId); then
               break
             fi
             release=""
@@ -75,21 +75,24 @@ jobs:
             echo "draft=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          test "$(jq -r '.title' <<<"$release")" = "Viva $TAG" || {
-            echo "release title must be 'Viva $TAG'" >&2; exit 1; }
+          test "$(jq -r '.name' <<<"$release")" = "Viva $TAG" || {
+            echo "release name must be 'Viva $TAG'" >&2; exit 1; }
           test "$(jq '.assets | length' <<<"$release")" = 0 || {
             echo "release has assets; Viva publishes none" >&2; exit 1; }
           test -n "$(jq -r '.body' <<<"$release")" || {
             echo "release body is empty" >&2; exit 1; }
           echo "draft=true" >> "$GITHUB_OUTPUT"
+          echo "id=$(jq -r '.databaseId' <<<"$release")" >> "$GITHUB_OUTPUT"
 
       - name: publish
         if: steps.draft.outputs.draft == 'true'
         run: |
-          prerelease=""
-          case "$TAG" in *-*) prerelease="--prerelease" ;; esac
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false $prerelease
+          prerelease=false
+          case "$TAG" in *-*) prerelease=true ;; esac
+          # PATCH by release id: the tag lookup endpoint does not return drafts.
+          printf '{"draft":false,"prerelease":%s}\n' "$prerelease" |
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/${{ steps.draft.outputs.id }}" --input -
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --json url,isDraft,isPrerelease,title,assets \
-            --jq '"published \(.url) draft=\(.isDraft) prerelease=\(.isPrerelease)"' \
+            --json name,tagName,isDraft,isPrerelease,assets,url \
+            --jq '"published \(.url) name=\(.name) draft=\(.isDraft) prerelease=\(.isPrerelease)"' \
             | tee -a "$GITHUB_STEP_SUMMARY"

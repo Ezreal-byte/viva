@@ -26,8 +26,8 @@ flips it from draft to published. Nothing is published by a local command.
 
 4. The tag push starts `release.yml`. Its `gate` job calls `ci.yml`, and only if
    that passes does the `publish` job run. It waits up to ten minutes for the
-   draft, requires the title `Viva v<version>`, a non-empty body and no assets,
-   then sets `draft=false` (and `prerelease=true` for a tag that contains `-`).
+   draft, requires the release name `Viva v<version>`, a non-empty body and no assets,
+   then sets `draft=false` by release id (and `prerelease=true` for a tag that contains `-`).
 5. The agent verifies the live release: body identical to the approved notes,
    published state, zero assets, annotated tag pointing at the release commit.
    Then it commits the three "current release" references (`README.md` and the
