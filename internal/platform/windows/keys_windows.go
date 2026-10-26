@@ -304,6 +304,14 @@ func win32ControlState(second uintptr) uint16 {
 
 // win32Key is the console INPUT_RECORD identity of one key message.
 func win32Key(first, second uintptr, unicode, repeat uint16) ui.Win32Key {
+	return win32KeyRecord(first, second, unicode, repeat, unicode == 0 && altGrHeld())
+}
+
+// win32KeyRecord builds one console INPUT_RECORD identity. altGr says AltGr is
+// held for a message that named no character: AltGr types a layout character
+// that WM_CHAR delivers as text, so translating it here as well would hand the
+// terminal that character twice. Named keys keep their console character.
+func win32KeyRecord(first, second uintptr, unicode, repeat uint16, altGr bool) ui.Win32Key {
 	scan := uint16((second >> 16) & 0xff)
 	if scan == 0 {
 		scan = uint16(keyCode(first, second) & 0xff)
@@ -311,7 +319,7 @@ func win32Key(first, second uintptr, unicode, repeat uint16) ui.Win32Key {
 	if repeat == 0 {
 		repeat = 1
 	}
-	if unicode == 0 {
+	if unicode == 0 && !(altGr && printableKey(first)) {
 		// Named keys and control chords are dispatched at WM_KEYDOWN, before
 		// WM_CHAR. ConPTY still needs their character (CR for Enter, for
 		// example), including on release. Preserve characters supplied by

@@ -159,6 +159,25 @@ func TestConsoleKeyCharacterTranslatesControlChords(t *testing.T) {
 	}
 }
 
+// AltGr types a layout character that WM_CHAR delivers as text. Putting it in
+// the raw record as well would hand the terminal the same character twice.
+func TestAltGrLeavesPrintableCharactersToText(t *testing.T) {
+	for _, vk := range []uintptr{'E', '4', 0xbd} {
+		if got := win32KeyRecord(vk, 0, 0, 1, true); got.Unicode != 0 {
+			t.Errorf("vk=%#x with AltGr: record Unicode=%#x, want none", vk, got.Unicode)
+		}
+	}
+	// A named key still carries its console character on an AltGr chord.
+	scan := uintptr(keyCode(13, 0)&0xff) << 16
+	if got := win32KeyRecord(13, scan, 0, 1, true); got.Unicode != 13 {
+		t.Errorf("Enter with AltGr: record Unicode=%d, want 13", got.Unicode)
+	}
+	// Without AltGr the key is translated as before.
+	if got := win32KeyRecord('E', 0, 0, 1, false); got.Unicode == 0 {
+		t.Error("E without AltGr was not translated")
+	}
+}
+
 func BenchmarkConsoleKeyRecord(b *testing.B) {
 	for _, test := range []struct {
 		name      string
