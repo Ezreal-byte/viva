@@ -260,6 +260,28 @@ func TestOnlyKeysTheHandlerSawGoDownAreReleased(t *testing.T) {
 	}
 }
 
+// A release carries the identity the press had. A modifier released first
+// changes the platform's release character, but the handler must see the
+// character the press named.
+func TestKeyReleaseKeepsThePressConsoleIdentity(t *testing.T) {
+	probe := &keyProbe{releases: true}
+	driver := newKeyDriver(t, probe)
+	press := ui.Win32Key{VirtualKey: 'C', ScanCode: 46, Unicode: 3, ControlState: 0x0008, Repeat: 1}
+	release := ui.Win32Key{VirtualKey: 'C', ScanCode: 46, Unicode: 'c', ControlState: 0, Repeat: 1}
+	if _, err := driver.painter.key(platform.KeyEvent{Code: 46, Win32: press}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := driver.painter.key(platform.KeyEvent{Release: true, Code: 46, Win32: release}); err != nil {
+		t.Fatal(err)
+	}
+	if len(probe.keys) != 2 {
+		t.Fatalf("events = %+v", probe.keys)
+	}
+	if got := probe.keys[1].Win32; got != press {
+		t.Fatalf("release Win32 = %+v, want the press's %+v", got, press)
+	}
+}
+
 func BenchmarkKeyPressAndRelease(b *testing.B) {
 	probe := &keyProbe{releases: true}
 	config := probe.config()

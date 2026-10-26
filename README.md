@@ -485,6 +485,12 @@ Bug reports, platform findings, and documentation fixes are always welcome — s
 where the line between framework and application behaviour sits. Security
 problems go through [SECURITY.md](SECURITY.md), never a public issue.
 
+## Contributors
+
+<a href="https://github.com/vivaui/viva/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=vivaui/viva&max=300&columns=15" alt="Contributors" />
+</a>
+
 ## License
 
 Viva is licensed under the Apache License 2.0. See [LICENSE](LICENSE) and

@@ -522,9 +522,12 @@ func (painter *painter) keyRelease(event platform.KeyEvent) (platform.Frame, err
 	if !ok || painter.onKey == nil {
 		return platform.Frame{}, nil
 	}
-	win32 := event.Win32
+	// A release carries the identity the press had. The modifier state at
+	// release may already differ, as when Ctrl is released before C, so the
+	// platform's release character can be a different one than the press named.
+	win32 := held.Win32
 	if win32 == (ui.Win32Key{}) {
-		win32 = held.Win32
+		win32 = event.Win32
 	}
 	response := painter.onKey(ui.KeyEvent{
 		Key: held.Key, Modifiers: ui.Modifiers(event.Modifiers), Target: held.Target, Release: true, Text: held.Text, Win32: win32,
