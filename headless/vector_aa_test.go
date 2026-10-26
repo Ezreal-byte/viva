@@ -43,11 +43,16 @@ func TestVectorCoverageAtDeviceScales(t *testing.T) {
 				near(pixels.RGBAAt(11, 10).R, 255)
 				tri.Points[1], tri.Points[2] = tri.Points[2], tri.Points[1]
 			}
+			diagonal := tri
+			diagonal.Points = [3]ui.Point{point(4, 4), point(24.75, 4), point(4, 24.75)}
+			pixels := draw(diagonal)
+			near(pixels.RGBAAt(14, 14).R, 255*(0.5-0.25/math.Sqrt2))
+			near(pixels.RGBAAt(15, 15).R, 0)
 			// Expansion must not change alpha or move the original gradient.
 			tri.Shaded = true
 			tri.Color = ui.Color{Red: 1, Alpha: 0.5}
 			tri.Shade = [2]ui.Color{{Green: 1, Alpha: 0.5}, {Blue: 1, Alpha: 0.5}}
-			pixels := draw(tri)
+			pixels = draw(tri)
 			b, c := (14.5-10.75)/(30-10.75), (10.5-4)/(28-4)
 			got := pixels.RGBAAt(14, 10)
 			near(got.R, 255*0.5*(1-b-c))
