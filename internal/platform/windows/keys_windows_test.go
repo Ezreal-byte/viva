@@ -105,6 +105,77 @@ func TestWin32KeyRecordCarriesTheConsoleFields(t *testing.T) {
 	}
 }
 
+// ConPTY raw readers use UnicodeChar, not just the virtual key. In particular
+// Enter with a zero character reaches PowerShell but is lost by Node's TTY.
+func TestTerminalControlKeysCarryConsoleCharacters(t *testing.T) {
+	for _, raw := range []bool{false, true} {
+		for _, vk := range []uintptr{8, 9, 13, 27} {
+			state := &windowState{}
+			var events []platform.KeyEvent
+			state.config.OnKey = func(event platform.KeyEvent) (platform.Frame, error) {
+				events = append(events, event)
+				return platform.Frame{}, errors.New("stop before the renderer")
+			}
+			if raw {
+				state.keyDown(vk, 1, 0)
+			} else {
+				event, ok := state.terminalKeyEvent(vk, 1, 0)
+				if !ok {
+					t.Fatal("control key was not handled")
+				}
+				events = append(events, event)
+			}
+			state.keyUp(vk, 1, 0)
+			if len(events) != 2 {
+				t.Fatalf("events = %+v", events)
+			}
+			for _, event := range events {
+				if event.Win32.Unicode != uint16(vk) {
+					t.Errorf("raw=%v vk=%d release=%v: Unicode=%d, want %d", raw, vk, event.Release, event.Win32.Unicode, vk)
+				}
+			}
+		}
+	}
+}
+
+func TestConsoleKeyCharacterTranslatesControlChords(t *testing.T) {
+	for _, test := range []struct {
+		vk      uintptr
+		control bool
+		want    uint16
+	}{
+		{13, false, 13}, {13, true, 10}, {8, true, 127},
+		{'C', true, 3}, {'D', true, 4}, {'Z', true, 26},
+		{37, false, 0}, {16, false, 0},
+	} {
+		var keys [256]byte
+		if test.control {
+			keys[17] = 0x80
+		}
+		scan := uint16(keyCode(test.vk, 0) & 0xff)
+		if got := consoleKeyCharacter(test.vk, scan, &keys); got != test.want {
+			t.Errorf("vk=%d control=%v: character=%d, want %d", test.vk, test.control, got, test.want)
+		}
+	}
+}
+
+func BenchmarkConsoleKeyRecord(b *testing.B) {
+	for _, test := range []struct {
+		name      string
+		vk        uintptr
+		character uint16
+	}{
+		{"enter", 13, 0}, {"printable", 'A', 'a'},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = win32Key(test.vk, 0x1c<<16|1, test.character, 1)
+			}
+		})
+	}
+}
+
 // Alt+printable arrives as WM_SYSCHAR, not WM_CHAR. A terminal that asked for
 // releases must still see it as a raw key rather than losing it.
 func TestAltPrintableIsSentAsARawKey(t *testing.T) {

@@ -3,6 +3,7 @@ package windows
 import (
 	"unicode"
 	"unicode/utf16"
+	"unsafe"
 
 	"github.com/vivaui/viva/internal/input"
 	"github.com/vivaui/viva/internal/platform"
@@ -16,7 +17,10 @@ const (
 	vkProcessKey = 0xe5
 )
 
-var mapVirtualKey = user.NewProc("MapVirtualKeyW")
+var (
+	mapVirtualKey    = user.NewProc("MapVirtualKeyW")
+	getKeyboardState = user.NewProc("GetKeyboardState")
+)
 
 // pendingKey is a printable key whose WM_KEYDOWN has been seen and whose
 // WM_CHAR decides what it is: a key, when the character is what the key types,
@@ -307,8 +311,29 @@ func win32Key(first, second uintptr, unicode, repeat uint16) ui.Win32Key {
 	if repeat == 0 {
 		repeat = 1
 	}
+	if unicode == 0 {
+		// Named keys and control chords are dispatched at WM_KEYDOWN, before
+		// WM_CHAR. ConPTY still needs their character (CR for Enter, for
+		// example), including on release. Preserve characters supplied by
+		// WM_CHAR and translate the others without consuming a pending dead key.
+		var keys [256]byte
+		if ok, _, _ := getKeyboardState.Call(uintptr(unsafe.Pointer(&keys[0]))); ok != 0 {
+			unicode = consoleKeyCharacter(first, scan, &keys)
+		}
+	}
 	return ui.Win32Key{
 		VirtualKey: uint16(first), ScanCode: scan, Unicode: unicode,
 		ControlState: win32ControlState(second), Repeat: repeat,
 	}
+}
+
+func consoleKeyCharacter(vk uintptr, scan uint16, keys *[256]byte) uint16 {
+	var typed [8]uint16
+	layout, _, _ := getKeyboardLayout.Call(0)
+	count, _, _ := toUnicodeEx.Call(vk, uintptr(scan), uintptr(unsafe.Pointer(&keys[0])),
+		uintptr(unsafe.Pointer(&typed[0])), uintptr(len(typed)), toUnicodeKeepState, layout)
+	if int32(count) == 1 {
+		return typed[0]
+	}
+	return 0
 }
