@@ -60,15 +60,15 @@ type StatusItemConfig struct {
 	Icon    StatusIcon
 	// OnClick runs on the native event-loop thread for every press of the
 	// item, whatever the button. Opening a window from it is allowed. With a
-	// Menu it runs only for a press the system does not turn into the menu: on
-	// Linux a primary press reaches it, since the desktop's tray shows the menu
-	// on the secondary one and reports the primary as an activation; macOS and
-	// Windows open the menu for both buttons and never call it.
+	// Menu it runs only for a press the system does not turn into the menu:
+	// Windows and Linux send primary activation here and open the menu on a
+	// secondary press. macOS opens the menu for both buttons and does not call
+	// OnClick while Menu is set.
 	OnClick func(StatusClick)
-	// Menu, when set, makes a press of the item open the system's own menu of
-	// what it returns. It runs on the event-loop thread each time the menu is
-	// about to open, so the menu shows the application's state at that moment,
-	// and nothing changes it while it is open.
+	// Menu supplies the system's own context menu. On Windows a primary press
+	// also opens it when OnClick is nil. It runs on the event-loop thread each
+	// time the menu is about to open, so the menu shows the application's state
+	// at that moment, and nothing changes it while it is open.
 	Menu func() []MenuItem
 }
 

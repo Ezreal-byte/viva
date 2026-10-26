@@ -3,8 +3,61 @@ package windows
 import (
 	"testing"
 
+	"github.com/vivaui/viva/internal/platform"
 	"github.com/vivaui/viva/ui"
 )
+
+// Exercise the notification dispatcher, not only its button decoder. A menu
+// must not swallow primary activation when the application also has a callback.
+func TestStatusNotificationRoutesActivationAndContextMenu(t *testing.T) {
+	for _, test := range []struct {
+		name                    string
+		callback, menu, removed bool
+		events                  []uint32
+		wantClicks, wantMenus   int
+		wantButton              ui.PointerButton
+	}{
+		{"left with callback and menu", true, true, false, []uint32{0x0201, 0x0202, ninSelect}, 1, 0, ui.PointerButtonPrimary},
+		{"keyboard activation", true, true, false, []uint32{ninKeySelect}, 1, 0, ui.PointerButtonPrimary},
+		{"right with callback and menu", true, true, false, []uint32{0x0204, 0x0205, wmContextMenu}, 0, 1, ui.PointerButtonNone},
+		{"left menu only", false, true, false, []uint32{ninSelect}, 0, 1, ui.PointerButtonNone},
+		{"right menu only", false, true, false, []uint32{wmContextMenu}, 0, 1, ui.PointerButtonNone},
+		{"left callback only", true, false, false, []uint32{ninSelect}, 1, 0, ui.PointerButtonPrimary},
+		{"right callback only", true, false, false, []uint32{wmContextMenu}, 1, 0, ui.PointerButtonSecondary},
+		{"no handlers", false, false, false, []uint32{ninSelect, wmContextMenu}, 0, 0, ui.PointerButtonNone},
+		{"removed", true, true, true, []uint32{ninSelect, wmContextMenu}, 0, 0, ui.PointerButtonNone},
+		{"hover", true, true, false, []uint32{0x0200}, 0, 0, ui.PointerButtonNone},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clicks, menus := 0, 0
+			button := ui.PointerButtonNone
+			item := &statusItem{id: 2}
+			item.removed.Store(test.removed)
+			if test.callback {
+				item.onClick = func(click platform.StatusClick) { clicks++; button = click.Button }
+			}
+			if test.menu {
+				item.menu = func() []platform.MenuItem { menus++; return nil }
+			}
+			status := &statusState{items: map[uint32]*statusItem{2: item}}
+			for _, event := range test.events {
+				status.notified(0, 0, uintptr(2<<16|event))
+			}
+			if clicks != test.wantClicks || menus != test.wantMenus || button != test.wantButton {
+				t.Fatalf("clicks=%d menus=%d button=%v, want %d/%d/%v", clicks, menus, button, test.wantClicks, test.wantMenus, test.wantButton)
+			}
+		})
+	}
+}
+
+func BenchmarkStatusPrimaryNotification(b *testing.B) {
+	item := &statusItem{id: 2, onClick: func(platform.StatusClick) {}, menu: func() []platform.MenuItem { return nil }}
+	status := &statusState{items: map[uint32]*statusItem{2: item}}
+	b.ReportAllocs()
+	for b.Loop() {
+		status.notified(0, 0, 2<<16|ninSelect)
+	}
+}
 
 // A single click arrives as several messages; exactly one of them may count, or
 // a panel that a click opens is closed again by the same click.

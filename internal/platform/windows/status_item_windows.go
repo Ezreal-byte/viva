@@ -382,7 +382,10 @@ func (status *statusState) notified(window, anchor, packed uintptr) {
 	if !ok {
 		return
 	}
-	if item.menu != nil {
+	// A primary activation belongs to the application when it supplied a
+	// callback (for example, to restore its window). Keep menu-only icons
+	// clickable, and reserve secondary activation for the context menu.
+	if item.menu != nil && (button == ui.PointerButtonSecondary || item.onClick == nil) {
 		item.popMenu(window, item.anchor(window, anchor))
 		return
 	}
