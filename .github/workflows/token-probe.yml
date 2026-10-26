@@ -3,22 +3,29 @@ name: token probe
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
-  probe:
+  write:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: probe
+      - name: exact command, write token
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/actions/permissions/workflow" || true
-          gh auth status 2>&1 || true
-          curl -sS -o /dev/null -w "GET releases/tags/v0.1.1 -> %{http_code}\n" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/v0.1.1"
-          curl -sS -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/v0.1.1" | head -c 400; echo
-          gh release view v0.1.1 --repo "$GITHUB_REPOSITORY" --json isDraft || echo "view exit=$?"
+          set +e
+          gh release view v0.1.1 --repo "$GITHUB_REPOSITORY" --json isDraft,title,assets,body
+          echo "write exit=$?"
+
+  read:
+    runs-on: ubuntu-latest
+    steps:
+      - name: exact command, default (read) token
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          gh release view v0.1.1 --repo "$GITHUB_REPOSITORY" --json isDraft,title,assets,body
+          echo "read exit=$?"
+          gh release view v0.1.1 --repo "$GITHUB_REPOSITORY" --json isDraft
+          echo "isDraft exit=$?"
