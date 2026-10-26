@@ -473,14 +473,16 @@ func (rasterizer *directRasterizer) drawRun(target *directTarget, family string,
 		// is the only way to fit a substituted glyph that is not an exact
 		// multiple of the cell width; it also disables ClearType, which is why
 		// it is used only when the widths differ.
-		scaled = metrics.Width > 0 && span > 0 && metrics.Width != span
+		// Terminal padding occupies cells too. Width excludes trailing spaces
+		// and would stretch a short command across its following blank cells.
+		scaled = metrics.WidthTrailing > 0 && span > 0 && metrics.WidthTrailing != span
 		if scaled {
-			scale := span / metrics.Width
+			scale := span / metrics.WidthTrailing
 			target.setTransform(d2dMatrix{M11: scale, M22: 1, DX: left * (1 - scale)})
 		}
 	case pitch > 0 && printableASCII(piece):
 		// Every character stands on its cell, whatever the advance of the font.
-		advance := metrics.Width / float32(len(units)-1)
+		advance := metrics.WidthTrailing / float32(len(units)-1)
 		if reduction := advance - pitch; reduction != 0 {
 			var extended uintptr
 			if comCall(layout, 0, uintptr(unsafe.Pointer(&writeLayout1IID)), uintptr(unsafe.Pointer(&extended))) == 0 && extended != 0 {
