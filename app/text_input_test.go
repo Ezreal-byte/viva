@@ -60,6 +60,7 @@ func TestTextCommandsMoveAndEditByGrapheme(t *testing.T) {
 			editor.SetSelection(testCase.selection)
 			TextEvent{Kind: TextCommandEvent, Command: testCase.command}.Apply(editor)
 			want := TextState{Value: testCase.wantValue, Selection: testCase.wantSelection}
+			want.SelectionReversed = testCase.command == TextMoveLeftAndModifySelection
 			if got := TextStateOf(editor); got != want {
 				t.Fatalf("text state = %+v, want %+v", got, want)
 			}
@@ -91,16 +92,17 @@ func TestSelectionExtensionPreservesAnchor(t *testing.T) {
 	for index, step := range []struct {
 		command   TextCommand
 		selection TextRange
+		reversed  bool
 	}{
-		{TextMoveLeftAndModifySelection, TextRange{Start: 5, End: 6}},
-		{TextMoveLeftAndModifySelection, TextRange{Start: 4, End: 6}},
-		{TextMoveLeftAndModifySelection, TextRange{Start: 1, End: 6}},
-		{TextMoveRightAndModifySelection, TextRange{Start: 4, End: 6}},
-		{TextMoveRightAndModifySelection, TextRange{Start: 5, End: 6}},
-		{TextMoveRightAndModifySelection, TextRange{Start: 6, End: 6}},
+		{TextMoveLeftAndModifySelection, TextRange{Start: 5, End: 6}, true},
+		{TextMoveLeftAndModifySelection, TextRange{Start: 4, End: 6}, true},
+		{TextMoveLeftAndModifySelection, TextRange{Start: 1, End: 6}, true},
+		{TextMoveRightAndModifySelection, TextRange{Start: 4, End: 6}, true},
+		{TextMoveRightAndModifySelection, TextRange{Start: 5, End: 6}, true},
+		{TextMoveRightAndModifySelection, TextRange{Start: 6, End: 6}, false},
 	} {
 		TextEvent{Kind: TextCommandEvent, Command: step.command}.Apply(editor)
-		want := TextState{Value: "A👩‍💻中B", Selection: step.selection}
+		want := TextState{Value: "A👩‍💻中B", Selection: step.selection, SelectionReversed: step.reversed}
 		if got := TextStateOf(editor); got != want {
 			t.Fatalf("step %d text state = %+v, want %+v", index, got, want)
 		}

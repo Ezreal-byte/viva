@@ -604,6 +604,13 @@ func (driver *Driver) Chord(modifiers ui.Modifiers, character string) error {
 }
 
 func (driver *Driver) textKey(key ui.Key, modifiers ui.Modifiers) error {
+	editKey := platform.KeyEvent{Key: input.Key(key), Modifiers: input.Modifiers(modifiers)}
+	if action := platform.TextClipboardAction(editKey); action != 0 {
+		return driver.clipboardEdit(action)
+	}
+	if command, ok := platform.TextEditingCommand(editKey); ok {
+		return driver.textEvent(platform.TextEvent{Kind: platform.TextCommandEvent, Command: command})
+	}
 	extend := modifiers&ui.ModifierShift != 0
 	var event platform.TextEvent
 	switch key {
@@ -679,8 +686,8 @@ func (driver *Driver) Shortcut(character rune) (bool, error) {
 	return driver.ShortcutChord(ui.ModifierMeta, character)
 }
 
-// ShortcutChord offers one modified printable chord to the application before
-// applying the driver's native text or terminal fallback. The complete
+// ShortcutChord handles ordinary text editing before offering other chords to
+// the application and applying the terminal fallback. The complete
 // modifier set is preserved, which lets headless tests exercise application
 // shortcuts such as Command+Alt+X without bypassing the native text path.
 func (driver *Driver) ShortcutChord(modifiers ui.Modifiers, character rune) (bool, error) {
@@ -688,6 +695,15 @@ func (driver *Driver) ShortcutChord(modifiers ui.Modifiers, character rune) (boo
 		return false, err
 	}
 	shortcut := shortcutText(character)
+	if driver.editing() && !driver.terminal() {
+		event := platform.KeyEvent{Modifiers: input.Modifiers(modifiers), Text: shortcut}
+		if command, ok := platform.TextEditingCommand(event); ok {
+			return true, driver.textEvent(platform.TextEvent{Kind: platform.TextCommandEvent, Command: command})
+		}
+		if action := platform.TextClipboardAction(event); action != 0 {
+			return true, driver.clipboardEdit(action)
+		}
+	}
 	if shortcut != "" {
 		_, handled, err := driver.painter.shortcut(platform.KeyEvent{Modifiers: modifiers, Text: shortcut})
 		if err != nil || handled {
@@ -709,46 +725,17 @@ func (driver *Driver) ShortcutChord(modifiers ui.Modifiers, character rune) (boo
 		}
 		return true, driver.textEvent(platform.TextEvent{Kind: platform.TextPaste, Text: driver.clipboard})
 	}
-	if command, ok := platform.TextHistoryCommand(platform.KeyEvent{Modifiers: input.Modifiers(modifiers), Text: shortcut}); ok {
-		return true, driver.textEvent(platform.TextEvent{Kind: platform.TextCommandEvent, Command: command})
-	}
-	if modifiers&(ui.ModifierMeta|ui.ModifierControl) == 0 || modifiers&(ui.ModifierAlt|ui.ModifierShift) != 0 {
-		return false, nil
-	}
-	state := driver.painter.nativeText.State
-	runes := []rune(state.Value)
-	selection := state.Selection
-	if selection.Start > selection.End {
-		selection.Start, selection.End = selection.End, selection.Start
-	}
-	selection.Start = max(0, min(selection.Start, len(runes)))
-	selection.End = max(selection.Start, min(selection.End, len(runes)))
-	secure := driver.painter.nativeText.Secure
-	switch character {
-	case 'a':
-		return true, driver.textEvent(platform.TextEvent{Kind: platform.TextSetSelection, Selection: text.Range{Start: 0, End: len(runes)}})
-	case 'c', 'x':
-		if secure || selection.Start == selection.End {
-			return true, nil // a password is never exported; nothing selected, nothing to copy
-		}
-		driver.clipboard = string(runes[selection.Start:selection.End])
-		if character == 'x' {
-			return true, driver.textEvent(platform.TextEvent{Kind: platform.TextCommandEvent, Command: platform.TextDeleteBackward})
-		}
-		return true, nil
-	case 'v':
-		value := driver.clipboard
-		if !driver.painter.nativeText.Multiline {
-			// Line breaks cannot live in one line; leading and trailing ones are dropped.
-			fields := strings.FieldsFunc(value, func(r rune) bool { return r == '\n' || r == '\r' || r == '\u2028' || r == '\u2029' })
-			value = strings.Join(fields, " ")
-		}
-		if value == "" {
-			return true, nil
-		}
-		return true, driver.textEvent(platform.TextEvent{Kind: platform.TextPaste, Text: value})
-	}
 	return false, nil
+}
+
+func (driver *Driver) clipboardEdit(action byte) error {
+	event, changed, err := platform.TextClipboardEvent(driver.painter.nativeText.State, driver.painter.nativeText.Secure, action,
+		func() (string, error) { return driver.clipboard, nil },
+		func(value string) error { driver.SetClipboard(value); return nil })
+	if err != nil || !changed {
+		return err
+	}
+	return driver.textEvent(event)
 }
 
 func shortcutText(character rune) string {

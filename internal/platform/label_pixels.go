@@ -19,6 +19,27 @@ func DeviceExtent(logical, length, scale float32) int {
 	return DevicePosition(logical+length, 0, scale) - DevicePosition(logical, 0, scale)
 }
 
+// LabelWindow is the part of a label's texture that a clip can show, in device
+// pixels: the columns from skip to skip+width of a texture drawn at origin, whose
+// whole width is full, when the clip covers left to right. A clip that starts left
+// of the label keeps the whole texture. One that starts inside it skips the columns
+// it cuts, so a long scrolled line costs its visible width, not its whole width,
+// without moving the text by a fraction of a device pixel. ok is false when the
+// clip shows none of those columns.
+func LabelWindow(origin, full, left, right int) (skip, width int, ok bool) {
+	if full <= 0 || right <= left {
+		return 0, 0, false
+	}
+	if left <= origin {
+		return 0, full, true
+	}
+	right = min(right, origin+full)
+	if right <= left {
+		return 0, 0, false
+	}
+	return left - origin, right - left, true
+}
+
 // ResampleBGRA shrinks premultiplied 8-bit BGRA pixels from srcWidth by srcHeight to
 // width by height by averaging the source area under each destination pixel, with
 // fractional weights at the edges, so a bitmap drawn smaller than it is stored keeps

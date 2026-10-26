@@ -158,12 +158,25 @@ func (state *windowState) textKey(first, second uintptr, mods input.Modifiers) b
 		return true
 	}
 	repeat := second&(1<<30) != 0
-	historyKey := platform.KeyEvent{Modifiers: mods, Repeat: repeat, Text: shortcutText(first)}
-	if command, ok := platform.TextHistoryCommand(historyKey); ok {
+	editKey := platform.KeyEvent{Key: normalizedKey(first), Modifiers: mods, Repeat: repeat, Text: shortcutText(first)}
+	if action := platform.TextClipboardAction(editKey); action != 0 {
+		event, changed, err := platform.TextClipboardEvent(state.textState, state.textInput.Secure, action, ClipboardText, SetClipboardText)
+		if err != nil {
+			messageBeep.Call(0) // a busy clipboard must not close the window or delete a selection
+		} else if changed {
+			state.handleTextEvent(event)
+		}
+		return true
+	}
+	// Placed editors own visual row navigation (wrapping, scrolling, and so on).
+	if state.textInput.Placed && (editKey.Key == input.KeyHome || editKey.Key == input.KeyEnd) {
+		return false
+	}
+	if command, ok := platform.TextEditingCommand(editKey); ok {
 		state.handleTextEvent(platform.TextEvent{Kind: platform.TextCommandEvent, Command: command})
 		return true
 	}
-	if command, ok := state.textCommand(first); ok {
+	if command, ok := state.textCommandWith(first, mods&input.ModifierShift != 0); ok {
 		state.handleTextEvent(platform.TextEvent{Kind: platform.TextCommandEvent, Command: command})
 		return true
 	}

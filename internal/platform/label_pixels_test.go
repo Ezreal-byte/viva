@@ -46,3 +46,28 @@ func TestResampleBGRARefusesToEnlarge(t *testing.T) {
 		t.Error("enlarging a bitmap returned pixels")
 	}
 }
+
+// A clip that cuts the left of a label skips the columns it cuts, so the texture is
+// the visible width; one that does not reaches the label keeps the whole texture.
+func TestLabelWindowSkipsTheColumnsTheClipCuts(t *testing.T) {
+	cases := []struct {
+		name                      string
+		origin, full, left, right int
+		skip, width               int
+		ok                        bool
+	}{
+		{"clip outside", 100, 200, 90, 320, 0, 200, true},
+		{"scrolled", 10, 1000, 210, 1010, 200, 800, true},
+		{"right edge inside", 10, 100, 0, 60, 0, 100, true},
+		{"nothing visible", 100, 50, 200, 160, 0, 0, false},
+		{"right clamped", 10, 100, 50, 500, 40, 60, true},
+		{"empty label", 10, 0, 0, 100, 0, 0, false},
+	}
+	for _, c := range cases {
+		skip, width, ok := LabelWindow(c.origin, c.full, c.left, c.right)
+		if skip != c.skip || width != c.width || ok != c.ok {
+			t.Errorf("%s: LabelWindow(%d, %d, %d, %d) = %d, %d, %v; want %d, %d, %v",
+				c.name, c.origin, c.full, c.left, c.right, skip, width, ok, c.skip, c.width, c.ok)
+		}
+	}
+}

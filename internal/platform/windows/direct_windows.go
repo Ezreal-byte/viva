@@ -238,8 +238,10 @@ func (bitmap *textBitmap) close() {
 // which stay valid until the next call. With lcd the pixels are the per-channel coverage of
 // ClearType text (red, green and blue in the texture's channels, alpha their luminance), to be
 // blended with the label color per channel (textMode 1); otherwise premultiplied BGRA in the
-// label's color.
-func (rasterizer *directRasterizer) rasterize(label platform.TextLabel, scale float32, width, height int, allowLCD bool) (pixels []byte, lcd bool, err error) {
+// label's color. skip is the whole device columns of the line left of the bitmap, for a line
+// whose clip cuts that much of its start; the text is drawn that many columns left, so the
+// bitmap holds only the visible part.
+func (rasterizer *directRasterizer) rasterize(label platform.TextLabel, scale float32, width, height int, allowLCD bool, skip int) (pixels []byte, lcd bool, err error) {
 	if cap(rasterizer.output) < width*height*4 {
 		rasterizer.output = make([]byte, width*height*4)
 	}
@@ -263,7 +265,7 @@ func (rasterizer *directRasterizer) rasterize(label platform.TextLabel, scale fl
 	baseline := float32(platform.LabelBaseline(height, float64(size)))
 	// The line is the one layout used for its width, at the device size.
 	err = rasterizer.engine.draw(label.Value, size, label.Weight, func(line *shapedLine) error {
-		return rasterizer.wholeLine(pixels, line, label, width, height, baseline, lcd)
+		return rasterizer.wholeLine(pixels, line, label, width, height, baseline, lcd, skip)
 	})
 	if err != nil {
 		return nil, false, err
@@ -272,11 +274,12 @@ func (rasterizer *directRasterizer) rasterize(label platform.TextLabel, scale fl
 }
 
 // wholeLine draws one shaped line into pixels, as one piece: with grayscale color glyphs,
-// or as the per-channel coverage of ClearType text.
-func (rasterizer *directRasterizer) wholeLine(pixels []byte, line *shapedLine, label platform.TextLabel, width, height int, baseline float32, lcd bool) error {
+// or as the per-channel coverage of ClearType text. skip is the device columns shifted off
+// the left, for a bitmap that holds only the part of the line its clip shows.
+func (rasterizer *directRasterizer) wholeLine(pixels []byte, line *shapedLine, label platform.TextLabel, width, height int, baseline float32, lcd bool, skip int) error {
 	if !lcd {
 		foreground := d2dColor{R: float32(label.Color.Red), G: float32(label.Color.Green), B: float32(label.Color.Blue), A: float32(label.Color.Alpha)}
-		scratch, err := rasterizer.pass(rasterizer.translucent, line, width, height, baseline, d2dColor{}, foreground, d2dAntialiasGrayscale, d2dEnableColorFont)
+		scratch, err := rasterizer.pass(rasterizer.translucent, line, width, height, baseline, d2dColor{}, foreground, d2dAntialiasGrayscale, d2dEnableColorFont, skip)
 		if err != nil {
 			return err
 		}
@@ -304,7 +307,7 @@ func (rasterizer *directRasterizer) wholeLine(pixels []byte, line *shapedLine, l
 		if !drawLight {
 			background, foreground = foreground, background
 		}
-		scratch, err := rasterizer.pass(rasterizer.opaque, line, width, height, baseline, background, foreground, d2dAntialiasDefault, 0)
+		scratch, err := rasterizer.pass(rasterizer.opaque, line, width, height, baseline, background, foreground, d2dAntialiasDefault, 0, skip)
 		if err != nil {
 			return err
 		}
@@ -323,7 +326,7 @@ func (rasterizer *directRasterizer) wholeLine(pixels []byte, line *shapedLine, l
 }
 
 // pass draws the shaped line on the target's scratch bitmap, filled with background, and returns it.
-func (rasterizer *directRasterizer) pass(target *directTarget, line *shapedLine, width, height int, baseline float32, background, foreground d2dColor, mode, options uint32) (*textBitmap, error) {
+func (rasterizer *directRasterizer) pass(target *directTarget, line *shapedLine, width, height int, baseline float32, background, foreground d2dColor, mode, options uint32, skip int) (*textBitmap, error) {
 	scratch, err := target.bind(width, height)
 	if err != nil {
 		return nil, err
@@ -331,8 +334,9 @@ func (rasterizer *directRasterizer) pass(target *directTarget, line *shapedLine,
 	fill(scratch, width, height, background)
 	target.begin(foreground, mode)
 	// The glyphs start at the layout's left edge (0 but for a layout whose text is aligned
-	// away from it), with the baseline of the line on row baseline.
-	target.draw(-line.left, baseline-line.ascent, line.layout, options)
+	// away from it), less the whole columns before the clip, with the baseline of the line
+	// on row baseline.
+	target.draw(-line.left-float32(skip), baseline-line.ascent, line.layout, options)
 	if err := target.end(); err != nil {
 		return nil, err
 	}

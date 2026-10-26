@@ -34,6 +34,9 @@ type labelTexture struct {
 	scale         float32
 	// width and height are the texture's size in device pixels.
 	width, height int
+	// skip is the device columns of the label's full texture that start before its
+	// clip and so are not rasterized.
+	skip int
 	// lcd is set when the texture holds the per-channel coverage of ClearType text, to
 	// be blended with the label's color (textMode 1), not premultiplied color.
 	lcd bool
@@ -131,6 +134,7 @@ func (label *labelTexture) close() {
 	label.runs = label.runs[:0]
 	label.scale = 0
 	label.width, label.height = 0, 0
+	label.skip = 0
 	label.lcd = false
 	label.spans = label.spans[:0]
 }
@@ -147,7 +151,7 @@ func (label *labelTexture) quad(scale float32) [4]float32 {
 	if len(l.Bitmap) > 0 {
 		width, height = platform.DeviceExtent(l.X, l.Width, scale), platform.DeviceExtent(l.Y, l.Height, scale)
 	}
-	return [4]float32{float32(x) / scale, float32(y) / scale, float32(width) / scale, float32(height) / scale}
+	return [4]float32{float32(x+label.skip) / scale, float32(y) / scale, float32(width) / scale, float32(height) / scale}
 }
 
 // pixelOrigin is the device pixel the label's texture starts at.
@@ -157,6 +161,23 @@ func (label *labelTexture) pixelOrigin(scale float32) (x, y int) {
 		return platform.DevicePosition(l.X, 0, scale), platform.DevicePosition(l.Y, 0, scale)
 	}
 	return platform.DevicePosition(l.X, l.OriginX, scale), platform.DevicePosition(l.Y, l.OriginY, scale)
+}
+
+// window is the part of the label's full texture that its clip can show, in device
+// pixels. A clipped line rasterizes only inside its clip, so a long scrolled
+// single-line field costs the visible width, not the whole line. The text does not
+// move: the skip is a whole number of device columns, so every glyph texel keeps the
+// phase it has when the whole texture is drawn. Labels that are not clipped, and
+// images and grid lines, keep their whole texture.
+func (label *labelTexture) window(scale float32) (skip, width int, ok bool) {
+	full := int(math.Ceil(float64(label.label.Width * scale)))
+	if !label.label.Clipped || label.label.Mono || len(label.label.Runs) > 0 || len(label.label.Bitmap) > 0 {
+		return 0, full, full > 0
+	}
+	x, _ := label.pixelOrigin(scale)
+	left := max(int64(math.Floor(float64(label.label.Clip.X*scale))), 0)
+	right := min(int64(math.Ceil(float64((label.label.Clip.X+label.label.Clip.Width)*scale))), int64(x)+int64(full))
+	return platform.LabelWindow(x, full, int(left), int(right))
 }
 
 func (label *labelTexture) update(next platform.TextLabel) {
@@ -193,7 +214,14 @@ func sameRuns(left, right []ui.TextRun) bool {
 	return true
 }
 func (renderer *renderer) rasterize(label *labelTexture, scale float32) error {
-	width, height := int(math.Ceil(float64(label.label.Width*scale))), int(math.Ceil(float64(label.label.Height*scale)))
+	skip, width, ok := label.window(scale)
+	if !ok {
+		release(&label.view)
+		release(&label.texture)
+		label.scale, label.width, label.height, label.skip = scale, 0, 0, 0
+		return nil
+	}
+	height := int(math.Ceil(float64(label.label.Height * scale)))
 	if len(label.label.Bitmap) > 0 {
 		width, height = label.label.BitmapWidth, label.label.BitmapHeight
 		// A bitmap drawn smaller than it is stored is averaged down to the device pixels it
@@ -221,7 +249,7 @@ func (renderer *renderer) rasterize(label *labelTexture, scale float32) error {
 		}
 		// ClearType blends per channel with what is under the text: a window's back
 		// buffer is opaque, an offscreen target cleared translucent is not.
-		pixels, label.lcd, err = renderer.direct.rasterize(label.label, scale, width, height, renderer.window != 0 || renderer.color.Alpha >= 1)
+		pixels, label.lcd, err = renderer.direct.rasterize(label.label, scale, width, height, renderer.window != 0 || renderer.color.Alpha >= 1, skip)
 		if err != nil {
 			return err
 		}
@@ -239,6 +267,7 @@ func (renderer *renderer) rasterize(label *labelTexture, scale float32) error {
 	}
 	label.scale = scale
 	label.width, label.height = width, height
+	label.skip = skip
 	renderer.labelRebuilds++
 	return nil
 }

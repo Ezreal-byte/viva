@@ -65,7 +65,7 @@ func TestClickCounts(t *testing.T) {
 }
 ```
 
-Background goroutines reach a driver only through `Config.Invalidator`, exactly as they reach a window, and `Pump` applies the wake. `examples/guides/background/main_test.go` shows a test that waits for a worker goroutine's result this way. The driver models the text system's editing commands and the Command-A, C, X and V shortcuts. It does not model input-method composition.
+Background goroutines reach a driver only through `Config.Invalidator`, exactly as they reach a window, and `Pump` applies the wake. `examples/guides/background/main_test.go` shows a test that waits for a worker goroutine's result this way. The driver models the text system's editing commands (Home/End, word and document navigation, word delete, undo and redo) and the Command-A, C, X and V shortcuts, and gives a focused ordinary field those chords before `OnShortcut`, as Windows does. It does not model input-method composition.
 
 ## The line protocol
 

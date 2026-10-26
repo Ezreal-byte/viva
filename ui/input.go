@@ -139,7 +139,8 @@ type Win32Key struct {
 // navigation, editing and function keys; for a chord such as Ctrl+C, Key is
 // KeyUnknown and Text holds the character without the modifiers applied ("c").
 // Text is otherwise empty on OnKey events. app.Config.OnShortcut separately
-// receives modified printable chords before native text handling.
+// receives modified printable chords before native text handling, except that a
+// focused ordinary text field on Windows claims the standard editing chords.
 //
 // A terminal that sets app.TextInput.KeyReleases gets the whole keyboard as
 // presses and releases instead: every key that is not consumed by input-method

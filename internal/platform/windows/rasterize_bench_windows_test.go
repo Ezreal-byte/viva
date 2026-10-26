@@ -62,7 +62,7 @@ func BenchmarkRasterizeOnly(benchmark *testing.B) {
 	benchmark.ReportAllocs()
 	benchmark.ResetTimer()
 	for range benchmark.N {
-		if _, _, err := rasterizer.rasterize(label, 1, 400, 28, true); err != nil {
+		if _, _, err := rasterizer.rasterize(label, 1, 400, 28, true, 0); err != nil {
 			benchmark.Fatal(err)
 		}
 	}
@@ -102,7 +102,7 @@ func BenchmarkGridRasterize(benchmark *testing.B) {
 		benchmark.Run(test.name, func(benchmark *testing.B) {
 			benchmark.ReportAllocs()
 			for range benchmark.N {
-				if _, _, err := rasterizer.rasterize(label, 1, 800, 20, test.lcd); err != nil {
+				if _, _, err := rasterizer.rasterize(label, 1, 800, 20, test.lcd, 0); err != nil {
 					benchmark.Fatal(err)
 				}
 			}

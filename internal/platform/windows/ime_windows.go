@@ -2,10 +2,12 @@ package windows
 
 import (
 	"fmt"
+	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
 	"unsafe"
 
+	inputpkg "github.com/vivaui/viva/internal/input"
 	"github.com/vivaui/viva/internal/platform"
 	"github.com/vivaui/viva/internal/render"
 	"github.com/vivaui/viva/internal/scene"
@@ -65,7 +67,7 @@ func validateTextInput(input *platform.TextInput) error {
 }
 
 func validateTextState(state platform.TextState) error {
-	runeCount := len([]rune(state.Value))
+	runeCount := utf8.RuneCountInString(state.Value)
 	if !validTextRange(state.Selection, runeCount) {
 		return fmt.Errorf("windows: invalid text selection %+v for %d runes", state.Selection, runeCount)
 	}
@@ -115,16 +117,25 @@ func (state *windowState) updateTextVisuals() error {
 		return nil
 	}
 	input := &state.textInput
+	caretX := state.textCaret(input.FontSize, state.textCaretIndex())
+	textWidth := state.textEngine.Width(state.textDisplayValue(), input.FontSize, 0)
+	visibleWidth := max(1, input.Width-textCaretWidth)
+	state.textScroll = max(0, min(state.textScroll, caretX, max(0, textWidth-visibleWidth)))
+	if caretX-state.textScroll > visibleWidth {
+		state.textScroll = caretX - visibleWidth
+	}
+	originX := input.X - state.textScroll
 	state.textLabels[state.baseTextLabelCount] = platform.TextLabel{
-		Value: state.textState.Value, X: input.X, Y: input.Y,
-		Width: input.Width, Height: input.Height, FontSize: input.FontSize, Color: input.Color, Layer: input.Layer,
+		Value: state.textDisplayValue(), X: originX, Y: input.Y,
+		Width:  max(input.Width+state.textScroll, textWidth+textCaretWidth),
+		Height: input.Height, FontSize: input.FontSize, Color: input.Color, Layer: input.Layer,
+		Clipped: true, Clip: ui.Rect{X: input.X, Y: input.Y, Width: input.Width, Height: input.Height},
 	}
 	selection := state.textState.Selection
 	selectionStart, selectionEnd := state.textExtent(input.FontSize, selection)
-	caretX := state.textCaret(input.FontSize, selection.End)
 	base := state.baseRectangleCount
 	state.textRectangles[base] = render.Rectangle{
-		Bounds: scene.Rect{X: input.X + selectionStart, Y: input.Y, Width: selectionEnd - selectionStart, Height: input.Height},
+		Bounds: scene.Rect{X: originX + selectionStart, Y: input.Y, Width: selectionEnd - selectionStart, Height: input.Height},
 		Color:  scene.Color{Red: 0.22, Green: 0.48, Blue: 1, Alpha: 0.34},
 		Layer:  input.Layer,
 	}
@@ -133,7 +144,7 @@ func (state *windowState) updateTextVisuals() error {
 	state.textRectangles[base+1] = render.Rectangle{}
 	if state.caretVisible {
 		state.textRectangles[base+1] = render.Rectangle{
-			Bounds: scene.Rect{X: input.X + caretX, Y: input.Y + (input.Height-caretHeight)/2, Width: textCaretWidth, Height: caretHeight},
+			Bounds: scene.Rect{X: originX + caretX, Y: input.Y + (input.Height-caretHeight)/2, Width: textCaretWidth, Height: caretHeight},
 			Color:  caretColor,
 			Layer:  input.Layer,
 		}
@@ -144,7 +155,7 @@ func (state *windowState) updateTextVisuals() error {
 		composition := state.textState.Composition
 		compositionStart, compositionEnd := state.textExtent(input.FontSize, composition)
 		state.textRectangles[base+2] = render.Rectangle{
-			Bounds: scene.Rect{X: input.X + compositionStart, Y: input.Y + min(input.Height-2, input.FontSize*1.3), Width: compositionEnd - compositionStart, Height: 1.5},
+			Bounds: scene.Rect{X: originX + compositionStart, Y: input.Y + min(input.Height-2, input.FontSize*1.3), Width: compositionEnd - compositionStart, Height: 1.5},
 			Color:  caretColor,
 			Layer:  input.Layer,
 		}
@@ -153,22 +164,44 @@ func (state *windowState) updateTextVisuals() error {
 			// the rest of the composition, which is how it tells which part a candidate
 			// list is for.
 			target := text.Range{Start: composition.Start + state.imeTarget.Start, End: composition.Start + state.imeTarget.End}
-			if validTextRange(target, len([]rune(state.textState.Value))) {
+			if validTextRange(target, utf8.RuneCountInString(state.textState.Value)) {
 				targetStart, targetEnd := state.textExtent(input.FontSize, target)
 				state.textRectangles[base+3] = render.Rectangle{
-					Bounds: scene.Rect{X: input.X + targetStart, Y: input.Y + min(input.Height-3, input.FontSize*1.3), Width: targetEnd - targetStart, Height: 3},
+					Bounds: scene.Rect{X: originX + targetStart, Y: input.Y + min(input.Height-3, input.FontSize*1.3), Width: targetEnd - targetStart, Height: 3},
 					Color:  caretColor,
 					Layer:  input.Layer,
 				}
 			}
 		}
 	}
+	for index := base; index < base+textRectangleCount; index++ {
+		state.textRectangles[index].Clipped = true
+		state.textRectangles[index].Clip = scene.Rect{X: input.X, Y: input.Y, Width: input.Width, Height: input.Height}
+	}
 	return nil
 }
 
-// textByte is the byte offset of the rune index in the text input's value.
+func (state *windowState) textDisplayValue() string {
+	if state.textInput.Secure {
+		count := utf8.RuneCountInString(state.textState.Value)
+		if len(state.textMask) != count*len("•") {
+			state.textMask = strings.Repeat("•", count)
+		}
+		return state.textMask
+	}
+	return state.textState.Value
+}
+
+func (state *windowState) textCaretIndex() int {
+	if state.textState.SelectionReversed {
+		return state.textState.Selection.Start
+	}
+	return state.textState.Selection.End
+}
+
+// textByte is the byte offset of the rune index in the text input's display value.
 func (state *windowState) textByte(runeIndex int) int {
-	value := state.textState.Value
+	value := state.textDisplayValue()
 	offset := 0
 	for ; runeIndex > 0 && offset < len(value); runeIndex-- {
 		_, size := utf8.DecodeRuneInString(value[offset:])
@@ -179,14 +212,14 @@ func (state *windowState) textByte(runeIndex int) int {
 
 // textCaret is the x of the caret before the rune index, from the left of the input.
 func (state *windowState) textCaret(size float32, runeIndex int) float32 {
-	return state.textEngine.Caret(state.textState.Value, size, 0, state.textByte(runeIndex))
+	return state.textEngine.Caret(state.textDisplayValue(), size, 0, state.textByte(runeIndex))
 }
 
 // textExtent is the left and right x of the glyphs of the runes in the range: the one
 // rectangle a selection or a composition underline is drawn as. A range with text of
 // both directions is drawn from its leftmost to its rightmost glyph.
 func (state *windowState) textExtent(size float32, runes text.Range) (left, right float32) {
-	state.textSpans = state.textEngine.Selection(state.textSpans[:0], state.textState.Value, size, 0, state.textByte(runes.Start), state.textByte(runes.End))
+	state.textSpans = state.textEngine.Selection(state.textSpans[:0], state.textDisplayValue(), size, 0, state.textByte(runes.Start), state.textByte(runes.End))
 	if len(state.textSpans) == 0 {
 		return 0, 0
 	}
@@ -198,17 +231,51 @@ func (state *windowState) textExtent(size float32, runes text.Range) (left, righ
 }
 
 func (state *windowState) textPointerEvent(event platform.PointerEvent) (platform.TextEvent, bool, error) {
-	if !state.textEnabled || state.textInput.Terminal || state.textInput.Placed || event.Kind != platform.PointerDown || event.Button != ui.PointerButtonPrimary {
+	if !state.textEnabled || state.textInput.Terminal || state.textInput.Placed || state.imeComposing {
+		state.textDragging = false
 		return platform.TextEvent{}, false, nil
 	}
 	input := &state.textInput
-	if event.X < input.X || event.X > input.X+input.Width || event.Y < input.Y || event.Y > input.Y+input.Height {
+	switch event.Kind {
+	case platform.PointerDown:
+		state.textDragging = false
+		if event.Button != ui.PointerButtonPrimary || event.X < input.X || event.X > input.X+input.Width || event.Y < input.Y || event.Y > input.Y+input.Height {
+			return platform.TextEvent{}, false, nil
+		}
+	case platform.PointerMove:
+		if !state.textDragging {
+			return platform.TextEvent{}, false, nil
+		}
+	case platform.PointerUp:
+		state.textDragging = false
+		return platform.TextEvent{}, false, nil
+	case platform.PointerExit:
+		state.textDragging = false
+		return platform.TextEvent{}, false, nil
+	default:
 		return platform.TextEvent{}, false, nil
 	}
-	value := state.textState.Value
-	offset := state.textEngine.OffsetAt(value, input.FontSize, 0, event.X-input.X)
+	value := state.textDisplayValue()
+	offset := state.textEngine.OffsetAt(value, input.FontSize, 0, event.X-input.X+state.textScroll)
 	index := utf8.RuneCountInString(value[:max(0, min(offset, len(value)))])
-	selection := text.Range{Start: index, End: index}
+	if event.Kind == platform.PointerDown {
+		state.textDragAnchor = index
+		state.textDragging = true
+		if event.Modifiers&inputpkg.ModifierShift != 0 {
+			state.textDragAnchor = state.textState.Selection.Start
+			if state.textState.SelectionReversed {
+				state.textDragAnchor = state.textState.Selection.End
+			}
+		} else if event.ClickCount >= 2 {
+			selection := text.WordRange(state.textState.Value, index)
+			if event.ClickCount >= 3 || state.textInput.Secure {
+				selection = text.Range{End: utf8.RuneCountInString(state.textState.Value)}
+			}
+			state.textDragAnchor = selection.Start
+			return platform.TextEvent{Kind: platform.TextSetSelection, Selection: selection}, true, nil
+		}
+	}
+	selection := text.Range{Start: state.textDragAnchor, End: index}
 	return platform.TextEvent{Kind: platform.TextSetSelection, Selection: selection}, true, nil
 }
 
@@ -293,6 +360,8 @@ func (state *windowState) applyTextInputUpdate(update platform.TextInputUpdate) 
 	}
 	state.pendingHighSurrogate = 0
 	if update.Input == nil {
+		state.textDragging = false
+		state.textScroll = 0
 		state.textEnabled = false
 		state.textInput = platform.TextInput{}
 		state.textState = platform.TextState{}
@@ -560,7 +629,7 @@ func (state *windowState) caretCell() (x, y, height float32) {
 		// The field laid its rows out itself: this is where it painted its caret.
 		return input.CaretX, input.CaretY, input.CaretHeight
 	}
-	return input.X + state.textCaret(input.FontSize, state.textState.Selection.End), input.Y, input.Height
+	return input.X + state.textCaret(input.FontSize, state.textCaretIndex()) - state.textScroll, input.Y, input.Height
 }
 
 // compositionTarget is the clause the input method is converting, as runes of the
@@ -609,7 +678,7 @@ func (state *windowState) handleUTF16Character(value uint16) {
 }
 
 func decodeUTF16Character(pending, value uint16) (string, uint16, bool) {
-	if value < 0x20 {
+	if value < 0x20 || value == 0x7f {
 		return "", pending, false
 	}
 	if value >= 0xd800 && value <= 0xdbff {

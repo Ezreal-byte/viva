@@ -1057,10 +1057,11 @@ func (painter *painter) syncTextInput() platform.TextInputUpdate {
 			Blue: float64(tint.Blue), Alpha: float64(tint.Alpha),
 		},
 		State: platform.TextState{
-			Value:       input.State.Value,
-			Selection:   platformTextRange(input.State.Selection),
-			Composition: platformTextRange(input.State.Composition),
-			Composing:   input.State.Composing,
+			Value:             input.State.Value,
+			Selection:         platformTextRange(input.State.Selection),
+			SelectionReversed: input.State.SelectionReversed,
+			Composition:       platformTextRange(input.State.Composition),
+			Composing:         input.State.Composing,
 		},
 		OnEvent: painter.onTextEvent,
 	}
@@ -1091,6 +1092,13 @@ func (painter *painter) applyTextEvent(event platform.TextEvent) (platform.TextS
 		Replacement:     appTextRange(event.Replacement), HasReplacement: event.HasReplacement,
 		Command: TextCommand(event.Command),
 	}
+	if !painter.nativeText.Multiline && !painter.nativeText.Terminal &&
+		(event.Kind == platform.TextPaste || event.Kind == platform.TextInsert) && event.Text != "" {
+		appEvent.Text = text.SingleLine(event.Text)
+		if appEvent.Text == "" {
+			return painter.nativeText.State, nil
+		}
+	}
 	var next TextState
 	if active.Editor != nil {
 		appEvent.Apply(active.Editor)
@@ -1106,11 +1114,12 @@ func (painter *painter) applyTextEvent(event platform.TextEvent) (platform.TextS
 	}
 	painter.activeText.State = next
 	native := platform.TextState{
-		Value:       next.Value,
-		Selection:   platformTextRange(next.Selection),
-		Composition: platformTextRange(next.Composition),
-		Composing:   next.Composing,
-		Redraw:      next.Redraw,
+		Value:             next.Value,
+		Selection:         platformTextRange(next.Selection),
+		SelectionReversed: next.SelectionReversed,
+		Composition:       platformTextRange(next.Composition),
+		Composing:         next.Composing,
+		Redraw:            next.Redraw,
 	}
 	// What the platform mirrors back never carries the one-shot request.
 	painter.nativeText.State = native.WithoutRedraw()

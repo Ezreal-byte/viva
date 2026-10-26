@@ -617,10 +617,12 @@ type TextInput struct {
 
 // TextState is the complete platform-neutral state mirrored by NSTextInputClient.
 type TextState struct {
-	Value       string
-	Selection   text.Range
-	Composition text.Range
-	Composing   bool
+	// SelectionReversed preserves the moving end of a backwards selection.
+	SelectionReversed bool
+	Value             string
+	Selection         text.Range
+	Composition       text.Range
+	Composing         bool
 	// Redraw asks for a frame after this event although the editor itself looks
 	// the same: the application changed something else on screen in response, a
 	// terminal drawing typed text ahead of the server's echo. It is not part of
@@ -677,6 +679,21 @@ const (
 	TextInsertLineBreak
 	TextUndo
 	TextRedo
+	TextSelectAll
+	TextMoveLineStart
+	TextMoveLineEnd
+	TextMoveLineStartAndModifySelection
+	TextMoveLineEndAndModifySelection
+	TextMoveDocumentStart
+	TextMoveDocumentEnd
+	TextMoveDocumentStartAndModifySelection
+	TextMoveDocumentEndAndModifySelection
+	TextMoveWordLeft
+	TextMoveWordRight
+	TextMoveWordLeftAndModifySelection
+	TextMoveWordRightAndModifySelection
+	TextDeleteWordBackward
+	TextDeleteWordForward
 )
 
 // TextEvent contains rune-indexed ranges. MarkedSelection is relative to Text.
@@ -733,6 +750,36 @@ func (event TextEvent) Apply(editor *text.Editor) {
 			editor.Undo()
 		case TextRedo:
 			editor.Redo()
+		case TextSelectAll:
+			editor.SetSelection(text.Range{End: editor.RuneCount()})
+		case TextMoveLineStart:
+			editor.MoveLineBoundary(false, false)
+		case TextMoveLineEnd:
+			editor.MoveLineBoundary(true, false)
+		case TextMoveLineStartAndModifySelection:
+			editor.MoveLineBoundary(false, true)
+		case TextMoveLineEndAndModifySelection:
+			editor.MoveLineBoundary(true, true)
+		case TextMoveDocumentStart:
+			editor.MoveTo(0, false)
+		case TextMoveDocumentEnd:
+			editor.MoveTo(editor.RuneCount(), false)
+		case TextMoveDocumentStartAndModifySelection:
+			editor.MoveTo(0, true)
+		case TextMoveDocumentEndAndModifySelection:
+			editor.MoveTo(editor.RuneCount(), true)
+		case TextMoveWordLeft:
+			editor.MoveWord(false, false)
+		case TextMoveWordRight:
+			editor.MoveWord(true, false)
+		case TextMoveWordLeftAndModifySelection:
+			editor.MoveWord(false, true)
+		case TextMoveWordRightAndModifySelection:
+			editor.MoveWord(true, true)
+		case TextDeleteWordBackward:
+			editor.DeleteWord(false)
+		case TextDeleteWordForward:
+			editor.DeleteWord(true)
 		}
 	}
 }
@@ -769,10 +816,11 @@ func TextHistoryCommand(event KeyEvent) (TextCommand, bool) {
 func EditorState(editor *text.Editor) TextState {
 	composition, composing := editor.Composition()
 	return TextState{
-		Value:       editor.String(),
-		Selection:   editor.Selection(),
-		Composition: composition,
-		Composing:   composing,
+		Value:             editor.String(),
+		Selection:         editor.Selection(),
+		SelectionReversed: editor.Selection().Start != editor.Selection().End && editor.Caret() == editor.Selection().Start,
+		Composition:       composition,
+		Composing:         composing,
 	}
 }
 

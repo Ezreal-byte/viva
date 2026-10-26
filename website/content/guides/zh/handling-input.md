@@ -184,7 +184,7 @@ if id.Scope() == rows {                    // 点击到来时
 
 ## 快捷键
 
-`OnShortcut` 在原生文本系统看到之前，先收到带 Control 或 Command 的可打印按键组合。只对应用自己拥有的组合返回 `Handled`：未处理的组合会继续走正常的文本编辑，所以在文本框里 Command-C 仍然是复制。示例用 `primary()` 辅助函数来比较 `Modifiers`，因为常规的按键在 macOS 上是 Command，在其他平台上是 Control。
+`OnShortcut` 在原生文本系统看到之前，先收到带 Control 或 Command 的可打印按键组合。只对应用自己拥有的组合返回 `Handled`：未处理的组合会继续走正常的文本编辑，所以在文本框里 Command-C 仍然是复制。在 Windows 上，获得焦点的普通文本框会先拿走标准编辑与剪贴板组合（复制、剪切、粘贴、全选、撤销、重做、Home/End、按词和按文档移动），终端和 `Placed` 编辑器不会。示例用 `primary()` 辅助函数来比较 `Modifiers`，因为常规的按键在 macOS 上是 Command，在其他平台上是 Control。
 
 ## 滚动
 
