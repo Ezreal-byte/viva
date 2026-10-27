@@ -1,0 +1,13 @@
+---
+import lockup from '../assets/viva-lockup.svg?raw';
+
+// The header needs the wordmark as live markup so the letterforms follow the
+// theme (fill="currentColor"); the mark and the sparkle stay scarlet.
+const markup = lockup
+  .replace('<svg ', '<svg class="brand-lockup" aria-hidden="true" focusable="false" ')
+  .replace(' role="img"', '')
+  .replace(' aria-label="Viva"', '')
+  .replace('<title>Viva</title>', '');
+---
+
+<Fragment set:html={markup} />
