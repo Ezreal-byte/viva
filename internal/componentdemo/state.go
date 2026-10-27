@@ -45,7 +45,7 @@ type editableField struct {
 }
 
 var coreComponents = []Component{
-	buttonComponent, badgeComponent, checkboxComponent, colorSwatchComponent,
+	buttonComponent, badgeComponent, checkboxComponent, colorSwatchComponent, colorPickerComponent,
 	switchComponent, inputComponent, dialogComponent,
 	codeEditorComponent, imageViewComponent,
 }
@@ -96,6 +96,7 @@ type State struct {
 	imageBitmap *ui.Bitmap
 	dialog      dialogState
 	slider      sliderDemoState
+	picker      *colorPickerDemoState
 	// view keeps the memory the flex pages of this demo are laid out in (see page).
 	// It is a pointer so a State stays comparable.
 	view  *flex.View

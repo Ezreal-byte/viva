@@ -11,9 +11,11 @@ type FormFieldSnapshot struct {
 	Message       string
 	Error         string
 	ControlHeight float32
-	Required      bool
-	Disabled      bool
-	Invalid       bool
+	// LabelGap follows Field.LabelGap; zero preserves the compact default.
+	LabelGap float32
+	Required bool
+	Disabled bool
+	Invalid  bool
 	// ControlID, when set, is the identity of the control painted into the
 	// layout's Control slot; the label then labels it (see ui.Canvas.HitLabel),
 	// as `htmlFor` does, so pressing the label focuses and clicks the control.
@@ -86,7 +88,7 @@ func PaintFormField(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, snapshot 
 		},
 	}
 	layout.Control = ui.Rect{
-		X: bounds.X, Y: layout.Label.Y + layout.Label.Height + gap,
+		X: bounds.X, Y: layout.Label.Y + layout.Label.Height + fieldControlGap(metrics, snapshot.LabelGap),
 		Width: bounds.Width, Height: controlHeight,
 	}
 	nextY := layout.Control.Y + layout.Control.Height
