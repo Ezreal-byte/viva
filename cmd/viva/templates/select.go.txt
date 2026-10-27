@@ -111,6 +111,7 @@ func BeginSelect(canvas *ui.Canvas, theme ui.Theme, triggerBounds ui.Rect, optio
 		canvas: canvas, theme: theme, bounds: content,
 		options: menuSurfaceOptions{layer: options.Layer, scope: options.Scope, scroll: options.Scroll},
 		top:     content.Y + menuPadding, bottom: content.Y + content.Height - menuPadding,
+		viewHeight: max(content.Height-2*menuPadding, 0),
 	}
 	selectControl.rows.beginScroll()
 	if options.Scroll != nil {

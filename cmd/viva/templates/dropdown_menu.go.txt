@@ -607,6 +607,7 @@ const (
 type menuItem struct {
 	ID            ui.ID
 	Label         string
+	Description   string
 	Shortcut      string
 	Keys          []string
 	TrailingWidth float32
@@ -658,10 +659,13 @@ type menuSurface struct {
 	// top and bottom are the edges of the visible rows; y is where the next row
 	// goes, already moved up by the scroll offset; used is the rows' height so far.
 	top, bottom float32
-	y           float32
-	used        float32
-	offset      float32
-	hidden      bool
+	// Keep the local height: subtracting absolute coordinates loses precision
+	// at fractional origins and can create a scrollbar for an exactly fitting list.
+	viewHeight float32
+	y          float32
+	used       float32
+	offset     float32
+	hidden     bool
 	// animated says beginMenuSurface opened the menu's presence group, which end
 	// has to close. A command list shares the surface and has none.
 	animated bool
@@ -677,6 +681,7 @@ func beginMenuSurface(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, minWidt
 	}
 	menu := menuSurface{canvas: canvas, theme: theme, bounds: bounds, options: options, hidden: canvas == nil || bounds.Height <= 0}
 	menu.top, menu.bottom = bounds.Y+menuPadding, bounds.Y+bounds.Height-menuPadding
+	menu.viewHeight = max(bounds.Height-2*menuPadding, 0)
 	menu.beginScroll()
 	if scroll := options.scroll; scroll != nil {
 		scroll.TabCloses = options.tabCloses
@@ -724,7 +729,7 @@ func (menu *menuSurface) beginScroll() {
 			scroll.follow(menu.canvas)
 		}
 		scroll.items = scroll.items[:0]
-		scroll.view = max(menu.bottom-menu.top, 0)
+		scroll.view = menu.viewHeight
 		if scroll.measured {
 			scroll.Offset = max(min(scroll.Offset, scroll.max), 0)
 		}
@@ -755,7 +760,7 @@ func (menu *menuSurface) take(row ui.Rect) bool {
 	menu.y += row.Height
 	menu.used += row.Height
 	if scroll := menu.options.scroll; scroll != nil {
-		scroll.max, scroll.measured = max(menu.used-(menu.bottom-menu.top), 0), true
+		scroll.max, scroll.measured = max(menu.used-menu.viewHeight, 0), true
 	}
 	return !menu.hidden && row.Height > 0 && row.Y < menu.bottom && row.Y+row.Height > menu.top
 }
@@ -819,7 +824,7 @@ func (menu *menuSurface) addSeparator() ui.Rect {
 // addItem lays a row out and paints it. The slot is the room TrailingWidth
 // reserved, when the whole row shows.
 func (menu *menuSurface) addItem(item menuItem) (row, slot ui.Rect) {
-	row = menu.rowBounds(menu.itemHeight())
+	row = menu.rowBounds(menuItemHeight(menu.theme, item, menu.options.rowHeight))
 	if !menu.takeItem(row, item.ID, item.Label, item.Disabled) {
 		return ui.Rect{}, ui.Rect{}
 	}
@@ -866,7 +871,21 @@ func menuItemWidth(canvas *ui.Canvas, theme ui.Theme, item menuItem, indicatorLe
 	if len(item.Icon.Commands) > 0 || len(item.Icon.Layers) > 0 {
 		left += menuIconSize + menuIconGap
 	}
-	return left + canvas.TextWidth(item.Label, theme.Metrics.FontSizeM) + right + 2*menuPadding
+	textWidth := canvas.TextWidth(item.Label, theme.Metrics.FontSizeM)
+	if item.Description != "" {
+		textWidth = max(textWidth, canvas.TextWidth(item.Description, theme.Metrics.FontSizeS))
+	}
+	return left + textWidth + right + 2*menuPadding
+}
+
+func menuItemHeight(theme ui.Theme, item menuItem, rowHeight float32) float32 {
+	if rowHeight <= 0 {
+		rowHeight = menuRowHeight
+	}
+	if item.Description != "" {
+		rowHeight += theme.Metrics.FontSizeS + 6
+	}
+	return rowHeight
 }
 
 func (menu *menuSurface) paintItem(bounds ui.Rect, item menuItem) {
@@ -929,9 +948,25 @@ func (menu *menuSurface) paintItem(bounds ui.Rect, item menuItem) {
 		canvas.DrawIcon(item.Icon, ui.Rect{X: bounds.X + left, Y: bounds.Y + (bounds.Height-side)/2, Width: side, Height: side}, foreground)
 		left += menuIconSize + menuIconGap
 	}
-	canvas.Label(item.Label, ui.Rect{X: bounds.X + left, Y: bounds.Y, Width: max(0, bounds.Width-left-right), Height: bounds.Height}, ui.TextStyle{
+	labelHeight := bounds.Height
+	if item.Description != "" {
+		labelHeight = menu.itemHeight()
+	}
+	canvas.Label(item.Label, ui.Rect{X: bounds.X + left, Y: bounds.Y, Width: max(0, bounds.Width-left-right), Height: labelHeight}, ui.TextStyle{
 		Size: theme.Metrics.FontSizeM, Weight: ui.WeightRegular, Color: foreground,
 	})
+	if item.Description != "" {
+		color := theme.MutedForeground
+		if active {
+			color = foreground
+		}
+		color = dropdownMenuOpacity(color, item.Disabled)
+		width := max(0, bounds.Width-left-right-menu.hitInset)
+		value := canvas.FitLine(item.Description, theme.Metrics.FontSizeS, ui.WeightRegular, width)
+		canvas.Label(value, ui.Rect{X: bounds.X + left, Y: bounds.Y + labelHeight, Width: width, Height: bounds.Height - labelHeight}, ui.TextStyle{
+			Size: theme.Metrics.FontSizeS, Weight: ui.WeightRegular, Color: color,
+		})
+	}
 	if !item.ID.IsZero() {
 		hit := bounds
 		hit.Width -= menu.hitInset
@@ -951,7 +986,7 @@ func (menu *menuSurface) end() {
 		return
 	}
 	if scroll := menu.options.scroll; scroll != nil && scroll.max > 0 {
-		view := menu.bottom - menu.top
+		view := menu.viewHeight
 		thumb := max(view*view/(view+scroll.max), 18)
 		at := menu.top + (view-thumb)*scroll.Offset/scroll.max
 		scroll.barTop, scroll.thumb = menu.top, thumb

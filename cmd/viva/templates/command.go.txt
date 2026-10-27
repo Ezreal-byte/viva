@@ -76,6 +76,7 @@ func BeginCommand(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, options Com
 		canvas: canvas, theme: theme, bounds: bounds,
 		options: menuSurfaceOptions{layer: options.Layer, scope: options.Scope, scroll: options.Scroll},
 		top:     bounds.Y + inputHeight, bottom: bounds.Y + bounds.Height - 4,
+		viewHeight: max(bounds.Height-inputHeight-4, 0),
 	}
 	command.list.beginScroll()
 	command.list.pushOverlay()
