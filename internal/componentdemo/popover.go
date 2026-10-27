@@ -17,7 +17,7 @@ if trigger.Clicked() {
 if open {
     components.BeginPopover(canvas, theme, viewport, trigger.Rect(), components.PopoverOptions{
         Layer: 3, Scope: scope, DismissID: dismissID, Side: components.PopoverBottom,
-        Align: components.PopoverAlignStart, SideOffset: 8,
+        Align: components.PopoverAlignStart, SideOffset: 8, AnchorDismiss: true,
     }).Paint("Native surface", "Clamped to the viewport without timers.")
 }
 if canvas.Clicked(dismissID) { open = false }`},
@@ -72,7 +72,8 @@ func (state *State) paintPopover(canvas *ui.Canvas, theme ui.Theme, size ui.Size
 	popover := components.BeginPopover(canvas, theme, ui.Rect{Width: size.Width, Height: size.Height}, anchor.Rect(), components.PopoverOptions{
 		Layer: 3, Scope: popoverScope, DismissID: popoverDismiss,
 		Side: components.PopoverBottom, Align: components.PopoverAlignStart, SideOffset: 8,
-		ContentSize: ui.Size{Width: contentWidth}, BodyHeight: bodyHeight,
+		AnchorDismiss: true,
+		ContentSize:   ui.Size{Width: contentWidth}, BodyHeight: bodyHeight,
 	})
 	if state.exampleID == "custom-body" {
 		layout := popover.Begin("Build status", "The stable host owns this overlay state.")

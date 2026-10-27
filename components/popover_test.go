@@ -64,6 +64,29 @@ func TestPopoverDisabledPaintsNothing(t *testing.T) {
 	}
 }
 
+func TestPopoverCanEmphasizeItsTitleWithoutChangingTheDefault(t *testing.T) {
+	for _, weight := range []float32{0, ui.WeightBold} {
+		var canvas ui.Canvas
+		BeginPopover(&canvas, ui.LightTheme(), ui.Rect{Width: 640, Height: 480}, ui.Rect{X: 20, Y: 20, Width: 40, Height: 20}, PopoverOptions{TitleWeight: weight}).Paint("Heading", "Description")
+		want := weight
+		if want == 0 {
+			want = ui.WeightMedium
+		}
+		found := false
+		for _, text := range canvas.Texts() {
+			if text.Value == "Heading" {
+				found = true
+				if text.Style.Weight != want {
+					t.Fatalf("title weight=%v, want %v", text.Style.Weight, want)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("heading was not painted")
+		}
+	}
+}
+
 func TestPopoverWithoutScopePreservesOuterFocusScope(t *testing.T) {
 	var canvas ui.Canvas
 	canvas.PushFocusScope(ui.Item(51))

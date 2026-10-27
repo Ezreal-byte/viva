@@ -820,3 +820,60 @@ func TestDriverAPopoverPassesAnOutsidePressThroughAndKeepsInsidePresses(t *testi
 		t.Fatalf("press on the popover surface: dismissed=%d page=%d, want no change", dismissed, pageClicks)
 	}
 }
+
+func TestDriverPopoverAnchorDismissDoesNotReopenTheTrigger(t *testing.T) {
+	var tree ui.Tree
+	feature := tree.Feature("popover-anchor")
+	trigger, pageID := tree.ID(feature, "trigger"), tree.ID(feature, "page")
+	dismiss, scope := tree.ID(feature, "dismiss"), tree.ID(feature, "scope")
+	open, toggles, pageClicks := false, 0, 0
+	anchor := ui.Rect{X: 20, Y: 10, Width: 80, Height: 24}
+	page := ui.Rect{X: 250, Y: 120, Width: 40, Height: 30}
+	config := Config{Title: "popover anchor", Width: 300, Height: 200, Tree: &tree}
+	config.Paint = func(canvas *ui.Canvas, size ui.Size) {
+		components.BeginButton(canvas, ui.LightTheme(), trigger, anchor).Default("Toggle")
+		components.BeginButton(canvas, ui.LightTheme(), pageID, page).Default("Page")
+		if canvas.Clicked(trigger) {
+			open = !open
+			toggles++
+		}
+		if canvas.Clicked(pageID) {
+			pageClicks++
+		}
+		if canvas.Clicked(dismiss) {
+			open = false
+		}
+		if open {
+			components.BeginPopover(canvas, ui.LightTheme(), ui.Rect{Width: size.Width, Height: size.Height}, anchor, components.PopoverOptions{
+				Layer: 3, Scope: scope, DismissID: dismiss, AnchorDismiss: true, ContentSize: ui.Size{Width: 160, Height: 100},
+			}).Paint("Details", "Content")
+		}
+	}
+	driver, err := NewDriver(config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer driver.Close()
+	for _, button := range []ui.PointerButton{ui.PointerButtonPrimary, ui.PointerButtonSecondary} {
+		if err := driver.Click(40, 20); err != nil {
+			t.Fatal(err)
+		}
+		if !open {
+			t.Fatal("trigger did not open")
+		}
+		before := toggles
+		if err := driver.ClickButton(40, 20, button); err != nil {
+			t.Fatal(err)
+		}
+		if open || toggles != before {
+			t.Fatalf("anchor press: button=%v open=%v toggles=%d before=%d", button, open, toggles, before)
+		}
+	}
+	driver.Click(40, 20)
+	if err := driver.Click(270, 135); err != nil {
+		t.Fatal(err)
+	}
+	if open || pageClicks != 1 {
+		t.Fatal("outside page press did not dismiss and pass through")
+	}
+}
