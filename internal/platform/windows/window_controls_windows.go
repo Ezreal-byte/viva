@@ -265,10 +265,6 @@ var edgeHitCode = [...]uintptr{
 	platform.EdgeBottomRight: htBottomRight, platform.EdgeBottom: htBottom, platform.EdgeBottomLeft: htBottomLeft, platform.EdgeLeft: htLeft,
 }
 
-// resizeCode reports whether a hit-test code is one of the resize edges, where
-// the system shows its own cursor.
-func resizeCode(code uintptr) bool { return code >= htLeft && code <= htBottomRight }
-
 // installFrame prepares a custom-titlebar window: a shadow, and the actions
 // behind Viva's buttons.
 func (state *windowState) installFrame() {

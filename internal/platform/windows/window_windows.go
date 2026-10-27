@@ -469,9 +469,9 @@ func windowProc(window, kind, first, second uintptr) (result uintptr) {
 		state.textDragging = false
 		return 0
 	case wmSetCursor:
-		// Over a resize edge of a custom-titlebar window the system's resize
-		// cursor is right, not the application's.
-		if state.customFrame() && resizeCode(uintptr(uint16(second))) {
+		// Every native frame owns its non-client cursor, including resize
+		// edges on standard titled windows. Only override the client area.
+		if uintptr(uint16(second)) != htClient {
 			break
 		}
 		if cursor := state.cursor.Load(); cursor != 0 {
