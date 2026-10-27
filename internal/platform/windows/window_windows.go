@@ -79,6 +79,7 @@ type windowState struct {
 	started                                time.Time
 	clicks                                 input.ClickCounter
 	cursor                                 atomic.Uintptr
+	redraws                                redrawQueue
 	textState                              platform.TextState
 	textScroll                             float32
 	textMask                               string
@@ -267,9 +268,13 @@ func (application *windowsApplication) OpenWindow(config platform.Config) (platf
 	application.windows++
 	if config.Waker != nil && config.OnRedraw != nil {
 		config.Waker.Bind(func() {
-			if state.window != 0 {
-				postMessage.Call(state.window, wmRedraw, 0, 0)
-			}
+			state.redraws.post(func() bool {
+				if state.window == 0 {
+					return false
+				}
+				posted, _, _ := postMessage.Call(state.window, wmRedraw, 0, 0)
+				return posted != 0
+			})
 		})
 	}
 	if getDPI.Find() == nil {
@@ -414,6 +419,7 @@ func windowProc(window, kind, first, second uintptr) (result uintptr) {
 		}
 		return 0
 	case wmRedraw:
+		state.redraws.begin()
 		if state.config.OnRedraw != nil {
 			frame, redrawErr := state.config.OnRedraw()
 			state.frame(frame, redrawErr)
