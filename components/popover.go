@@ -58,17 +58,22 @@ type PopoverOptions struct {
 	// or secondary press outside its surface. The outside press is passed on to
 	// the control beneath, as a non-modal web popover's is. The surface itself is
 	// opaque, so presses on its padding or header do not reach the trigger.
-	DismissID   ui.ID
-	Side        PopoverSide
-	Align       PopoverAlign
-	SideOffset  float32
-	AlignOffset float32
+	DismissID ui.ID
+	// AnchorDismiss consumes a primary press on the anchor as a dismiss action,
+	// rather than passing it through to a trigger that would reopen the popover.
+	AnchorDismiss bool
+	Side          PopoverSide
+	Align         PopoverAlign
+	SideOffset    float32
+	AlignOffset   float32
 	// ContentSize.Width defaults to 288 (`w-72`). A zero ContentSize.Height sizes
 	// the popover to its parts: the header (its description wraps to the width)
 	// and, under it, BodyHeight, so no guessed height leaves a gap or cuts the
 	// body off.
 	ContentSize ui.Size
 	BodyHeight  float32
+	// TitleWeight defaults to WeightMedium; set it to emphasize this heading.
+	TitleWeight float32
 	// InitialFocusID, when set, takes keyboard focus when the popover opens.
 	// A non-modal popover asks the runtime directly (Canvas.RequestFocus); the
 	// request is honored once, so it does not steal focus back afterwards.
@@ -126,6 +131,11 @@ func (popover Popover) Begin(title, description string) PopoverLayout {
 		popover.canvas.HitWithOptions(popover.options.DismissID, popover.viewport, "Dismiss popover", ui.HitOptions{
 			Role: ui.RoleButton, SkipFocus: true, Backdrop: true, PassPrimary: true, PassSecondary: true,
 		})
+		if popover.options.AnchorDismiss {
+			popover.canvas.HitWithOptions(popover.options.DismissID, popover.anchor, "Dismiss popover", ui.HitOptions{
+				Role: ui.RoleButton, SkipFocus: true, Backdrop: true, PassSecondary: true,
+			})
+		}
 	}
 	metrics := popover.theme.Metrics
 	var scratch overlayLines
@@ -143,8 +153,12 @@ func (popover Popover) Begin(title, description string) PopoverLayout {
 	popover.canvas.Block(content)
 	inner := content.Inset(ui.All(metrics.PadSurface))
 	lineHeight := overlayLineHeight(metrics)
+	titleWeight := popover.options.TitleWeight
+	if titleWeight == 0 {
+		titleWeight = ui.WeightMedium
+	}
 	popover.canvas.Label(title, ui.Rect{X: inner.X, Y: inner.Y, Width: inner.Width, Height: lineHeight}, ui.TextStyle{
-		Size: metrics.FontSizeM, Weight: ui.WeightMedium, Color: popover.theme.PopoverForeground,
+		Size: metrics.FontSizeM, Weight: titleWeight, Color: popover.theme.PopoverForeground,
 	})
 	overlayParagraph(popover.canvas, lines, ui.Rect{X: inner.X, Y: inner.Y + lineHeight + popoverTitleGap, Width: inner.Width}, lineHeight, ui.TextStyle{
 		Size: metrics.FontSizeM, Weight: ui.WeightRegular, Color: popover.theme.MutedForeground,
