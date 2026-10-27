@@ -47,6 +47,7 @@ type editableField struct {
 var coreComponents = []Component{
 	buttonComponent, badgeComponent, checkboxComponent, colorSwatchComponent,
 	switchComponent, inputComponent, dialogComponent,
+	codeEditorComponent, imageViewComponent,
 }
 
 var catalog = buildCatalog()
@@ -90,9 +91,11 @@ type State struct {
 	fieldID ui.ID
 	editing bool
 	// textarea keeps the rows and scroll of the Textarea example.
-	textarea *components.TextareaLayout
-	dialog   dialogState
-	slider   sliderDemoState
+	textarea    *components.TextareaLayout
+	codeEditor  *components.CodeEditor
+	imageBitmap *ui.Bitmap
+	dialog      dialogState
+	slider      sliderDemoState
 	// view keeps the memory the flex pages of this demo are laid out in (see page).
 	// It is a pointer so a State stays comparable.
 	view  *flex.View

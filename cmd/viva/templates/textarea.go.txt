@@ -37,6 +37,7 @@ type TextareaSemantics struct {
 // DisplayValue starts a row; scrolling follows the caret when Layout is set.
 // Editing and IME state remain owned by the application/runtime.
 type TextareaSnapshot struct {
+	paintLine     func(*ui.Canvas, string, ui.Rect, ui.TextStyle)
 	ID            ui.ID
 	Label         string
 	Value         string
@@ -63,6 +64,8 @@ type TextareaSnapshot struct {
 	// controls the caller lays over it, such as an input group's block-end addon:
 	// the rows scroll above them rather than behind.
 	InsetBottom float32
+	// InsetRight reserves room for caller-owned controls such as a scrollbar.
+	InsetRight float32
 	// Layout makes the rows the application's to move through: it keeps them from
 	// one frame to the next (so a steady paint allocates nothing), scrolls to the
 	// caret and, held by the application's key and pointer handlers, moves the
@@ -121,6 +124,7 @@ func PaintTextarea(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, snapshot T
 	focused := !snapshot.Disabled && (snapshot.Focused || !snapshot.ID.IsZero() && canvas.Focused() == snapshot.ID)
 	paintTextEntrySurface(canvas, theme, bounds, textEntryState{Focused: focused, Invalid: snapshot.Invalid, Disabled: snapshot.Disabled})
 	content := ui.Rect{X: bounds.X + inputInsetX, Y: bounds.Y + textareaPadY, Width: textareaMax(0, bounds.Width-2*inputInsetX), Height: textareaMax(0, bounds.Height-2*textareaPadY-snapshot.InsetBottom)}
+	content.Width = max(0, content.Width-snapshot.InsetRight)
 	display := snapshot.DisplayValue
 	if display == "" {
 		display = snapshot.Value
@@ -294,7 +298,11 @@ func textareaPaintRows(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, value,
 			// An empty box has its caret at the start, in front of the hint.
 			textareaPlaceCaret(canvas, theme, layout, lineBounds, origin, focused && snapshot.ShowCaret && !snapshot.Disabled)
 		}
-		canvas.Label(line, labelBounds, style)
+		if snapshot.paintLine != nil {
+			snapshot.paintLine(canvas, line, labelBounds, style)
+		} else {
+			canvas.Label(line, labelBounds, style)
+		}
 		for _, selection := range selections {
 			if selection.Width <= 0 {
 				continue

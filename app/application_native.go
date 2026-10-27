@@ -72,6 +72,12 @@ func (host nativeHost) SetOpenURLHandler(handler func(string)) {
 	}
 }
 
+func (host nativeHost) SetQuitRequestHandler(handler func()) {
+	if native, ok := host.native.(interface{ SetQuitRequestHandler(func()) }); ok {
+		native.SetQuitRequestHandler(handler)
+	}
+}
+
 func (host nativeHost) AddStatusItem(config StatusItemConfig) (StatusItemControl, error) {
 	var menu func() []platform.MenuItem
 	if config.Menu != nil {
