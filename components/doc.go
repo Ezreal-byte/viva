@@ -50,6 +50,12 @@
 //
 // # Catalog
 //
+// Multi-selection:
+//   - MultiSelect: `PaintMultiSelect` combines removable chips, a native query
+//     input and a filtered popup. `MultiSelectState` handles multi-selection,
+//     optional item creation, limits and keyboard/IME-safe confirmation. Bind
+//     its Query editor to the application's text-input provider.
+//
 // Actions:
 //   - Button: `BeginButton` paints a labeled control with Default, Secondary,
 //     Outline, and Ghost variants; hover, press, and focus states, metrics-

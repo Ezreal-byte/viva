@@ -30,6 +30,7 @@ type Component struct {
 	// service may edit (see EnableTextEditing); examples that are fixed
 	// snapshots report false.
 	editable func(exampleID string) (editableField, bool)
+	editor   func(*State) *text.Editor
 }
 
 // editableField describes an example's editable text field. Accept and
@@ -87,9 +88,10 @@ type State struct {
 	switches    switchState
 	// editor is the Go-owned text behind the example's editable field once a
 	// runner has called EnableTextEditing; fieldID is the hit that edits it.
-	editor  *text.Editor
-	fieldID ui.ID
-	editing bool
+	editor      *text.Editor
+	multiSelect *components.MultiSelectState
+	fieldID     ui.ID
+	editing     bool
 	// textarea keeps the rows and scroll of the Textarea example.
 	textarea    *components.TextareaLayout
 	codeEditor  *components.CodeEditor
