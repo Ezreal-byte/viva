@@ -32,11 +32,11 @@ var textareaComponent = Component{
 		return editableField{ID: textareaField, Initial: textareaDefaultValue}, exampleID == "default"
 	},
 	Examples: []Example{
-		{ID: "default", Title: "项目说明", Description: "真实多行值、标签与辅助提示;长行按宽度软换行,上下键按视觉行移动并保持列,Home/End 到行首行尾,点击与拖选按视觉行定位。", Snippet: `f.Textarea(components.TextareaSnapshot{
+		{ID: "default", Title: "项目说明", Description: "真实多行值、标签与辅助提示；长行按宽度软换行，上下键按视觉行移动并保持列，Home/End 到行首行尾，点击与拖选按视觉行定位。", Snippet: `f.Textarea(components.TextareaSnapshot{
     ID: tree.ID(page, "description"), Label: "Project description", Hint: "Supports multiple lines",
     Value: value, DisplayValue: value,
 }).Height(142)`},
-		{ID: "grow", Title: "随内容增高", Description: "相当于 shadcn 的 field-sizing-content:高度随文本行数增长,超过上限后在框内滚动并跟随插入点。", Snippet: `width := min(size.Width-48, float32(540))
+		{ID: "grow", Title: "随内容增高", Description: "相当于 shadcn 的 field-sizing-content：高度随文本行数增长，超过上限后在框内滚动并跟随插入点。", Snippet: `width := min(size.Width-48, float32(540))
 height := min(layout.ContentHeight(canvas, theme, value, width, false), float32(5)*20+16)
 f.Textarea(components.TextareaSnapshot{
     ID: tree.ID(page, "notes"), Label: "Project description", Value: value,
@@ -75,9 +75,9 @@ var (
 )
 
 const (
-	textareaDefaultValue   = "Viva 使用原生 GPU 渲染。空闲时不会持续提交帧:没有输入、动画或网络事件时,窗口不会被重绘,也不会有后台定时器在轮询。\n第二段很短。"
+	textareaDefaultValue   = "Viva 使用原生 GPU 渲染。空闲时不会持续提交帧：没有输入、动画或网络事件时，窗口不会被重绘，也不会有后台定时器在轮询。\n第二段很短。"
 	textareaDefaultEnglish = "Viva renders with the native GPU. An idle window keeps submitting no frames: with no input, animation, or network events it is not repainted, and no background timer polls.\nThe second paragraph is short."
-	textareaGrowValue      = "输入更多文字,框会随内容长高,到五行时开始滚动。"
+	textareaGrowValue      = "输入更多文字，框会随内容长高，到五行时开始滚动。"
 	textareaGrowEnglish    = "Type more text and the box grows with it, then scrolls after five rows."
 	textareaGrowMaxRows    = 5
 )
@@ -151,7 +151,7 @@ func (state *State) paintTextarea(canvas *ui.Canvas, theme ui.Theme, size ui.Siz
 			height = min(state.textarea.ContentHeight(canvas, theme, value, width, false), float32(textareaGrowMaxRows)*20+16)
 		}
 		f.Textarea(snapshot).Height(height)
-		text := state.Text("编辑与 IME 事件由应用持有;换行、行内定位与滚动由 Viva 的 TextareaLayout 负责。", "Editing and IME events stay with the app; TextareaLayout handles wrapping, caret placement, and scrolling.")
+		text := state.Text("编辑与 IME 事件由应用持有；换行、行内定位与滚动由 Viva 的 TextareaLayout 负责。", "Editing and IME events stay with the app; TextareaLayout handles wrapping, caret placement, and scrolling.")
 		if state.exampleID == "selection" {
 			text = state.Text("蓝色选择区、插入点与组合文本均来自调用方快照。", "The selection, caret, and composition text come from the caller's snapshot.")
 		}
