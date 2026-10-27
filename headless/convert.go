@@ -58,7 +58,7 @@ func scenery(snapshot app.Snapshot) ([]render.Rectangle, []platform.TextLabel, *
 	if editor := snapshot.Editor; editor != nil {
 		input = &platform.TextInput{
 			X: editor.Bounds.X, Y: editor.Bounds.Y, Width: editor.Bounds.Width, Height: editor.Bounds.Height,
-			FontSize: editor.FontSize, Multiline: editor.Multiline, Secure: editor.Secure,
+			FontSize: editor.FontSize, Layer: editor.Layer, Multiline: editor.Multiline, Secure: editor.Secure,
 			Color: platform.Color{Red: float64(editor.Color.Red), Green: float64(editor.Color.Green), Blue: float64(editor.Color.Blue), Alpha: float64(editor.Color.Alpha)},
 			State: platform.TextState{
 				Value:       editor.Value,

@@ -989,7 +989,12 @@ func (painter *painter) resyncRenderer() (render.Update, error) {
 // it places its caret when it lays its rows out itself.
 func (painter *painter) focusedTextField() (TextInputContext, ui.TextPlacement) {
 	for _, hit := range painter.canvas.Hits() {
-		if hit.ID == painter.focused && (hit.Role == ui.RoleTextField || hit.Role == ui.RoleCombobox || hit.Role == ui.RoleTerminal) && !hit.Disabled {
+		// A combobox owns the native editor only when it names the text
+		// geometry: one that paints its own query (components.Command) declares
+		// no TextBounds and keeps what it draws.
+		if hit.ID == painter.focused && !hit.Disabled &&
+			(hit.Role == ui.RoleTextField || hit.Role == ui.RoleTerminal ||
+				hit.Role == ui.RoleCombobox && hit.TextBounds != (ui.Rect{})) {
 			return TextInputContext{
 				ID: hit.ID, Bounds: hit.Bounds, Layer: hit.Layer, Terminal: hit.Role == ui.RoleTerminal,
 				Multiline: hit.Multiline, ReadOnly: hit.ReadOnly, Secure: hit.Secure,

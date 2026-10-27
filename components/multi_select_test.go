@@ -10,7 +10,7 @@ import (
 )
 
 func multiSelectFixture() *MultiSelectState {
-	s := &MultiSelectState{AllowCreate: true, FoldValues: true}
+	s := &MultiSelectState{AllowCreate: true, MatchCaseInsensitive: true}
 	s.SetOptions([]MultiSelectOption{{Value: "开发"}, {Value: "测试"}, {Value: "生产"}, {Value: "disabled", Disabled: true}})
 	return s
 }
@@ -51,7 +51,7 @@ func TestMultiSelectFiltersCreatesAndPreservesSelection(t *testing.T) {
 func TestMultiSelectKeyboardLimitAndIME(t *testing.T) {
 	s := multiSelectFixture()
 	s.Limit = 1
-	s.ValidateCreate = func(value string) bool { return len([]rune(value)) <= 4 }
+	s.SetValidateCreate(func(value string) bool { return len([]rune(value)) <= 4 })
 	s.Key(ui.KeyEvent{Key: ui.KeyEnter})
 	if len(s.Values()) != 0 || !s.Open {
 		t.Fatal("opening an empty select chose a value")
@@ -97,6 +97,22 @@ func TestMultiSelectKeyboardLimitAndIME(t *testing.T) {
 	s.Query.Insert(strings.Repeat("长", 5))
 	if !s.Choices()[0].Disabled {
 		t.Fatal("invalid create query was enabled")
+	}
+}
+
+func TestMultiSelectCreateValidatorReachesTheCreateRow(t *testing.T) {
+	s := multiSelectFixture()
+	s.Query.Insert("自定义")
+	if choices := s.Choices(); len(choices) == 0 || !choices[0].Create || choices[0].Disabled {
+		t.Fatal("create row did not start enabled", choices)
+	}
+	s.SetValidateCreate(func(string) bool { return false })
+	if choices := s.Choices(); !choices[0].Create || !choices[0].Disabled {
+		t.Fatal("a new validator did not reach the create row", choices)
+	}
+	s.SetValidateCreate(nil)
+	if choices := s.Choices(); choices[0].Disabled {
+		t.Fatal("clearing the validator did not re-enable the create row", choices)
 	}
 }
 

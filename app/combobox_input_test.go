@@ -35,3 +35,27 @@ func TestEditableComboboxUsesNativeQueryGeometry(t *testing.T) {
 		t.Fatal("combobox did not receive native text", editor.String())
 	}
 }
+
+// A combobox that paints its own query declares no text geometry: the native
+// editor must not start over it and draw the query a second time.
+func TestComboboxWithoutTextBoundsKeepsItsOwnQuery(t *testing.T) {
+	var editor text.Editor
+	id := ui.Item(1)
+	calls := 0
+	driver, err := NewDriver(Config{Width: 300, Height: 100, Paint: func(canvas *ui.Canvas, _ ui.Size) {
+		canvas.HitWithOptions(id, ui.Rect{X: 10, Y: 10, Width: 150, Height: 30}, "Search", ui.HitOptions{Role: ui.RoleCombobox, Value: editor.String()})
+	}, TextInput: func(c TextInputContext) *TextInput {
+		calls++
+		return &TextInput{Editor: &editor}
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer driver.Close()
+	if err := driver.Click(20, 20); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("a combobox that draws its own query started the native editor %d times", calls)
+	}
+}

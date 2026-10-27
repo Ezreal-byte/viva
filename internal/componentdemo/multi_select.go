@@ -20,7 +20,7 @@ var (
 var multiSelectComponent = Component{
 	ID: "multi-select", Title: "Multi Select", Category: "Forms", Summary: "可搜索、多选并创建条目，已选项可逐个删除。",
 	initialize: func(state *State) {
-		state.multiSelect = &components.MultiSelectState{AllowCreate: true, FoldValues: true, Open: true}
+		state.multiSelect = &components.MultiSelectState{AllowCreate: true, MatchCaseInsensitive: true, Open: true}
 		state.multiSelect.SetOptions([]components.MultiSelectOption{{Value: state.Text("开发", "Development")}, {Value: state.Text("测试", "Testing")}, {Value: state.Text("生产", "Production")}})
 		state.multiSelect.SetValues([]string{state.Text("开发", "Development")})
 	},

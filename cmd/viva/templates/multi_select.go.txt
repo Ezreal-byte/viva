@@ -26,22 +26,31 @@ type MultiSelectChoice struct {
 // filtered rows and steady paints reuse their storage. Values remain in selection
 // order. Query can be bound directly to the platform text service.
 type MultiSelectState struct {
-	Query                   text.Editor
-	Open                    bool
-	Active                  int
-	AllowCreate, FoldValues bool
-	Limit                   int // zero means unlimited
-	// ValidateCreate can reject a query without removing its disabled create row.
-	ValidateCreate                        func(string) bool
-	options                               []MultiSelectOption
-	values                                []string
-	choices                               []MultiSelectChoice
-	scroll                                MenuScroll
-	revision, built                       uint64
-	lastQuery                             string
-	lastAllow, lastFold                   bool
-	lastLimit                             int
-	prepared                              bool
+	Query  text.Editor
+	Open   bool
+	Active int
+	// AllowCreate offers the query as a new value when no option matches it.
+	AllowCreate bool
+	// MatchCaseInsensitive compares values and their labels with Unicode case
+	// folding, so "Development" and "development" are one value. It does not
+	// control chip overflow: chips always fold into +N when the field is narrow.
+	MatchCaseInsensitive bool
+	Limit                int // zero means unlimited
+	// validateCreate, set with SetValidateCreate, can reject a query without
+	// removing its disabled create row.
+	validateCreate      func(string) bool
+	options             []MultiSelectOption
+	values              []string
+	choices             []MultiSelectChoice
+	scroll              MenuScroll
+	revision, built     uint64
+	lastQuery           string
+	lastAllow, lastCase bool
+	lastLimit           int
+	prepared            bool
+	// openPainted is the popup state of the previous paint, so closing it can
+	// hand focus back to a query input the popup's scope had taken.
+	openPainted                           bool
 	focusInput, reveal                    bool
 	createText, createPrefix, createValue string
 	overflowText                          string
@@ -66,8 +75,16 @@ func (s *MultiSelectState) SetValues(values []string) {
 // Values is a read-only view until the next selection change.
 func (s *MultiSelectState) Values() []string { return s.values }
 
+// SetValidateCreate replaces the create validator; nil accepts every query. It
+// re-filters at the next paint, so a host that changes its rules between forms
+// never shows a create row judged by the previous rules.
+func (s *MultiSelectState) SetValidateCreate(validate func(string) bool) {
+	s.validateCreate = validate
+	s.revision++
+}
+
 func (s *MultiSelectState) equal(a, b string) bool {
-	return a == b || s.FoldValues && strings.EqualFold(a, b)
+	return a == b || s.MatchCaseInsensitive && strings.EqualFold(a, b)
 }
 
 func (s *MultiSelectState) contains(value string) bool {
@@ -87,7 +104,7 @@ func (s *MultiSelectState) label(value string) string {
 // longer occur in Options. Creating never shadows an existing label or value.
 func (s *MultiSelectState) Choices() []MultiSelectChoice {
 	query := strings.TrimSpace(s.Query.String())
-	if s.prepared && s.built == s.revision && query == s.lastQuery && s.AllowCreate == s.lastAllow && s.FoldValues == s.lastFold && s.Limit == s.lastLimit {
+	if s.prepared && s.built == s.revision && query == s.lastQuery && s.AllowCreate == s.lastAllow && s.MatchCaseInsensitive == s.lastCase && s.Limit == s.lastLimit {
 		return s.choices
 	}
 	if query != s.lastQuery && query != "" {
@@ -119,13 +136,13 @@ func (s *MultiSelectState) Choices() []MultiSelectChoice {
 		}
 	}
 	if s.AllowCreate && query != "" && !exact {
-		disabled := s.Limit > 0 && len(s.values) >= s.Limit || s.ValidateCreate != nil && !s.ValidateCreate(query)
+		disabled := s.Limit > 0 && len(s.values) >= s.Limit || s.validateCreate != nil && !s.validateCreate(query)
 		s.choices = append(s.choices, MultiSelectChoice{})
 		copy(s.choices[1:], s.choices[:len(s.choices)-1])
 		s.choices[0] = MultiSelectChoice{MultiSelectOption: MultiSelectOption{Value: query, Label: query, Disabled: disabled}, Create: true}
 	}
 	s.lastQuery, s.built, s.prepared = query, s.revision, true
-	s.lastAllow, s.lastFold, s.lastLimit = s.AllowCreate, s.FoldValues, s.Limit
+	s.lastAllow, s.lastCase, s.lastLimit = s.AllowCreate, s.MatchCaseInsensitive, s.Limit
 	s.Active = 0
 	for s.Active < len(s.choices)-1 && s.choices[s.Active].Disabled {
 		s.Active++
@@ -269,6 +286,15 @@ func PaintMultiSelect(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, s *Mult
 	}
 	choices := s.Choices()
 	open := s.Open && !o.Disabled
+	// The popup takes focus into its own scope and the runtime restores the
+	// target from before that scope opened, which is not the query input when
+	// the list was opened by the trigger instead of a press on the input. Hand
+	// focus back when the input is the one losing it, and only then: a press on
+	// another control has already moved focus and keeps it.
+	if s.openPainted && !open && canvas.Focused() == o.InputID {
+		canvas.RequestFocus(o.InputID)
+	}
+	s.openPainted = open
 	if open {
 		canvas.PushLayer(o.Layer)
 		canvas.PushFocusScope(o.Scope)

@@ -888,6 +888,7 @@ type Label struct {
 type Editor struct {
 	Bounds      ui.Rect
 	FontSize    float32
+	Layer       uint16
 	MonoFace    ui.MonoFace
 	Color       ui.Color
 	Value       string
@@ -994,6 +995,10 @@ func (driver *Driver) Snapshot() Snapshot {
 		snapshot.Editor = &Editor{
 			Bounds:   ui.Rect{X: input.X, Y: input.Y, Width: input.Width, Height: input.Height},
 			FontSize: input.FontSize,
+			// Layer keeps a field inside a popup, dialog or sheet above that
+			// surface's own paint in an offscreen render, as it already is in a
+			// window.
+			Layer:    input.Layer,
 			MonoFace: input.MonoFace,
 			Color:    ui.Color{Red: float32(input.Color.Red), Green: float32(input.Color.Green), Blue: float32(input.Color.Blue), Alpha: float32(input.Color.Alpha)},
 			Value:    input.State.Value, Selection: [2]int{input.State.Selection.Start, input.State.Selection.End},
