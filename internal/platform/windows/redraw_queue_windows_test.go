@@ -48,6 +48,36 @@ func TestRedrawQueueRetriesAfterNativePostFails(t *testing.T) {
 	}
 }
 
+func TestRedrawQueueRetriesConcurrentWakeAfterNativePostFails(t *testing.T) {
+	var queue redrawQueue
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	attempts := 0
+	go func() {
+		queue.post(func() bool {
+			attempts++
+			if attempts == 1 {
+				close(entered)
+				<-release
+				return false
+			}
+			return true
+		})
+		close(done)
+	}()
+	<-entered
+	queue.post(func() bool {
+		t.Fatal("a concurrent wake should join the in-flight native post")
+		return true
+	})
+	close(release)
+	<-done
+	if attempts != 2 {
+		t.Fatalf("native post attempts=%d, want 2", attempts)
+	}
+}
+
 func TestNativeRedrawMessageRearmsBeforeCallingThePainter(t *testing.T) {
 	// Exercise the message dispatch without creating an OS window or renderer.
 	state := &windowState{}
