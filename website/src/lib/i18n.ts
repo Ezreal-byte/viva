@@ -69,7 +69,7 @@ export const messages = { zh: chinese, en: english };
 const categories: Record<string, string> = {
   Actions: '操作', Communication: '沟通', Data: '数据', 'Data Display': '数据展示',
   'Date & Time': '日期与时间', Disclosure: '展开收起', Display: '展示', Feedback: '反馈',
-  Forms: '表单', Layout: '布局', Navigation: '导航', Overlay: '浮层', Overlays: '浮层',
+  Forms: '表单', Layout: '布局', Media: '媒体', Navigation: '导航', Overlay: '浮层', Overlays: '浮层',
 };
 export function categoryLabel(locale: Locale, value: string): string {
   if (!categories[value]) throw new Error(`Missing category translation: ${value}`);
