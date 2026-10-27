@@ -65,7 +65,11 @@
 @layer layout {
   .site-header { position: fixed; inset: 0 0 auto; z-index: 20; background: var(--background); border-bottom: 1px solid var(--border); }
   .header-inner { max-width: 1440px; margin: auto; padding: 0 32px; height: var(--header-height); display: flex; align-items: center; gap: 24px; }
-  .brand { display: inline-flex; align-items: center; }
+  /* The ink inside the lockup sits below the middle of its box: the mark is
+     solid along the baseline while the sparkle is a thin point above it. Centring
+     the box therefore leaves the wordmark visibly low next to the 14px
+     navigation. The offset is the measured gap between the two ink centroids. */
+  .brand { display: inline-flex; align-items: center; transform: translateY(-3px); }
   .brand-lockup { display: block; flex: none; height: 26px; width: auto; }
   .header-navigation { display: flex; gap: 24px; font-size: 14px; }
   .header-navigation a { color: var(--muted); }
