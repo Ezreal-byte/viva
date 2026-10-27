@@ -410,6 +410,7 @@ extern int vivaShortcutEvent(
 // phase: 0 over, 1 leave, 2 drop. paths is the dropped paths joined by NUL, with
 // length bytes; the result is nonzero when the point takes files.
 extern void vivaOpenURL(const char *url);
+extern int vivaApplicationQuitRequested(void);
 extern int vivaFileDropEvent(
     uintptr_t handle,
     void *view,
@@ -4941,6 +4942,15 @@ static void viva_reset_profile_counters(void) {
 @end
 
 @implementation VivaApplicationDelegate
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+    (void)sender;
+    if (vivaApplicationQuitRequested()) {
+        return NSTerminateCancel;
+    }
+    viva_application_close_all();
+    return NSTerminateCancel;
+}
+
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
     (void)sender;
     (void)flag;

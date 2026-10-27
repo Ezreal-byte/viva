@@ -81,6 +81,10 @@
 //     and `TextareaMovementForKey` with a `TextareaLayout` moves the caret by
 //     visual row (arrows, Home, End, Page keys), scrolls to it, places it on a
 //     click and sizes a box that grows with its text.
+//   - Code editor: `CodeEditor` adds caller-provided syntax colors and a draggable
+//     scrollbar to TextareaLayout, retaining native selection and IME geometry.
+//   - Image preview: `PaintImageView` clips an immutable bitmap with fit, zoom
+//     and pan; actual size maps one bitmap pixel to one device pixel at any DPI.
 //   - One-time code: `PaintInputOTP` paints segmented code entry;
 //     `InputOTPCommandForKey` maps key events to editor commands.
 //   - Input group: `PaintInputGroup` paints an input with leading and

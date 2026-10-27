@@ -1,0 +1,136 @@
+package {{PACKAGE}}
+
+import "github.com/vivaui/viva/ui"
+
+// CodeEditorRun colors one byte range without changing its text geometry.
+// Runs are ordered and non-overlapping; invalid and overlapping spans are ignored.
+type CodeEditorRun struct {
+	Start, End int
+	Color      ui.Color
+}
+
+// CodeEditorSnapshot reuses native Textarea input, IME, selection and wrapping.
+// Highlight owns the language grammar. The component never changes source text.
+type CodeEditorSnapshot struct {
+	TextareaSnapshot
+	Language  string
+	Highlight func(language, line string, dst []CodeEditorRun) []CodeEditorRun
+	// ScrollbarID enables a vertical scrollbar. Route pointer events to Pointer.
+	ScrollbarID ui.ID
+}
+
+// CodeEditor owns only reusable layout and highlight scratch space. Text and
+// undo history remain in the application's editor. Layout supplies movement,
+// pointer placement and scrolling, just like TextareaLayout.
+type CodeEditor struct {
+	Layout    TextareaLayout
+	marks     []CodeEditorRun
+	language  string
+	highlight func(string, string, []CodeEditorRun) []CodeEditorRun
+	painter   func(*ui.Canvas, string, ui.Rect, ui.TextStyle)
+	disabled  bool
+	barID     ui.ID
+	bar       ScrollAreaGeometry
+	dragging  bool
+	grab      float32
+}
+
+func (editor *CodeEditor) Paint(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, snapshot CodeEditorSnapshot) ui.Rect {
+	editor.language, editor.highlight, editor.disabled = snapshot.Language, snapshot.Highlight, snapshot.Disabled
+	if editor.painter == nil {
+		editor.painter = editor.paintLine
+	}
+	snapshot.Layout = &editor.Layout
+	snapshot.TextareaSnapshot.paintLine = editor.painter
+	editor.barID = snapshot.ScrollbarID
+	if !editor.barID.IsZero() {
+		snapshot.InsetRight += 12
+	}
+	bounds = PaintTextarea(canvas, theme, bounds, snapshot.TextareaSnapshot)
+	editor.bar = ScrollAreaGeometry{}
+	if canvas != nil && !editor.barID.IsZero() && editor.Layout.painted {
+		content := editor.Layout.content
+		area := BeginScrollArea(canvas, theme, ui.Rect{X: bounds.X + bounds.Width - 13, Y: content.Y, Width: 10, Height: content.Height}, ui.Size{Width: 10, Height: float32(len(editor.Layout.rows)) * editor.Layout.lineHeight}).Offset(0, editor.Layout.scroll).VerticalScrollbar(editor.barID, snapshot.Label, "")
+		if snapshot.Disabled {
+			area = area.Disabled()
+		}
+		editor.bar = area.EndContent()
+	}
+	return bounds
+}
+
+// Pointer handles the scrollbar drag without changing the text or selection.
+func (editor *CodeEditor) Pointer(event ui.PointerEvent) ui.EventResult {
+	if editor.disabled {
+		return ui.EventResult{}
+	}
+	switch event.Kind {
+	case ui.PointerDown:
+		if event.Target != editor.barID || editor.barID.IsZero() || editor.bar.MaxOffsetY <= 0 {
+			return ui.EventResult{}
+		}
+		editor.grab = editor.bar.VerticalThumb.Height / 2
+		if event.Y >= editor.bar.VerticalThumb.Y && event.Y < editor.bar.VerticalThumb.Y+editor.bar.VerticalThumb.Height {
+			editor.grab = event.Y - editor.bar.VerticalThumb.Y
+		}
+		editor.dragging = true
+	case ui.PointerMove:
+		if !editor.dragging {
+			return ui.EventResult{}
+		}
+	default:
+		if !editor.dragging {
+			return ui.EventResult{}
+		}
+		editor.dragging = false
+		return ui.EventResult{Handled: true, Repaint: true}
+	}
+	editor.Layout.scroll = editor.Layout.clampScroll(editor.bar.VerticalOffsetForThumb(event.Y - editor.grab))
+	return ui.EventResult{Handled: true, Repaint: true}
+}
+
+func (editor *CodeEditor) paintLine(canvas *ui.Canvas, line string, bounds ui.Rect, style ui.TextStyle) {
+	if editor.highlight == nil {
+		canvas.Label(line, bounds, style)
+		return
+	}
+	editor.marks = editor.highlight(editor.language, line, editor.marks[:0])
+	origin := canvas.LabelOrigin(line, bounds, style, ui.AlignStart)
+	previous := 0
+	for _, run := range editor.marks {
+		start, end := textareaBoundary(line, run.Start), textareaBoundary(line, run.End)
+		if end <= start || start < previous || run.Color.Alpha == 0 {
+			continue
+		}
+		editor.paintSpan(canvas, line, bounds, style, origin, previous, start)
+		color := run.Color
+		if editor.disabled {
+			color.Alpha *= .5
+		}
+		colored := style
+		colored.Color = color
+		editor.paintSpan(canvas, line, bounds, colored, origin, start, end)
+		previous = end
+	}
+	if previous == 0 {
+		canvas.Label(line, bounds, style)
+	} else {
+		editor.paintSpan(canvas, line, bounds, style, origin, previous, len(line))
+	}
+}
+
+func (editor *CodeEditor) paintSpan(canvas *ui.Canvas, line string, bounds ui.Rect, style ui.TextStyle, origin float32, start, end int) {
+	if end <= start {
+		return
+	}
+	if start == 0 && end == len(line) {
+		canvas.Label(line, bounds, style)
+		return
+	}
+	x := canvas.TextCaret(line, style.Size, style.Weight, start)
+	right := canvas.TextCaret(line, style.Size, style.Weight, end)
+	left, width := min(x, right), max(right-x, x-right)
+	canvas.Clip(ui.Rect{X: origin + left, Y: bounds.Y, Width: width, Height: bounds.Height})
+	canvas.Label(line, bounds, style)
+	canvas.Unclip()
+}
