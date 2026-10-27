@@ -20,5 +20,6 @@ var groupBComponents = []Component{
 	messageComponent,
 	messageScrollerComponent,
 	metricCardComponent,
+	multiSelectComponent,
 	nativeSelectComponent,
 }

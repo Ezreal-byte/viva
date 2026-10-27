@@ -13,7 +13,7 @@ func TestGroupBCatalogOrder(t *testing.T) {
 		"command", "context-menu", "drawer", "dropdown-menu", "empty",
 		"field", "form", "hover-card", "input-group", "input-otp",
 		"item", "kbd", "label", "markdown", "marker", "menubar", "message",
-		"message-scroller", "metric-card", "native-select",
+		"message-scroller", "metric-card", "multi-select", "native-select",
 	}
 	if len(groupBComponents) != len(expected) {
 		t.Fatalf("group B contains %d components, want %d", len(groupBComponents), len(expected))

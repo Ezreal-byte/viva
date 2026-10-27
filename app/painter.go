@@ -989,7 +989,7 @@ func (painter *painter) resyncRenderer() (render.Update, error) {
 // it places its caret when it lays its rows out itself.
 func (painter *painter) focusedTextField() (TextInputContext, ui.TextPlacement) {
 	for _, hit := range painter.canvas.Hits() {
-		if hit.ID == painter.focused && (hit.Role == ui.RoleTextField || hit.Role == ui.RoleTerminal) && !hit.Disabled {
+		if hit.ID == painter.focused && (hit.Role == ui.RoleTextField || hit.Role == ui.RoleCombobox || hit.Role == ui.RoleTerminal) && !hit.Disabled {
 			return TextInputContext{
 				ID: hit.ID, Bounds: hit.Bounds, Layer: hit.Layer, Terminal: hit.Role == ui.RoleTerminal,
 				Multiline: hit.Multiline, ReadOnly: hit.ReadOnly, Secure: hit.Secure,

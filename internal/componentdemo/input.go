@@ -91,6 +91,9 @@ func (state *State) EnableTextEditing() {
 	state.editing = true
 	state.fieldID = field.ID
 	state.editor = text.NewEditor(state.editableInitial(field.Initial))
+	if state.descriptor.editor != nil {
+		state.editor = state.descriptor.editor(state)
+	}
 	if field.Accept != nil || field.MaxRunes > 0 {
 		state.editor.Restrict(field.Accept, field.MaxRunes)
 	}
