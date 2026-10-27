@@ -2,6 +2,7 @@
 import type { GetStaticPaths } from 'astro';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Preview from '../../components/Preview.svelte';
+import markOnly from '../../assets/viva-mark-only.svg?url';
 import Icon from '../../components/Icon.svelte';
 import { readCatalog } from '../../lib/catalog';
 import { locales, isLocale, localizePage, componentPath, type Locale } from '../../lib/i18n';
@@ -29,10 +30,13 @@ const alternates = Object.fromEntries(locales.map(language => [language, homePat
           <a class="home-button home-button-primary" href={docsPath(locale, 'getting-started')}>{text.start}<Icon name="arrow" size={14} /></a>
           <a class="home-button" href={componentPath(locale)}>{text.browse}</a>
         </div>
-        <dl class="home-stats">
-          {text.heroStats.map(stat => <div><dt>{stat.label}</dt><dd>{stat.value}</dd></div>)}
-        </dl>
       </div>
+      <div class="home-hero-art" aria-hidden="true">
+        <img src={markOnly} alt="" />
+      </div>
+      <dl class="home-stats">
+        {text.heroStats.map(stat => <div><dt>{stat.label}</dt><dd>{stat.value}</dd></div>)}
+      </dl>
     </section>
 
     <section class="home-section" aria-labelledby="preview">

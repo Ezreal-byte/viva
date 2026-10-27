@@ -66,10 +66,7 @@
   .site-header { position: fixed; inset: 0 0 auto; z-index: 20; background: var(--background); border-bottom: 1px solid var(--border); }
   .header-inner { max-width: 1440px; margin: auto; padding: 0 32px; height: var(--header-height); display: flex; align-items: center; gap: 24px; }
   .brand { display: inline-flex; align-items: center; gap: 10px; font-size: 26px; font-weight: 700; letter-spacing: -.04em; }
-  .brand-mark { display: flex; align-items: center; gap: 3px; height: 24px; }
-  .brand-mark span { width: 3px; height: 15px; background: var(--text); transform: skewY(-24deg); }
-  .brand-mark span:nth-child(2) { height: 23px; }
-  .brand-mark span:nth-child(3) { height: 18px; }
+  .brand-mark { display: block; flex: none; height: 22px; width: auto; }
   .header-navigation { display: flex; gap: 24px; font-size: 14px; }
   .header-navigation a { color: var(--muted); }
   .header-navigation a[aria-current], .header-navigation a:hover { color: var(--text); }
@@ -246,11 +243,12 @@
   .guide-navigation { padding-top: 36px; justify-content: flex-start; }
   .guide-navigation .component-group + .component-group { margin-top: 28px; }
   .home { max-width: 1200px; margin: auto; padding: 0 32px 72px; }
-  .home-hero { display: block; padding: 88px 0 24px; }
+  .home-hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 300px); column-gap: 64px; row-gap: 0; align-items: center; padding: 88px 0 24px; }
   .home-section { margin-top: 72px; }
 }
 
 @layer components {
+  .home-hero-art img { display: block; width: 100%; height: auto; }
   .home-eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .02em; margin-bottom: 18px; }
   .home h1 { font-size: 52px; line-height: 1.12; letter-spacing: -.035em; overflow-wrap: break-word; word-break: normal; }
   .home-lead { margin-top: 22px; font-size: 18px; line-height: 1.75; max-width: 34em; }
@@ -259,7 +257,7 @@
   .home-button:hover { background: var(--surface-hover); }
   .home-button-primary { background: var(--text); color: var(--background); border-color: var(--text); }
   .home-button-primary:hover { background: var(--text); opacity: .86; }
-  .home-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; margin: 52px 0 0; padding-top: 30px; border-top: 1px solid var(--border); }
+  .home-stats { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; margin: 52px 0 0; padding-top: 30px; border-top: 1px solid var(--border); }
   .home-stats div { display: flex; flex-direction: column-reverse; gap: 6px; }
   .home-stats dt { font-size: 13px; color: var(--muted); }
   .home-stats dd { margin: 0; font-size: 38px; font-weight: 600; letter-spacing: -.03em; line-height: 1.1; }
@@ -321,13 +319,15 @@
 @layer responsive {
   @media (max-width: 1150px) {
     .docs-grid-guide { grid-template-columns: 220px minmax(0, 1fr); }
-    .home-hero { padding-top: 56px; }
+    .home-hero { grid-template-columns: minmax(0, 1fr) 220px; gap: 32px; padding-top: 56px; }
     .home-stats { grid-template-columns: minmax(0, 1fr); gap: 24px; margin-top: 40px; }
     .home-stats dd { font-size: 30px; }
     .home h1 { font-size: 44px; }
   }
   @media (max-width: 800px) {
     .home { padding: 0 24px 56px; }
+    .home-hero { grid-template-columns: minmax(0, 1fr); row-gap: 40px; }
+    .home-hero-art { max-width: 220px; }
     .home-grid, .home-measures, .guide-cards { grid-template-columns: minmax(0, 1fr); }
     .guide-navigation { padding-top: 12px; }
     .markdown table { display: block; overflow-x: auto; }
