@@ -15,6 +15,21 @@ test('the root redirects to the Chinese home page', () => {
   assert.ok(readPage('').includes('/zh/'));
 });
 
+test('unknown paths fail with a 404 page instead of the root redirect', () => {
+  // Pages treats a project without a top-level 404.html as a single-page
+  // application: every unmatched path answers with the root document and a 200,
+  // so a broken link looks like a working redirect. Astro emits this file.
+  assert.ok(existsSync(new URL('404.html', output)), 'no 404.html for unknown paths');
+  const html = readFileSync(new URL('404.html', output), 'utf8');
+  assert.ok(html.includes('<html lang="zh-CN"'));
+  assert.ok(html.includes('404'));
+  assert.ok(!html.includes('http-equiv="refresh"'), 'the 404 page is the root redirect');
+  for (const language of ['zh', 'en']) {
+    assert.ok(html.includes(`href="/${language}/"`), `404 page has no ${language} home link`);
+    assert.ok(html.includes(`href="/${language}/components/"`), `404 page has no ${language} catalog link`);
+  }
+});
+
 for (const locale of ['zh', 'en']) {
   test(`${locale} home page states its numbers, its platforms and where the rest lives`, () => {
     const html = readPage(`${locale}/`);

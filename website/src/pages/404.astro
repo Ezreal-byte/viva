@@ -1,0 +1,27 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { locales, componentsPath, type Locale } from '../lib/i18n';
+import { homePath } from '../lib/routes';
+
+// Cloudflare Pages serves this file for any path it cannot match, and it cannot
+// know which language the reader came in with, so both languages appear here.
+//
+// Without this file Pages assumes a single-page application and answers every
+// unknown path with the root document and a 200 status, which makes a broken
+// link look like a working redirect. Astro emits it as /404.html.
+const alternates = Object.fromEntries(locales.map(language => [language, homePath(language)])) as Record<Locale, string>;
+---
+
+<BaseLayout locale="zh" section="home" title="页面不存在 · Page not found" summary="这个地址没有对应的页面。There is no page at this address." {alternates}>
+  <main class="not-found" id="main-content" tabindex="-1">
+    <p class="not-found-code">404</p>
+    <h1>页面不存在</h1>
+    <p class="page-summary">这个地址没有对应的页面，可能是链接已过期或拼写有误。<br />
+      There is no page at this address — the link may be outdated or misspelled.</p>
+    <div class="guide-cards">
+      <a class="guide-card" href={homePath('zh')}><h2>中文文档</h2><p>返回 Viva 文档首页。</p></a>
+      <a class="guide-card" href={homePath('en')}><h2>English docs</h2><p>Go to the Viva documentation home.</p></a>
+    </div>
+    <p class="not-found-links"><a href={componentsPath('zh')}>组件目录</a> · <a href={componentsPath('en')}>Component catalog</a></p>
+  </main>
+</BaseLayout>
