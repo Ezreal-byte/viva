@@ -67,6 +67,8 @@
 //   - Switch: `BeginSwitch` paints the on/off track and knob.
 //   - Checkbox: `BeginCheckbox` paints the checked/unchecked box and check
 //     mark.
+//   - Color swatch: `BeginColorSwatch` paints a named circular color choice,
+//     with selection, focus and disabled states and a no-color option.
 //   - Radio group: `BeginRadioGroup` paints single-select labeled options;
 //     `RadioGroupKeyDown` wires arrow keys.
 //   - Slider: `BeginSlider` paints one draggable thumb; `BeginRangeSlider`

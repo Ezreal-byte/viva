@@ -45,7 +45,7 @@ type editableField struct {
 }
 
 var coreComponents = []Component{
-	buttonComponent, badgeComponent, checkboxComponent,
+	buttonComponent, badgeComponent, checkboxComponent, colorSwatchComponent,
 	switchComponent, inputComponent, dialogComponent,
 }
 
