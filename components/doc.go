@@ -73,6 +73,9 @@
 //   - Switch: `BeginSwitch` paints the on/off track and knob.
 //   - Checkbox: `BeginCheckbox` paints the checked/unchecked box and check
 //     mark.
+//   - Color picker: `BeginColorPicker` paints an anchored HSV panel, optional
+//     alpha slider, caller-owned HEX input, and clear/cancel/apply actions.
+//     `ColorPickerLayout.Pointer` and `ColorPickerLayout.Key` update HSV drafts.
 //   - Color swatch: `BeginColorSwatch` paints a named circular color choice,
 //     with selection, focus and disabled states and a no-color option.
 //   - Radio group: `BeginRadioGroup` paints single-select labeled options;

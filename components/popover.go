@@ -62,10 +62,13 @@ type PopoverOptions struct {
 	// AnchorDismiss consumes a primary press on the anchor as a dismiss action,
 	// rather than passing it through to a trigger that would reopen the popover.
 	AnchorDismiss bool
-	Side          PopoverSide
-	Align         PopoverAlign
-	SideOffset    float32
-	AlignOffset   float32
+	// ConsumeOutsidePress keeps the dismiss press from activating the page or
+	// an enclosing dialog. Useful for a staged picker with confirmation actions.
+	ConsumeOutsidePress bool
+	Side                PopoverSide
+	Align               PopoverAlign
+	SideOffset          float32
+	AlignOffset         float32
 	// ContentSize.Width defaults to 288 (`w-72`). A zero ContentSize.Height sizes
 	// the popover to its parts: the header (its description wraps to the width)
 	// and, under it, BodyHeight, so no guessed height leaves a gap or cuts the
@@ -129,11 +132,11 @@ func (popover Popover) Begin(title, description string) PopoverLayout {
 	}
 	if !popover.options.DismissID.IsZero() && popover.viewport.Width > 0 && popover.viewport.Height > 0 {
 		popover.canvas.HitWithOptions(popover.options.DismissID, popover.viewport, "Dismiss popover", ui.HitOptions{
-			Role: ui.RoleButton, SkipFocus: true, Backdrop: true, PassPrimary: true, PassSecondary: true,
+			Role: ui.RoleButton, SkipFocus: true, Backdrop: true, PassPrimary: !popover.options.ConsumeOutsidePress, PassSecondary: !popover.options.ConsumeOutsidePress,
 		})
 		if popover.options.AnchorDismiss {
 			popover.canvas.HitWithOptions(popover.options.DismissID, popover.anchor, "Dismiss popover", ui.HitOptions{
-				Role: ui.RoleButton, SkipFocus: true, Backdrop: true, PassSecondary: true,
+				Role: ui.RoleButton, SkipFocus: true, Backdrop: true, PassSecondary: !popover.options.ConsumeOutsidePress,
 			})
 		}
 	}
