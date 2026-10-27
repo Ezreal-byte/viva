@@ -23,7 +23,14 @@ export function readCatalog(): Catalog {
   return catalog;
 }
 
+// The sidebar island needs only stable IDs, names and categories. Handing it
+// whole pages serialized every example, section and capability into the
+// island's props, and each page embeds the full component list, so the catalog
+// index shipped a megabyte of duplicated payload. Keep the island input flat.
 export function navigationFor(catalog: Catalog, page?: Page): Nav[] {
   const documented = new Set(catalog.pages.map((entry) => entry.ID));
-  return (page?.All ?? catalog.pages).filter((entry) => documented.has(entry.ID));
+  const entries: Nav[] = page ? page.All : catalog.pages;
+  return entries
+    .filter((entry) => documented.has(entry.ID))
+    .map(({ ID, Title, Category }) => ({ ID, Title, Category }));
 }

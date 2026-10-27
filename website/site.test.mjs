@@ -125,4 +125,17 @@ for (const locale of ['zh', 'en']) {
     assert.ok(html.includes('class="component-index-grid"'));
     assert.ok(html.includes(locale === 'zh' ? '按钮' : 'Button'));
   });
+
+  test(`${locale} catalog index hands the sidebar navigation, not page bodies`, () => {
+    const html = readPage(`${locale}/components/`);
+    // The sidebar island needs stable IDs, names and categories. Passing whole
+    // pages duplicated every example, section and capability into the HTML, and
+    // each page also embeds the full component list, so the index shipped a
+    // megabyte of payload that the browser had to parse to show its navigation.
+    assert.equal([...html.matchAll(/&quot;Category&quot;/g)].length, catalog.pages.length);
+    assert.ok(html.includes(`&quot;${catalog.pages[0].ID}&quot;`));
+    for (const field of ['Summary', 'Examples', 'Sections', 'Capabilities', 'InstallCommand']) {
+      assert.ok(!html.includes(`&quot;${field}&quot;`), `sidebar island receives ${field}`);
+    }
+  });
 }
