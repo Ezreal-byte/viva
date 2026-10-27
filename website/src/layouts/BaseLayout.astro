@@ -1,4 +1,5 @@
 ---
+import { ClientRouter } from 'astro:transitions';
 import ThemeToggle from '../components/ThemeToggle.svelte';
 import CodeCopy from '../components/CodeCopy.svelte';
 import favicon from '../assets/viva-mark.svg?url';
@@ -37,13 +38,25 @@ const navigation = [
     <link rel="icon" type="image/svg+xml" href={favicon} />
     <link rel="apple-touch-icon" href={appleTouchIcon} />
     <title>{section === 'home' ? title : `${title} · Viva`}</title>
+    <ClientRouter />
     {locales.map(language => <link rel="alternate" hreflang={language === 'zh' ? 'zh-CN' : 'en'} href={alternates[language]} />)}
     <script is:inline>
-      try {
-        const theme = localStorage.getItem('viva-docs-theme') === 'dark' ? 'dark' : 'light';
-        document.documentElement.dataset.theme = theme;
-        document.documentElement.style.colorScheme = theme;
-      } catch {}
+      // The client router swaps the document, which restores the markup's
+      // data-theme="light" and drops the reader's choice. Reapply it before the
+      // new page paints, both on first load and after every client navigation.
+      // The function wrapper keeps a re-inserted copy of this script from
+      // redeclaring its names.
+      (() => {
+        const applyStoredTheme = () => {
+          try {
+            const theme = localStorage.getItem('viva-docs-theme') === 'dark' ? 'dark' : 'light';
+            document.documentElement.dataset.theme = theme;
+            document.documentElement.style.colorScheme = theme;
+          } catch {}
+        };
+        applyStoredTheme();
+        document.addEventListener('astro:after-swap', applyStoredTheme);
+      })();
     </script>
   </head>
   <body>

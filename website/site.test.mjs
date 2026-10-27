@@ -15,6 +15,16 @@ test('the root redirects to the Chinese home page', () => {
   assert.ok(readPage('').includes('/zh/'));
 });
 
+test('navigation is client-routed and the stored theme survives it', () => {
+  const html = readPage('zh/docs/getting-started/');
+  // Without the client router every click loads a new document: measured at
+  // 0.3-1.1 s per move against about 30 ms for a DOM swap on the same machine.
+  assert.ok(html.includes('ClientRouter'), 'no client router script');
+  // The router swaps in the new page's markup, which carries data-theme="light",
+  // so a dark-theme reader would see the page flash white without this hook.
+  assert.ok(html.includes('astro:after-swap'), 'no theme restore after a swap');
+});
+
 test('unknown paths fail with a 404 page instead of the root redirect', () => {
   // Pages treats a project without a top-level 404.html as a single-page
   // application: every unmatched path answers with the root document and a 200,
