@@ -1,9 +1,6 @@
 package {{PACKAGE}}
 
-import (
-	"github.com/vivaui/viva/ui"
-	"math"
-)
+import "github.com/vivaui/viva/ui"
 
 // FieldOrientation mirrors the Base UI field group's vertical, horizontal,
 // and container-responsive arrangements.
@@ -27,7 +24,6 @@ type Field struct {
 	invalid     bool
 	disabled    bool
 	control     ui.ID
-	labelGap    float32
 }
 
 // BeginField starts a vertical field group.
@@ -60,20 +56,6 @@ func (field Field) Invalid() Field {
 func (field Field) For(control ui.ID) Field {
 	field.control = control
 	return field
-}
-
-// LabelGap customizes the vertical space between the title and control. Zero
-// keeps the compact default; descriptions and errors retain their own spacing.
-func (field Field) LabelGap(gap float32) Field {
-	field.labelGap = gap
-	return field
-}
-
-func fieldControlGap(metrics ui.Metrics, override float32) float32 {
-	if override > 0 && !math.IsInf(float64(override), 0) {
-		return override
-	}
-	return fieldGap(metrics)
 }
 
 // Disabled mutes field metadata. The caller remains responsible for making the
@@ -109,7 +91,7 @@ func (field Field) Paint(title, description, errorText string) ui.Rect {
 		}
 	}
 	if field.bounds.Height <= 0 {
-		field.bounds.Height = fieldTitleHeight(metrics) + fieldControlGap(metrics, field.labelGap) + metrics.ControlHeight + (fieldGap(metrics)+fieldTextHeight(metrics))*2
+		field.bounds.Height = fieldTitleHeight(metrics) + fieldGap(metrics) + metrics.ControlHeight + (fieldGap(metrics)+fieldTextHeight(metrics))*2
 	}
 
 	if orientation == FieldHorizontal {
@@ -123,7 +105,7 @@ func (field Field) paintVertical(title, description, errorText string) ui.Rect {
 	titleHeight := fieldTitleHeight(metrics)
 	field.paintTitle(title, ui.Rect{X: field.bounds.X, Y: field.bounds.Y, Width: field.bounds.Width, Height: titleHeight})
 	control := ui.Rect{
-		X: field.bounds.X, Y: field.bounds.Y + titleHeight + fieldControlGap(metrics, field.labelGap),
+		X: field.bounds.X, Y: field.bounds.Y + titleHeight + fieldGap(metrics),
 		Width: field.bounds.Width, Height: metrics.ControlHeight,
 	}
 	y := control.Y + control.Height
