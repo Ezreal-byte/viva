@@ -12,6 +12,7 @@ type ColorSwatch struct {
 	color              ui.Color
 	label              string
 	selected, disabled bool
+	skipTab            bool
 }
 
 // BeginColorSwatch centers a color disc inside bounds, leaving room for its
@@ -23,6 +24,11 @@ func BeginColorSwatch(canvas *ui.Canvas, theme ui.Theme, id ui.ID, bounds ui.Rec
 func (s ColorSwatch) Label(label string) ColorSwatch     { s.label = label; return s }
 func (s ColorSwatch) Selected(selected bool) ColorSwatch { s.selected = selected; return s }
 func (s ColorSwatch) Disabled() ColorSwatch              { s.disabled = true; return s }
+
+// TabStop says whether Tab may enter this choice. A radio set gives its
+// selected choice the tab stop, marks the others false, and uses
+// RadioGroupKeyDown for arrow navigation.
+func (s ColorSwatch) TabStop(tabStop bool) ColorSwatch { s.skipTab = !tabStop; return s }
 
 type ColorSwatchResult struct {
 	canvas   *ui.Canvas
@@ -72,7 +78,10 @@ func (s ColorSwatch) Paint() ColorSwatchResult {
 		s.canvas.DrawIcon(noColorIcon, disc, s.theme.MutedForeground)
 	}
 	if !s.id.IsZero() {
-		s.canvas.HitWithOptions(s.id, s.bounds, s.label, ui.HitOptions{Role: ui.RoleRadio, Checked: s.selected, Disabled: s.disabled, Hint: s.label})
+		s.canvas.HitWithOptions(s.id, s.bounds, s.label, ui.HitOptions{
+			Role: ui.RoleRadio, Checked: s.selected, Selected: s.selected,
+			Disabled: s.disabled, SkipTab: s.skipTab,
+		})
 	}
 	return r
 }

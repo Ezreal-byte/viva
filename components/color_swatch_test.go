@@ -10,57 +10,64 @@ import (
 func TestColorSwatchSelectionKeyboardAndDisabled(t *testing.T) {
 	var tree ui.Tree
 	feature := tree.Feature("colors")
-	red, blue := tree.ID(feature, "red"), tree.ID(feature, "blue")
+	red, blue, green := tree.ID(feature, "red"), tree.ID(feature, "blue"), tree.ID(feature, "green")
+	options := [...]RadioOption{{ID: red}, {ID: blue}, {ID: green, Disabled: true}}
 	selected := red
-	disabled := false
 	driver, err := app.NewDriver(app.Config{Width: 180, Height: 80, Tree: &tree, Paint: func(c *ui.Canvas, size ui.Size) {
-		if BeginColorSwatch(c, ui.LightTheme(), red, ui.Rect{X: 10, Y: 10, Width: 32, Height: 32}, ui.Color{Red: 1, Alpha: 1}).Label("Red").Selected(selected == red).Paint().Clicked() {
+		if BeginColorSwatch(c, ui.LightTheme(), red, ui.Rect{X: 10, Y: 10, Width: 32, Height: 32}, ui.Color{Red: 1, Alpha: 1}).Label("Red").Selected(selected == red).TabStop(selected == red).Paint().Clicked() {
 			selected = red
 		}
-		b := BeginColorSwatch(c, ui.LightTheme(), blue, ui.Rect{X: 52, Y: 10, Width: 32, Height: 32}, ui.Color{Blue: 1, Alpha: 1}).Label("Blue").Selected(selected == blue)
-		if disabled {
-			b = b.Disabled()
-		}
-		if b.Paint().Clicked() {
+		if BeginColorSwatch(c, ui.LightTheme(), blue, ui.Rect{X: 52, Y: 10, Width: 32, Height: 32}, ui.Color{Blue: 1, Alpha: 1}).Label("Blue").Selected(selected == blue).TabStop(selected == blue).Paint().Clicked() {
 			selected = blue
 		}
+		BeginColorSwatch(c, ui.LightTheme(), green, ui.Rect{X: 94, Y: 10, Width: 32, Height: 32}, ui.Color{Green: 1, Alpha: 1}).Label("Green").Selected(selected == green).TabStop(selected == green).Disabled().Paint()
+	}, OnKey: func(event ui.KeyEvent) ui.EventResult {
+		next, handled := RadioGroupKeyDown(event.Target, options[:], DirectionLTR, event.Key)
+		if !handled {
+			return ui.EventResult{}
+		}
+		selected = next
+		return ui.EventResult{Focus: next, FocusVisible: true, Handled: true, Repaint: true}
 	}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer driver.Close()
+	if err := driver.Key(ui.KeyTab, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.Key(ui.KeyRight, 0); err != nil {
+		t.Fatal(err)
+	}
+	if selected != blue || driver.Snapshot().Focused != blue {
+		t.Fatalf("right arrow selected %v with focus %v, want blue", selected, driver.Snapshot().Focused)
+	}
+	if err := driver.Key(ui.KeyRight, 0); err != nil {
+		t.Fatal(err)
+	}
+	if selected != red || driver.Snapshot().Focused != red {
+		t.Fatalf("right arrow did not skip disabled green: selected %v, focus %v", selected, driver.Snapshot().Focused)
+	}
 	if err := driver.Click(68, 26); err != nil {
 		t.Fatal(err)
 	}
 	if selected != blue {
 		t.Fatal("pointer did not select blue")
 	}
-	if err := driver.Click(26, 26); err != nil {
-		t.Fatal(err)
-	}
-	if err := driver.Key(ui.KeyTab, 0); err != nil {
-		t.Fatal(err)
-	}
-	if err := driver.Key(ui.KeySpace, 0); err != nil {
-		t.Fatal(err)
-	}
-	if selected != blue {
-		t.Fatal("keyboard did not select blue")
-	}
-	selected, disabled = red, true
-	if err := driver.Resize(181, 80); err != nil {
-		t.Fatal(err)
-	}
-	if err := driver.Click(68, 26); err != nil {
-		t.Fatal(err)
-	}
-	if selected != red {
-		t.Fatal("disabled swatch changed selection")
-	}
+	tabStops := 0
 	for _, h := range driver.Snapshot().Hits {
-		if h.ID == blue && (!h.Disabled || h.Focusable) {
+		if h.Hint != "" {
+			t.Fatalf("%v hint = %q, want empty", h.ID, h.Hint)
+		}
+		if h.Focusable && !h.SkipTab {
+			tabStops++
+		}
+		if h.ID == green && (!h.Disabled || h.Focusable) {
 			t.Fatal("disabled swatch remains focusable")
 		}
+	}
+	if tabStops != 1 {
+		t.Fatalf("tab stops = %d, want 1", tabStops)
 	}
 }
 
