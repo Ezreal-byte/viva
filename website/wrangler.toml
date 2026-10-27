@@ -1,0 +1,6 @@
+# The Cloudflare Pages project that serves https://vivaui.dev. `wrangler pages
+# deploy` reads the project name from here, so .github/workflows/website.yml
+# does not repeat it. The build output directory is passed on the command line
+# because it lives outside this directory: ../build/docs-site.
+name = "viva-mcp"
+compatibility_date = "2026-10-27"

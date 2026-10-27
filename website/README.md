@@ -103,3 +103,32 @@ interactive controls and WASM previews require JavaScript.
 All production URLs are local. Serve the complete built directory with its
 generated WASM and source assets to work without an internet connection.
 `file://` is not a supported execution environment for the WASM runner.
+
+## Deploying
+
+The site is the Cloudflare Pages project `viva-mcp`, served at
+<https://vivaui.dev>. `.github/workflows/website.yml` builds it on GitHub runners
+and uploads it with Wrangler, so the build environment is the workflow's, not
+Cloudflare's build image. The project name lives in `wrangler.toml`; the output
+directory (`../build/docs-site`) is passed on the deploy command line.
+
+Repository setup, once:
+
+1. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` to the repository
+   secrets. The token needs the Cloudflare Pages edit permission.
+2. Disable automatic deployments in the Pages project (Settings → Build and
+   deployments). Otherwise the Git integration and the workflow both deploy the
+   same commit.
+3. Keep the repository's Pages Git connection only for its custom domains and
+   preview metadata; if automatic deployments are re-enabled, the Cloudflare
+   build image also needs `GO_VERSION=1.26.5` because `go.mod` asks for Go 1.26.
+
+The workflow runs `npm ci`, `npm run build`, `npm run test:site`, `npm test` and
+`npm run check` on every pull request, so a broken page or payload fails before
+it merges. A deploy is skipped on pull requests and when the token is unset.
+
+`src/pages/404.astro` is required, not cosmetic: without a top-level `404.html`,
+Cloudflare Pages assumes a single-page application and answers every unknown
+path with the root document and a `200`, which turns a broken link into a
+silent redirect. `site.test.mjs` fails if that file disappears.
+
