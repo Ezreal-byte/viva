@@ -1,10 +1,73 @@
 package windows
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/vivaui/viva/internal/platform"
 )
+
+func TestNonClientCursorsBelongToWindowsForEveryWindowMode(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	arrow, _, _ := loadCursor.Call(0, 32512)
+	ibeam, _, _ := loadCursor.Call(0, 32513)
+	if arrow == 0 || ibeam == 0 {
+		t.Fatal("system cursors are unavailable")
+	}
+	previousCursor, _, _ := setCursorNative.Call(arrow)
+	defer setCursorNative.Call(previousCursor)
+	getCursor := user.NewProc("GetCursor")
+	const window = ^uintptr(0)
+	state := &windowState{window: window, ready: true}
+	state.cursor.Store(ibeam)
+	previous := active.Load()
+	windowStates.Store(window, state)
+	defer func() { windowStates.Delete(window); active.Store(previous) }()
+	for _, mode := range []platform.WindowMode{platform.WindowTitled, platform.WindowCustomTitlebar, platform.WindowFrameless, platform.WindowPanel} {
+		state.config.WindowMode = mode
+		for _, hit := range []uintptr{htClient, htCaption, htMaxButton, htLeft, htRight, htTop, htBottom, htTopLeft, htTopRight, htBottomLeft, htBottomRight} {
+			setCursorNative.Call(arrow)
+			result := windowProc(window, wmSetCursor, window, hit|wmMouseMove<<16)
+			cursor, _, _ := getCursor.Call()
+			if hit == htClient {
+				if result != 1 || cursor != ibeam {
+					t.Errorf("mode %d: client cursor was not applied: result %d, cursor %#x", mode, result, cursor)
+				}
+			} else if result != 0 || cursor != arrow {
+				// The invalid test HWND makes DefWindowProc a no-op. Returning
+				// unhandled and retaining the cursor proves client code yielded
+				// instead of hiding Windows' size/caption cursor with an I-beam.
+				t.Errorf("mode %d hit %d: client cursor overrode non-client handling: result %d, cursor %#x", mode, hit, result, cursor)
+			}
+		}
+	}
+}
+
+func BenchmarkWindowSetCursor(b *testing.B) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	cursor, _, _ := loadCursor.Call(0, 32512)
+	previousCursor, _, _ := setCursorNative.Call(cursor)
+	defer setCursorNative.Call(previousCursor)
+	const window = ^uintptr(0)
+	state := &windowState{window: window, ready: true}
+	state.cursor.Store(cursor)
+	previous := active.Load()
+	windowStates.Store(window, state)
+	defer func() { windowStates.Delete(window); active.Store(previous) }()
+	for _, test := range []struct {
+		name string
+		hit  uintptr
+	}{{"client", htClient}, {"resize-edge", htRight}} {
+		b.Run(test.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				windowProc(window, wmSetCursor, window, test.hit|wmMouseMove<<16)
+			}
+		})
+	}
+}
 
 func TestClassifyPointFindsEdgesCornersCaptionAndClient(t *testing.T) {
 	client := func() platform.PressKind { return platform.PressClient }
