@@ -1,6 +1,10 @@
-# The Cloudflare Pages project that serves https://vivaui.dev. `wrangler pages
-# deploy` reads the project name from here, so .github/workflows/website.yml
-# does not repeat it. The build output directory is passed on the command line
-# because it lives outside this directory: ../build/docs-site.
-name = "viva-mcp"
+# The Cloudflare Pages project that serves https://vivaui.dev. The project is
+# named "viva" while its pages.dev hostname is viva-mcp.pages.dev; both are set
+# in the Pages dashboard, and only the project name matters here.
+#
+# `wrangler pages deploy` reads the project name and upload directory from this
+# file, so the workflow repeats neither. The directory is relative to this file,
+# and the site build writes it outside website/: ../build/docs-site.
+name = "viva"
 compatibility_date = "2026-10-27"
+pages_build_output_dir = "../build/docs-site"
