@@ -87,3 +87,39 @@ func TestContentWindowRejectedOpenAndPendingUpdateTeardown(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestContentWindowPostQueueIsBoundedAndReusable(t *testing.T) {
+	host := &fakeHost{}
+	useHost(t, host)
+	if err := RunApplication(func(application *Application) error {
+		content, err := application.OpenContentWindow(Config{}, nil)
+		if err != nil {
+			return err
+		}
+		delivered := 0
+		for range contentWindowPostLimit {
+			if !content.Post(func() { delivered++ }) {
+				t.Fatal("rejected update before queue reached its limit")
+			}
+		}
+		if content.Post(func() { t.Error("overflow update ran") }) {
+			t.Fatal("accepted update beyond queue limit")
+		}
+		host.windows[0].config.OnWake()
+		if delivered != contentWindowPostLimit {
+			t.Fatalf("delivered %d queued updates", delivered)
+		}
+		if !content.Post(func() { delivered++ }) {
+			t.Fatal("drained queue did not accept another update")
+		}
+		host.windows[0].config.OnWake()
+		if delivered != contentWindowPostLimit+1 {
+			t.Fatal("reused queue did not deliver its update")
+		}
+		content.Close()
+		host.windows[0].config.OnClosed()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

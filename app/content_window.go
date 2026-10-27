@@ -6,6 +6,8 @@ import (
 	"github.com/vivaui/viva/ui"
 )
 
+const contentWindowPostLimit = 256
+
 // ContentWindow is an independent native window for application-owned content.
 // It uses normal system chrome on Windows, macOS and Linux. Config supplies the
 // content and close policy; the helper owns UI-thread delivery and lifetime.
@@ -81,13 +83,14 @@ func (application *Application) OpenContentWindow(config Config, canvas *ui.Canv
 }
 
 // Post queues an update for the window thread. It rejects updates after native
-// teardown, so a slow network response cannot resurrect closed content.
+// teardown or while the bounded queue is full, so a slow window cannot retain
+// unbounded background results or resurrect closed content.
 func (content *ContentWindow) Post(update func()) bool {
 	if content == nil || update == nil {
 		return false
 	}
 	content.mu.Lock()
-	if content.closed {
+	if content.closed || len(content.pending) >= contentWindowPostLimit {
 		content.mu.Unlock()
 		return false
 	}
