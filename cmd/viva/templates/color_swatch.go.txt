@@ -1,0 +1,80 @@
+package {{PACKAGE}}
+
+import "github.com/vivaui/viva/ui"
+
+// ColorSwatch is a circular color choice. The caller owns its selection and
+// supplies a stable ID and accessible name. A transparent color means no color.
+type ColorSwatch struct {
+	canvas             *ui.Canvas
+	theme              ui.Theme
+	id                 ui.ID
+	bounds             ui.Rect
+	color              ui.Color
+	label              string
+	selected, disabled bool
+}
+
+// BeginColorSwatch centers a color disc inside bounds, leaving room for its
+// selection and keyboard focus rings. The full bounds are the hit target.
+func BeginColorSwatch(canvas *ui.Canvas, theme ui.Theme, id ui.ID, bounds ui.Rect, color ui.Color) ColorSwatch {
+	return ColorSwatch{canvas: canvas, theme: theme, id: id, bounds: bounds, color: color, label: "Color"}
+}
+
+func (s ColorSwatch) Label(label string) ColorSwatch     { s.label = label; return s }
+func (s ColorSwatch) Selected(selected bool) ColorSwatch { s.selected = selected; return s }
+func (s ColorSwatch) Disabled() ColorSwatch              { s.disabled = true; return s }
+
+type ColorSwatchResult struct {
+	canvas   *ui.Canvas
+	id       ui.ID
+	disabled bool
+}
+
+func (r ColorSwatchResult) Clicked() bool {
+	return !r.disabled && r.canvas != nil && r.canvas.Clicked(r.id)
+}
+
+// Paint declares a keyboard-accessible radio choice. Its ring communicates
+// selection independently of the color, including the no-color choice.
+func (s ColorSwatch) Paint() ColorSwatchResult {
+	r := ColorSwatchResult{s.canvas, s.id, s.disabled}
+	if s.canvas == nil {
+		return r
+	}
+	side := min(s.bounds.Width, s.bounds.Height)
+	if side <= 10 {
+		return r
+	}
+	b := ui.Rect{X: s.bounds.X + (s.bounds.Width-side)/2, Y: s.bounds.Y + (s.bounds.Height-side)/2, Width: side, Height: side}
+	border := s.theme.Input
+	if s.selected {
+		border = s.theme.Foreground
+	}
+	if !s.disabled && (s.canvas.FocusVisible() == s.id || s.canvas.Hovered() == s.id) && !s.id.IsZero() {
+		border = s.theme.Ring
+	}
+	if s.disabled {
+		border.Alpha *= 0.4
+	}
+	s.canvas.Rounded(b, side/2, border)
+	inner := ui.Rect{X: b.X + 2, Y: b.Y + 2, Width: side - 4, Height: side - 4}
+	s.canvas.Rounded(inner, inner.Width/2, s.theme.Background)
+	disc := ui.Rect{X: b.X + 5, Y: b.Y + 5, Width: side - 10, Height: side - 10}
+	color := s.color
+	if color.Alpha == 0 {
+		color = s.theme.Muted
+	}
+	if s.disabled {
+		color.Alpha *= 0.4
+	}
+	s.canvas.Rounded(disc, disc.Width/2, color)
+	if s.color.Alpha == 0 {
+		s.canvas.DrawIcon(noColorIcon, disc, s.theme.MutedForeground)
+	}
+	if !s.id.IsZero() {
+		s.canvas.HitWithOptions(s.id, s.bounds, s.label, ui.HitOptions{Role: ui.RoleRadio, Checked: s.selected, Disabled: s.disabled, Hint: s.label})
+	}
+	return r
+}
+
+var noColorIcon = ui.Icon{ViewBox: 24, Stroke: 1.5, Cap: ui.CapRound, Commands: []ui.PathCommand{ui.MoveTo(6, 18), ui.LineTo(18, 6)}}

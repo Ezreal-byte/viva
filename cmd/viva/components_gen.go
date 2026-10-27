@@ -21,6 +21,7 @@ var componentFiles = map[string]string{
 	"chart":             "chart.go.txt",
 	"checkbox":          "checkbox.go.txt",
 	"collapsible":       "collapsible.go.txt",
+	"color-swatch":      "color_swatch.go.txt",
 	"combobox":          "combobox.go.txt",
 	"command":           "command.go.txt",
 	"context-menu":      "context_menu.go.txt",
