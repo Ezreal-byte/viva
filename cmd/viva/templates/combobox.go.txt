@@ -87,6 +87,7 @@ func BeginCombobox(canvas *ui.Canvas, theme ui.Theme, inputBounds ui.Rect, optio
 		canvas: canvas, theme: theme, bounds: content,
 		options: menuSurfaceOptions{layer: options.Layer, scope: options.Scope, scroll: options.Scroll, tabCloses: true},
 		top:     content.Y + 4, bottom: content.Y + content.Height - 4,
+		viewHeight: max(content.Height-8, 0),
 	}
 	combobox.rows.beginScroll()
 	if options.Scroll != nil {

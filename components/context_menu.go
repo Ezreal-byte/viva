@@ -76,9 +76,12 @@ type ContextMenuOptions struct {
 
 // ContextMenuItem describes one stable menu action.
 type ContextMenuItem struct {
-	ID       ui.ID
-	Label    string
-	Shortcut string
+	ID    ui.ID
+	Label string
+	// Description is an optional muted second line. It increases the item height
+	// and is ellipsized to the available width; Hint may carry the full text.
+	Description string
+	Shortcut    string
 	// Keys, when set, replace Shortcut with one keycap per entry (for example
 	// "⌘", "⌥", "H"), painted with Kbd at the row's trailing edge.
 	Keys []string
@@ -103,7 +106,8 @@ type ContextMenuItem struct {
 
 func (item ContextMenuItem) common() menuItem {
 	return menuItem{
-		ID: item.ID, Label: item.Label, Shortcut: item.Shortcut, Keys: item.Keys, TrailingWidth: item.TrailingWidth,
+		Description: item.Description,
+		ID:          item.ID, Label: item.Label, Shortcut: item.Shortcut, Keys: item.Keys, TrailingWidth: item.TrailingWidth,
 		Value: item.Value, Hint: item.Hint, Kind: menuKind(item.Kind), Destructive: item.Variant == ContextMenuItemDestructive,
 		Checked: item.Checked, Selected: item.Selected, Disabled: item.Disabled, Inset: item.Inset, Expanded: item.Expanded, Icon: item.Icon,
 	}
@@ -114,6 +118,12 @@ func (item ContextMenuItem) common() menuItem {
 // items as the bounds' Width. The menu's own minimum still applies.
 func ContextMenuItemWidth(canvas *ui.Canvas, theme ui.Theme, item ContextMenuItem) float32 {
 	return menuItemWidth(canvas, theme, item.common(), false)
+}
+
+// ContextMenuItemHeight is the height AddItem reserves for item. rowHeight is
+// ContextMenuOptions.RowHeight (zero selects the standard 32px label row).
+func ContextMenuItemHeight(theme ui.Theme, item ContextMenuItem, rowHeight float32) float32 {
+	return menuItemHeight(theme, item.common(), rowHeight)
 }
 
 // ContextMenu paints an application-positioned menu without owning pointer,
