@@ -3,6 +3,7 @@ package linux
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"unsafe"
 
 	"github.com/vivaui/viva/internal/platform"
@@ -28,10 +29,9 @@ const (
 	iconicState      = 3
 	sourceApp        = 1
 
-	// doubleClickMillis and doubleClickSlop bound two presses on the strip that
+	// doubleClickMillis bounds two presses on the strip that
 	// make a double click.
 	doubleClickMillis = 400
-	doubleClickSlop   = 4
 )
 
 type xcbPropertyEvent struct {
@@ -51,6 +51,8 @@ type frameState struct {
 	maximizedHorizontal        uint32
 	fullscreen                 uint32
 	maximized                  bool
+	maximizePending            bool
+	maximizeTarget             bool
 	lastPress                  uint32
 	lastPressX, lastPressY     int16
 	pressed                    bool
@@ -117,7 +119,20 @@ func (win *window) minimize() {
 }
 
 func (win *window) toggleMaximize() {
+	win.frame.maximizePending = true
+	win.frame.maximizeTarget = !win.frame.maximized
 	win.sendToRoot(win.frame.stateAtom, [5]uint32{netWMStateToggle, win.frame.maximizedVertical, win.frame.maximizedHorizontal, sourceApp})
+}
+
+func (win *window) setMaximized(maximized bool) bool {
+	if maximized == win.frame.maximized {
+		return false
+	}
+	win.frame.maximized = maximized
+	if win.maximizeHandler != nil {
+		win.maximizeHandler(maximized)
+	}
+	return true
 }
 
 // readMaximized reports whether the window manager lists the window as
@@ -174,11 +189,11 @@ func (win *window) propertyChanged(event *xcbPropertyEvent) (bool, error) {
 		return false, nil
 	}
 	maximized, err := win.readMaximized()
-	if err != nil || maximized == win.frame.maximized {
+	if err != nil {
 		return false, err
 	}
-	win.frame.maximized = maximized
-	return true, nil
+	win.frame.maximizePending = false
+	return win.setMaximized(maximized), nil
 }
 
 // readMinimized reports whether WM_STATE says the window is iconic. A manager
@@ -254,9 +269,25 @@ func (win *window) beginWindowMove(config platform.Config, event *xcbInputEvent)
 	return true
 }
 
-// dragSlop is how far the pointer moves with the button down before a press on
-// the frame becomes a move or resize, in pixels.
-const dragSlop = 4
+// defaultDragSlop is the base distance in logical pixels before motion on
+// the frame becomes a window manager drag or resize.
+const defaultDragSlop = 4
+
+func (win *window) dragSlop() int16 {
+	scale := float32(1)
+	if win != nil {
+		scale = max(win.displayScale(), 1)
+	}
+	return int16(math.Round(float64(defaultDragSlop * scale)))
+}
+
+func (win *window) doubleClickSlop() int16 {
+	scale := float32(1)
+	if win != nil {
+		scale = max(win.displayScale(), 1)
+	}
+	return int16(math.Round(float64(defaultDragSlop * scale)))
+}
 
 // dragMotion starts the move or resize a press on the frame asked for once the
 // pointer has dragged. consumed reports that a press was waiting and the motion
@@ -271,8 +302,9 @@ func (win *window) dragMotion(event *xcbInputEvent) (consumed, cancelled bool) {
 		frame.pending = false
 		return false, false
 	}
+	slop := win.dragSlop()
 	dx, dy := event.RootX-frame.pendingRootX, event.RootY-frame.pendingRootY
-	if dx > -dragSlop && dx < dragSlop && dy > -dragSlop && dy < dragSlop {
+	if dx > -slop && dx < slop && dy > -slop && dy < slop {
 		return !frame.delivered, false
 	}
 	frame.pending = false
@@ -288,7 +320,8 @@ func (win *window) endPress() { win.frame.pending = false }
 // double click.
 func (win *window) doubleClick(event *xcbInputEvent) bool {
 	frame := &win.frame
-	near := func(a, b int16) bool { return a-b <= doubleClickSlop && b-a <= doubleClickSlop }
+	slop := win.doubleClickSlop()
+	near := func(a, b int16) bool { return a-b <= slop && b-a <= slop }
 	double := frame.pressed && event.Time-frame.lastPress <= doubleClickMillis && near(event.EventX, frame.lastPressX) && near(event.EventY, frame.lastPressY)
 	frame.pressed, frame.lastPress, frame.lastPressX, frame.lastPressY = !double, event.Time, event.EventX, event.EventY
 	return double
