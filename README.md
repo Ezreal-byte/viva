@@ -269,6 +269,10 @@ problems go through [SECURITY.md](SECURITY.md), never a public issue.
   <img src="https://contrib.rocks/image?repo=vivaui/viva&max=300&columns=15" alt="Contributors" />
 </a>
 
+## Community
+
+<a href="https://linux.do"><img src="https://img.shields.io/badge/LINUX%20DO-Community-blue" alt="LINUX DO" /></a>
+
 ## License
 
 Viva is licensed under the Apache License 2.0. See [LICENSE](LICENSE) and

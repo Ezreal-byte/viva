@@ -153,6 +153,10 @@ Bug 报告、平台发现和文档修正永远欢迎——改动必须通过的�
   <img src="https://contrib.rocks/image?repo=vivaui/viva&max=300&columns=15" alt="Contributors" />
 </a>
 
+## 社区
+
+<a href="https://linux.do"><img src="https://img.shields.io/badge/LINUX%20DO-Community-blue" alt="LINUX DO" /></a>
+
 ## 许可证
 
 Viva 以 Apache License 2.0 授权。见 [LICENSE](LICENSE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
