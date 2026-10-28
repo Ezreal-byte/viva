@@ -1,10 +1,15 @@
-# Viva
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="website/src/assets/viva-lockup-dark.svg">
+    <img src="website/src/assets/viva-lockup.svg" alt="Viva" width="240">
+  </picture>
+</h1>
 
-[English](README.md) | 简体中文
+<p align="center"><a href="README.md">English</a> | 简体中文</p>
 
 Viva 是一个 Go 优先、GPU 原生的桌面框架。应用通过操作系统自己的窗口和 GPU API 绘制——Cocoa 与 Metal、Win32 与 Direct3D 11、XCB 与 Vulkan——不使用 WebView，不捆绑浏览器引擎，也不捆绑运行时。它追求小的二进制产物、低的空闲资源占用，以及对原生平台能力的直接访问。
 
-Viva 尚未到 1.0：版本之间 API 仍可能变化，macOS 是参考平台。Windows 和 Linux 后端跟随它演进，也是验证最少的。下面的状态列表是今天实际能跑的东西。
+下面的状态列表是今天实际能跑的东西。
 
 ## 快速开始
 
@@ -69,9 +74,9 @@ Viva 面向 macOS、Windows 和 Linux 上的原生桌面应用。WebAssembly/Web
 - 窗口关闭或应用终止时干净地退出事件循环。
 - 可复现的二进制、启动、CPU、内存和 GPU 提交测量。
 
-Windows 后端现在能为 amd64 和 arm64 交叉构建，并在 Wine/DXVK 下通过平台测试以及 Gallery 的启动、指针和键盘冒烟测试。这次兼容性运行不能替代在真实 Windows 硬件上的验证；Windows 输入法、启动、RSS、GPU 行为和文字栅格质量仍未完成。平台测试、conformance 场景，以及新增的输入、拖放和设备丢失路径，在一台 Windows 11 虚拟机（WARP）和一台 Debian KDE/X11 机器（lavapipe）上运行；`docs/conformance.md` 列出了两者都覆盖不到的部分。UI Automation 在一台真实的 Windows 11 机器上由外部客户端检查（见 docs/accessibility.md）。Linux 后端通过 Ubuntu arm64 Xvfb/llvmpipe 的 M0 和 Debian amd64 X11/Lavapipe 的保留式场景冒烟测试，包括中英混排文本和局部场景更新。XIM、原生 Wayland、平滑（XInput2）滚动和硬件 GPU 测量仍未完成；AT-SPI 在 KDE/X11 机器上针对 libatspi 检查。macOS 运行时测试和基准都在 arm64 上跑过；Intel GPU、输入法和文字栅格行为还不在那张表里。
+Windows 后端支持 amd64 和 arm64 交叉构建，并在 Wine/DXVK 下通过平台测试以及 Gallery 的启动、指针和键盘冒烟测试。平台测试、conformance 场景，以及输入、拖放和设备丢失路径，在一台 Windows 11 虚拟机（WARP）和一台 Debian KDE/X11 机器（lavapipe）上运行；`docs/conformance.md` 记录了需要真实硬件的场景。UI Automation 在一台真实的 Windows 11 机器上由外部客户端检查（见 docs/accessibility.md），AT-SPI 在 KDE/X11 机器上针对 libatspi 检查。Linux 后端通过 Ubuntu arm64 Xvfb/llvmpipe 的 M0 和 Debian amd64 X11/Lavapipe 的保留式场景冒烟测试，包括中英混排文本和局部场景更新。macOS 运行时测试和基准在 arm64 上运行。
 
-原生标签渲染器是有意为之的单行 M2 实现；字形图集优化留待以后。可选的 Web 预览目前使用 Canvas2D，而不是计划中的 WebGPU 后端，其组件浏览器也尚未接入文本服务。
+原生标签渲染器绘制单行标签。浏览器预览运行在 Canvas2D 后端。
 
 ## 运行这个仓库
 

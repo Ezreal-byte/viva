@@ -1,6 +1,11 @@
-# Viva
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="website/src/assets/viva-lockup-dark.svg">
+    <img src="website/src/assets/viva-lockup.svg" alt="Viva" width="240">
+  </picture>
+</h1>
 
-English | [简体中文](README.zh-CN.md)
+<p align="center">English | <a href="README.zh-CN.md">简体中文</a></p>
 
 Viva is a Go-first, GPU-native desktop framework. Applications draw through
 the platform's own window and GPU APIs — Cocoa and Metal, Win32 and Direct3D 11,
@@ -8,9 +13,7 @@ XCB and Vulkan — with no WebView, no browser engine, and no bundled runtime. I
 is aimed at small binaries, low idle resource usage, and direct access to native
 platform capabilities.
 
-Viva is pre-1.0: the API can still change between releases, and macOS is the
-reference platform. The Windows and Linux backends track it and are the least
-exercised. The status list below is what runs today.
+The status list below is what runs today.
 
 ## Quick start
 
@@ -145,24 +148,19 @@ WebView and no bundled rendering runtime.
 - Clean event-loop return on window close or application termination.
 - Reproducible binary, startup, CPU, memory, and GPU-submission measurement.
 
-The Windows backend now cross-builds for amd64 and arm64 and passes its platform
+The Windows backend cross-builds for amd64 and arm64 and passes its platform
 tests plus Gallery startup, pointer, and keyboard smoke tests under Wine/DXVK.
-That compatibility run does not replace validation on real Windows hardware;
-Windows IME, startup, RSS, GPU behavior, and text raster quality remain open.
-Platform tests, the conformance scenarios and the new input, drop and device-loss
+Platform tests, the conformance scenarios and the input, drop and device-loss
 paths run on a Windows 11 virtual machine (WARP) and a Debian KDE/X11 machine
-(lavapipe); `docs/conformance.md` lists what neither covers.
+(lavapipe); `docs/conformance.md` records the scenarios that need real hardware.
 UI Automation is checked against a real Windows 11 machine from an external
-client (see docs/accessibility.md). The Linux backend passes Ubuntu arm64 Xvfb/llvmpipe M0 and Debian
-amd64 X11/Lavapipe retained-scene smokes, including mixed Chinese/Latin text
-and localized scene updates. XIM, native Wayland, smooth (XInput2) scrolling and
-hardware-GPU measurements remain open; AT-SPI is checked against libatspi on a
-KDE/X11 machine. The macOS runtime tests and benchmarks were run on arm64; Intel
-GPU, IME and text-raster behavior is not part of that matrix yet.
-Native label renderers are intentionally single-line M2 implementations;
-glyph-atlas optimization remains future work. The optional Web preview currently
-uses Canvas2D rather than the planned WebGPU backend, and its gallery does not
-connect a text service yet.
+client (see docs/accessibility.md), and AT-SPI against libatspi on KDE/X11. The
+Linux backend passes Ubuntu arm64 Xvfb/llvmpipe M0 and Debian amd64
+X11/Lavapipe retained-scene smokes, including mixed Chinese/Latin text and
+localized scene updates. The macOS runtime tests and benchmarks run on arm64.
+
+Native label renderers draw single-line labels. The browser preview runs on the
+Canvas2D backend.
 
 ## Run the repository
 
