@@ -5,6 +5,9 @@
 /website/node_modules/
 /website/.astro/
 
+# State left by `wrangler pages dev` when checking the deploy output locally.
+/.wrangler/
+
 # Local agent instructions and machine-specific settings, not part of the project.
 /AGENTS.md
 /CLAUDE.md
