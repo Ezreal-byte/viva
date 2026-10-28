@@ -70,8 +70,12 @@ func commands() []command {
 			}},
 		{name: "add", usage: "add [flags] <component>...",
 			summary: "Copy component source into your project.",
-			detail:  "The files are yours to change; nothing links back to viva. See viva list for the names.",
-			run:     func(arguments []string, output, _ io.Writer) error { return addComponents(arguments, output) }},
+			detail: "The files are yours to change; nothing links back to viva. See viva list for the names. The recipes come\n" +
+				"with the viva command, so they match the Viva version it was built from; when the project's go.mod\n" +
+				"requires a different version, add says so (go tool viva runs the version the project pins).",
+			run: func(arguments []string, output, errorOutput io.Writer) error {
+				return addComponents(arguments, output, errorOutput)
+			}},
 		{name: "list", usage: "list",
 			summary: "List the components viva add can install.",
 			run:     func(arguments []string, output, _ io.Writer) error { return runList(arguments, output) }},
@@ -79,6 +83,16 @@ func commands() []command {
 			summary: "Compile SVG icons into Go source.",
 			detail:  "Produces ui.Icon values, so no SVG parser ships in the application.",
 			run:     func(arguments []string, output, _ io.Writer) error { return runIcons(arguments, output) }},
+		{name: "doctor", usage: "doctor [-C dir]",
+			summary: "Check that this machine and project can build with viva.",
+			detail: "Reports the Go toolchain, the platform libraries Viva loads (Xcode tools on macOS, XCB and Vulkan on\n" +
+				"Linux), the packaging tools only some targets need, viva.toml, and whether the viva command matches the\n" +
+				"Viva version the project in -C builds against. Each problem comes with the command that fixes it; the\n" +
+				"exit status is non-zero only when something viva cannot work without is missing.",
+			run: func(arguments []string, output, _ io.Writer) error { return runDoctor(arguments, output) }},
+		{name: "version", usage: "version",
+			summary: "Print the viva version.",
+			run:     func(arguments []string, output, _ io.Writer) error { return runVersion(arguments, output) }},
 		{name: "help", usage: "help [command]",
 			summary: "Show this list, or the usage and flags of one command.",
 			run:     func(arguments []string, output, _ io.Writer) error { return runHelp(arguments, output) }},

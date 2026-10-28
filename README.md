@@ -17,18 +17,28 @@ packages and live-reloads applications; nothing in it is linked into the program
 you ship.
 
 ```sh
-go install github.com/vivaui/viva/cmd/viva@latest   # once
+brew install vivaui/tap/viva        # macOS, Linux
+scoop bucket add vivaui https://github.com/vivaui/homebrew-tap && scoop install viva   # Windows
+viva doctor                         # is this machine ready?
 viva init hello
 cd hello
 viva dev .        # hot reload: save a file, the window updates and keeps its state
 ```
+
+Prebuilt archives (with `SHA256SUMS`) are on each release from `v0.1.3` on; with Go
+already installed, `go install github.com/vivaui/viva/cmd/viva@latest` works too.
+You do not need Go first: `viva build`, `viva dev` and `viva init` download the
+official toolchain once into your user cache when there is none (checked against
+go.dev's SHA-256; `VIVA_GO_DOWNLOAD=0` turns it off). A project made by `viva init`
+pins the command with a `tool` line in `go.mod`, so `go tool viva` runs the version
+that project builds against. See the Build and package guide.
 
 `viva init` writes a runnable project: a window, a test that drives it without
 opening one, `viva.toml`, and an `AGENTS.md` describing the programming model.
 `viva build` writes a release program to `build/`, and `viva package` writes the
 platform's own bundle.
 
-Requirements: Go 1.26 or newer. On macOS the Xcode command-line tools, because
+Requirements: Go 1.26 or newer (viva fetches it when missing). On macOS the Xcode command-line tools, because
 Viva reaches Cocoa and Metal through cgo; on Linux, X11 with the system XCB and
 Vulkan loaders; on Windows, Win32 with Direct3D 11 and DirectWrite. Viva loads
 the system libraries at runtime and bundles none of them.

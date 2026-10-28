@@ -1,4 +1,6 @@
 /build/
+/dist/
+/packages/
 *.dxvk-cache
 /website/node_modules/
 /website/.astro/
