@@ -369,6 +369,10 @@ func windowProc(window, kind, first, second uintptr) (result uintptr) {
 		}
 	}()
 	switch kind {
+	case wmGetMinMaxInfo:
+		defaultWindowProc.Call(window, kind, first, second)
+		state.constrainTracking((*minMaxInfo)(pointer(second)))
+		return 0
 	case wmDestroy:
 		state.stopCaretTimer()
 		state.closeDrop()
