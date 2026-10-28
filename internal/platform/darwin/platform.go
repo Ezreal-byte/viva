@@ -374,6 +374,8 @@ func (application *nativeApplication) OpenWindow(config Config) (platform.Window
 		title:                   title,
 		width:                   C.int(config.Width),
 		height:                  C.int(config.Height),
+		min_width:               C.int(config.MinWidth),
+		min_height:              C.int(config.MinHeight),
 		clear_red:               C.double(config.ClearColor.Red),
 		clear_green:             C.double(config.ClearColor.Green),
 		clear_blue:              C.double(config.ClearColor.Blue),
