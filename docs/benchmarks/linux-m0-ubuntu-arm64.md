@@ -28,14 +28,14 @@ thread count, and rendering cost are not representative of a desktop GPU.
 - Ten first-frame samples range from 52.776 ms to 104.398 ms, with a median of
   60.260 ms. This includes window, instance, device, swapchain, clear, and first
   present; the VM/software-renderer result does not meet or refute the 50 ms
-  physical-hardware target.
+  physical-hardware goal.
 - After a 3 second settle, process CPU time did not advance during a 10 second
   sample: `0.000%` measured CPU.
 - After 5 idle seconds and a graceful X11 close, diagnostics still report one
   GPU submission, zero resize events, and one Go goroutine.
 - Settled RSS is 93,796 KiB with 13 OS threads and 6 file descriptors. llvmpipe
   owns most of this cost; a hardware Vulkan run is required before comparing
-  Linux against the 15 MiB idle target.
+  Linux against the 15 MiB idle goal.
 - Stripped pulse sizes are 1,900,773 B for Linux arm64 and 1,908,965 B for
   Linux amd64, both below the provisional 4 MiB target.
 - The ELF directly requires only `libdl.so.2`, `libpthread.so.0`, and
