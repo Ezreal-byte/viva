@@ -65,7 +65,7 @@ Set `VIVA_LINUX_ENV` and `VIVA_WINDOWS_ENV` when calling
   `apt-get install mesa-vulkan-drivers`, as a `setsid nohup` script; the package
   index is stale until updated.
 - `xdotool` is installed.
-- Many threads in a Viva process there are lavapipe's pool, not Vif's.
+- Many threads in a Viva process there are lavapipe's pool, not Viva's.
 
 ## Windows notes
 
