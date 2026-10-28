@@ -42,8 +42,9 @@ flips it from draft to published. Nothing is published by a local command.
    `viva.json` unless it is a prerelease), annotated tag pointing at the release commit.
    For a final release it also checks `brew install vivaui/tap/viva` or the tap's
    commit, and that `viva version` prints the tag.
-   Then it commits the three "current release" references (`README.md` and the
-   two `getting-started` guides) and records the release in its ledger.
+   Then it commits the "current release" references (`README.md`,
+   `README.zh-CN.md` and the two `getting-started` guides) and records the
+   release in its ledger.
 
 A release is a straight sequence: the notes are written before the tag, and the
 tag never waits on a background notes task.
@@ -85,7 +86,7 @@ when someone asks for it.
 - The release notes' wording and their consistency with the committed tree. The
   workflow can only require a non-empty body; the agent compares the published
   body with the approved notes byte for byte afterwards.
-- The three "current release" references. They are a separate commit after the
+- The "current release" references. They are a separate commit after the
   release exists, so the published notes can be the only place that names a
   version for a few minutes.
 
@@ -117,5 +118,5 @@ git tag -d "v<version>"
 Once a downstream `go.mod` has pinned the version, do not delete the tag. Ship a
 patch release, explain the problem in its notes, and only mark the old release
 as a prerelease if it must stop resolving as latest. After either path, check
-that `releases/latest` and the three version references point at the release you
-meant to keep.
+that `releases/latest` and the version references point at the release you meant
+to keep.
