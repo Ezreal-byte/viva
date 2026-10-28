@@ -99,6 +99,8 @@ type State struct {
 	dialog      dialogState
 	slider      sliderDemoState
 	picker      *colorPickerDemoState
+	// chart keeps the hover and label caches of the chart examples.
+	chart *chartDemoState
 	// view keeps the memory the flex pages of this demo are laid out in (see page).
 	// It is a pointer so a State stays comparable.
 	view  *flex.View

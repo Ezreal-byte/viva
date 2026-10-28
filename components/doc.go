@@ -207,8 +207,13 @@
 //   - Calendar: `BeginCalendar` paints the month grid; selection state is
 //     caller-owned and `CalendarCommandForKey` maps the navigation keys.
 //   - Carousel: `BeginCarousel` paints a pager viewport for caller content.
-//   - Chart: `PaintChartContainer` paints series geometry and axes;
-//     `PaintChartLegend` and `PaintChartTooltip` paint the matching chrome.
+//   - Chart: `PaintChartContainer` paints the legend and returns the plot
+//     area; `PaintChartLegend` and `PaintChartTooltip` paint the matching
+//     chrome. `PaintAreaChart` and `PaintBarChart` paint a complete chart
+//     (axes, grid, series, hover mark and tooltip) from typed slices;
+//     `ChartState` holds the hovered point and the label caches,
+//     `ChartStepForKey` maps the arrow keys, and `ChartDownsample` reduces a
+//     long series to the points a plot can show.
 //   - Message: `Message` paints one chat row; `BeginMessageGroup` stacks the
 //     rows of consecutive messages; `BeginMessageScroller` paints the
 //     scrollback viewport with jump controls, and `MessageScrollState` holds

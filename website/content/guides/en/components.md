@@ -19,6 +19,25 @@ components.BeginButton(canvas, theme, hitSave, bounds).Outline("Save")
 
 A theme is a value, `ui.LightTheme()` or `ui.DarkTheme()`. Switching appearance means painting with the other one.
 
+## Charts
+
+`PaintAreaChart` and `PaintBarChart` draw a complete chart (legend, axes, grid, series, hover mark and tooltip) from typed slices. There is no map of fields and no reflection: `Values[k]` holds the Y values of `Series[k]`, one per point, and `NaN` marks a gap.
+
+```go
+chart := components.AreaChart{
+    Series: series,                       // label and color, shared with the legend and tooltip
+    Values: [][]float32{desktop, mobile}, // one slice per series
+    Curve:  components.ChartCurveMonotone,
+    XAxis:  components.ChartAxis{Format: formatMonth},
+    Grid:   components.ChartGridHorizontal,
+}
+plot := components.PaintAreaChart(canvas, theme, bounds, chartID, chart, &state)
+```
+
+The chart owns no input. Keep a `components.ChartState` next to your data, and feed it from your own events: `state.Hover(plot.IndexAt(event.X))` on a pointer move, `state.Clear()` on exit, `components.ChartStepForKey` for the arrow keys. A steady chart allocates nothing per paint once its state has warmed up, and a chart that nobody touches schedules no frame.
+
+Two limits are deliberate. A chart draws every point it is given, so a very long series should go through `components.ChartDownsample` once when the data changes, not on every paint. And stacked series must not be negative: a negative value stacks as zero.
+
 ## Owning a copy
 
 If you want to change a component, copy it. `viva list` names the recipes the installer can copy, and `viva add` writes them into your project as ordinary Go files:

@@ -14,6 +14,9 @@ var groupAComponents = []Component{
 	cardComponent,
 	carouselComponent,
 	chartComponent,
+	chartAreaComponent,
+	chartBarComponent,
+	chartDownsampleComponent,
 	collapsibleComponent,
 	comboboxComponent,
 }

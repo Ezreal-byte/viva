@@ -19,6 +19,25 @@ components.BeginButton(canvas, theme, hitSave, bounds).Outline("Save")
 
 主题是一个值，`ui.LightTheme()` 或 `ui.DarkTheme()`。切换外观就是改用另一个主题绘制。
 
+## 图表
+
+`PaintAreaChart` 和 `PaintBarChart` 用类型化切片绘制完整的图表：图例、坐标轴、网格、序列、悬停标记和提示框。没有字段映射，也没有反射：`Values[k]` 是 `Series[k]` 的 Y 值，每个点一个，`NaN` 表示断点。
+
+```go
+chart := components.AreaChart{
+    Series: series,                       // 标签和颜色，图例与提示框共用
+    Values: [][]float32{desktop, mobile}, // 每个序列一个切片
+    Curve:  components.ChartCurveMonotone,
+    XAxis:  components.ChartAxis{Format: formatMonth},
+    Grid:   components.ChartGridHorizontal,
+}
+plot := components.PaintAreaChart(canvas, theme, bounds, chartID, chart, &state)
+```
+
+图表自己不处理输入。把 `components.ChartState` 和数据放在一起，由你自己的事件驱动它：指针移动时 `state.Hover(plot.IndexAt(event.X))`，移出时 `state.Clear()`，方向键用 `components.ChartStepForKey`。状态预热之后，稳定的图表每次绘制不分配内存；没人操作的图表也不会调度帧。
+
+有两条限制是有意为之。图表会画出给它的每一个点，所以很长的序列应当在数据变化时用 `components.ChartDownsample` 降采样一次，而不是每次绘制都做。堆叠的序列不能为负：负值按零堆叠。
+
 ## 拥有一份副本
 
 想修改组件时，就复制它。`viva list` 列出安装器能复制的配方，`viva add` 把它们作为普通 Go 文件写进你的项目：

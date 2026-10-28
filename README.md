@@ -119,8 +119,9 @@ WebView and no bundled rendering runtime.
 - Event-driven rendering with no idle frame loop.
 - Theme tokens and a statically typed, source-owned translation of the pinned
   shadcn component catalog, including forms, overlays, menus, calendars,
-  scrolling recipes, feedback surfaces, and chart chrome without a browser
-  runtime, reflection, or a runtime style parser.
+  scrolling recipes, feedback surfaces, and area, line and bar charts drawn
+  from typed slices without a browser runtime, reflection, or a runtime style
+  parser.
 - A shared native/WASM component browser: a catalog of every component grouped
   by category, and a page per component that runs all of its examples side by
   side, each live (clicks, hover, keyboard, drag, wheel and native text

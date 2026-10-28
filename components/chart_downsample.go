@@ -1,0 +1,85 @@
+package components
+
+import "math"
+
+// ChartDownsample reduces the series (x, y) to at most buckets points with the
+// largest-triangle-three-buckets rule, which keeps the visual shape of a long
+// series: the first and last points stay, and each bucket in between contributes
+// the point that spans the largest triangle with its neighbors. It appends the
+// chosen indexes to dst and returns it, so a caller that keeps dst and the
+// reduced series between data changes pays for the reduction once, not per paint.
+//
+// x may be nil for evenly spaced points. y holds NaN for a gap; a bucket that is
+// all gaps contributes none. Series with no more points than buckets (or with
+// buckets < 3) come back whole.
+//
+// Nothing in the chart paints through this implicitly: a chart draws what it is
+// given, so the cost of drawing a 100,000 point history is the caller's choice.
+func ChartDownsample(dst []int, x, y []float32, buckets int) []int {
+	count := len(y)
+	if x != nil && len(x) < count {
+		count = len(x)
+	}
+	dst = dst[:0]
+	if count == 0 {
+		return dst
+	}
+	if buckets < 3 || count <= buckets {
+		for index := 0; index < count; index++ {
+			dst = append(dst, index)
+		}
+		return dst
+	}
+	at := func(index int) float64 {
+		if x == nil {
+			return float64(index)
+		}
+		return float64(x[index])
+	}
+	valid := func(index int) bool { return !math.IsNaN(float64(y[index])) && !math.IsInf(float64(y[index]), 0) }
+
+	dst = append(dst, 0)
+	every := float64(count-2) / float64(buckets-2)
+	previous := 0
+	for bucket := 0; bucket < buckets-2; bucket++ {
+		start := int(float64(bucket)*every) + 1
+		end := min(int(float64(bucket+1)*every)+1, count-1)
+		// The third vertex is the mean of the next bucket (the last point for
+		// the final one).
+		nextStart := end
+		nextEnd := min(int(float64(bucket+2)*every)+1, count)
+		var avgX, avgY float64
+		var n int
+		for index := nextStart; index < nextEnd; index++ {
+			if valid(index) {
+				avgX += at(index)
+				avgY += float64(y[index])
+				n++
+			}
+		}
+		if n == 0 {
+			avgX, avgY = at(count-1), float64(y[count-1])
+		} else {
+			avgX, avgY = avgX/float64(n), avgY/float64(n)
+		}
+		ax, ay := at(previous), float64(y[previous])
+		if !valid(previous) {
+			ay = avgY
+		}
+		best, bestArea := -1, -1.0
+		for index := start; index < end; index++ {
+			if !valid(index) {
+				continue
+			}
+			area := math.Abs((ax-avgX)*(float64(y[index])-ay) - (ax-at(index))*(avgY-ay))
+			if area > bestArea {
+				best, bestArea = index, area
+			}
+		}
+		if best >= 0 {
+			dst = append(dst, best)
+			previous = best
+		}
+	}
+	return append(dst, count-1)
+}

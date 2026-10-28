@@ -157,12 +157,12 @@ func PaintChartLegend(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, series 
 	return painted
 }
 
-// PaintChartTooltip paints the official tooltip-content shell at origin.X/Y.
-// It reads immutable payload rows and series metadata and performs no value
-// formatting, lifecycle management, hit testing, or data-geometry rendering.
-func PaintChartTooltip(canvas *ui.Canvas, theme ui.Theme, origin ui.Rect, series []ChartSeries, rows []ChartTooltipRow, options ChartTooltipOptions) ui.Rect {
+// ChartTooltipSize measures the tooltip PaintChartTooltip would paint for the
+// same arguments without painting it, so a chart can place it beside a cursor and
+// flip it away from an edge before drawing. It is the zero Size when no row shows.
+func ChartTooltipSize(canvas *ui.Canvas, theme ui.Theme, series []ChartSeries, rows []ChartTooltipRow, options ChartTooltipOptions) ui.Size {
 	if canvas == nil || chartVisibleRows(rows) == 0 {
-		return ui.Rect{}
+		return ui.Size{}
 	}
 	scale := theme.Metrics.ControlHeight / 32
 	fontSize := theme.Metrics.FontSizeS
@@ -200,13 +200,29 @@ func PaintChartTooltip(canvas *ui.Canvas, theme ui.Theme, origin ui.Rect, series
 	visibleRows := chartVisibleRows(rows)
 	height := paddingY*2 + float32(visibleRows)*rowHeight + float32(visibleRows-1)*gap
 	if !options.HideLabel && options.Label != "" {
-		if nestedLabel {
-			height += rowHeight + gap
-		} else {
-			height += rowHeight + gap
-		}
+		height += rowHeight + gap
 	}
-	bounds := ui.Rect{X: origin.X, Y: origin.Y, Width: width, Height: height}
+	return ui.Size{Width: width, Height: height}
+}
+
+// PaintChartTooltip paints the official tooltip-content shell at origin.X/Y.
+// It reads immutable payload rows and series metadata and performs no value
+// formatting, lifecycle management, hit testing, or data-geometry rendering.
+func PaintChartTooltip(canvas *ui.Canvas, theme ui.Theme, origin ui.Rect, series []ChartSeries, rows []ChartTooltipRow, options ChartTooltipOptions) ui.Rect {
+	if canvas == nil || chartVisibleRows(rows) == 0 {
+		return ui.Rect{}
+	}
+	scale := theme.Metrics.ControlHeight / 32
+	fontSize := theme.Metrics.FontSizeS
+	paddingX := 10 * scale
+	paddingY := 6 * scale
+	rowHeight := 16 * scale
+	gap := 6 * scale
+	nestedLabel := chartVisibleRows(rows) == 1 && options.Indicator != ChartTooltipDot && !options.HideLabel && options.Label != ""
+
+	size := ChartTooltipSize(canvas, theme, series, rows, options)
+	contentWidth := size.Width - paddingX*2
+	bounds := ui.Rect{X: origin.X, Y: origin.Y, Width: size.Width, Height: size.Height}
 
 	canvas.PushLayer(options.Layer)
 	border := theme.Border
