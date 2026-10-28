@@ -139,3 +139,59 @@ func BenchmarkReorderListDrag(b *testing.B) {
 		state.Pointer(ui.PointerEvent{Kind: ui.PointerUp, Captured: true, X: 24, Y: 138})
 	}
 }
+
+func TestReorderListReportsRowBoundsAndTheScrollThatRevealsThem(t *testing.T) {
+	var state ReorderListState
+	var canvas ui.Canvas
+	viewport := ui.Rect{X: 10, Y: 20, Width: 300, Height: 90}
+	// The caller has scrolled the content up by 100: the first rows sit above the
+	// viewport and the last ones below it.
+	list := BeginReorderList(&canvas, ui.LightTheme(), ui.Rect{X: 10, Y: -80, Width: 300, Height: 480}, &state).Viewport(viewport)
+	for i := 0; i < 10; i++ {
+		list.Row(ui.Item(i+1), "Move", false)
+	}
+	list.End()
+
+	if _, ok := state.RowBounds(ui.Item(99)); ok {
+		t.Fatal("RowBounds reported a row that was not declared")
+	}
+	first, ok := state.RowBounds(ui.Item(1))
+	if !ok || first.Y != -80 || first.Height != 44 {
+		t.Fatalf("first row bounds = %+v, %v", first, ok)
+	}
+	if delta := state.RevealScroll(0); delta != first.Y-viewport.Y {
+		t.Fatalf("row above the viewport reveals by %v, want %v", delta, first.Y-viewport.Y)
+	}
+	if delta := state.RevealScroll(3); delta != 0 {
+		t.Fatalf("a row inside the viewport reveals by %v, want 0", delta)
+	}
+	last, _ := state.RowBounds(ui.Item(10))
+	if delta, want := state.RevealScroll(9), last.Y+last.Height-(viewport.Y+viewport.Height); delta != want {
+		t.Fatalf("row below the viewport reveals by %v, want %v", delta, want)
+	}
+}
+
+func TestReorderListKeyboardMoveNamesTheRowItsScrollMustReveal(t *testing.T) {
+	var state ReorderListState
+	var canvas ui.Canvas
+	viewport := ui.Rect{X: 10, Y: 20, Width: 300, Height: 90}
+	list := BeginReorderList(&canvas, ui.LightTheme(), ui.Rect{X: 10, Y: -80, Width: 300, Height: 480}, &state).Viewport(viewport)
+	for i := 0; i < 10; i++ {
+		list.Row(ui.Item(i+1), "Move", false)
+	}
+	list.End()
+
+	move, result := state.Key(ui.KeyEvent{Target: ui.Item(2), Key: ui.KeyEnd})
+	if !move.Valid() || move.From != 1 || move.To != 9 || result.Focus != ui.Item(2) || !result.FocusVisible {
+		t.Fatalf("keyboard move = %+v, result = %+v", move, result)
+	}
+	delta := state.RevealScroll(move.To)
+	if delta <= 0 {
+		t.Fatalf("reveal delta = %v, want the slot the move landed on scrolled into view", delta)
+	}
+	slot := state.rows[move.To].bounds
+	revealed := ui.Rect{Y: slot.Y - delta, Height: slot.Height}
+	if revealed.Y < viewport.Y || revealed.Y+revealed.Height > viewport.Y+viewport.Height {
+		t.Fatalf("row %+v is still outside the viewport %+v after revealing", revealed, viewport)
+	}
+}

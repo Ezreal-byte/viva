@@ -3,7 +3,10 @@ package {{PACKAGE}}
 import "github.com/vivaui/viva/ui"
 
 // ReorderMove describes one completed move in the caller's list. ID identifies
-// the item independently of its position. Apply it once, then repaint the list.
+// the item independently of its position. From and To index the rows declared
+// in the paint that produced the move, in the order Row was called, so a caller
+// declares every item, in order, on every paint. Apply the move once, then
+// repaint the list.
 type ReorderMove struct {
 	ID       ui.ID
 	From, To int
@@ -16,11 +19,19 @@ func (move ReorderMove) Valid() bool {
 type reorderHandle struct {
 	id       ui.ID
 	disabled bool
+	// bounds is where the row was painted in the last pass, translated by
+	// whatever scroll the caller applied. RowBounds hands it back.
+	bounds ui.Rect
 }
 
 // ReorderListState owns pointer geometry, never the application's data. Pointer
 // emits a move only on a valid drop; Key supports arrows/Home/End on a handle.
 // Escape cancels a held drag. Rows retain their stable IDs after a move.
+//
+// Scrolling stays caller-owned: Bounds is wherever the caller placed the list,
+// and Viewport clips it. A move focuses the row it lands on, which can be
+// outside Viewport in a scrolled list; the canvas clips such a row's hit away,
+// so add RevealScroll(move.To) to the caller's offset when applying the move.
 type ReorderListState struct {
 	rows              []reorderHandle
 	bounds, viewport  ui.Rect
@@ -35,6 +46,38 @@ func (state *ReorderListState) Dragging() bool { return state.dragging }
 func (state *ReorderListState) Cancel() {
 	state.active = ui.ID{}
 	state.pressed, state.dragging = false, false
+}
+
+// RowBounds reports where a declared row was painted in the last pass, and
+// false when that ID was not declared. It is the geometry a caller scrolls by
+// to keep the row a keyboard move focused in view.
+func (state *ReorderListState) RowBounds(id ui.ID) (ui.Rect, bool) {
+	for index := range state.rows {
+		if state.rows[index].id == id {
+			return state.rows[index].bounds, true
+		}
+	}
+	return ui.Rect{}, false
+}
+
+// RevealScroll is the change to add to the caller's scroll offset so the slot a
+// keyboard or pointer move landed on comes back inside Viewport: pass the
+// move's To. Rows are evenly spaced, so that slot keeps its geometry once the
+// item moves into it. A row above the viewport yields a negative delta and a
+// row below a positive one; it is zero when the slot is already visible, out of
+// range, or the list was given no viewport.
+func (state *ReorderListState) RevealScroll(slot int) float32 {
+	if slot < 0 || slot >= len(state.rows) || state.viewport.Height <= 0 {
+		return 0
+	}
+	bounds := state.rows[slot].bounds
+	if bounds.Y < state.viewport.Y {
+		return bounds.Y - state.viewport.Y
+	}
+	if bottom := bounds.Y + bounds.Height; bottom > state.viewport.Y+state.viewport.Height {
+		return bottom - (state.viewport.Y + state.viewport.Height)
+	}
+	return 0
 }
 
 func (state *ReorderListState) target(y float32) int {
@@ -147,11 +190,14 @@ func (list ReorderList) RowHeight(height float32) ReorderList {
 	return list
 }
 
+// Row declares one row in display order and paints it. Declare every item, in
+// order, on every paint: ReorderMove.From and To index this declaration, so a
+// partial or virtualized paint would move the wrong item.
 func (list *ReorderList) Row(id ui.ID, label string, disabled bool) ReorderRowLayout {
 	disabled = disabled || id.IsZero()
 	bounds := ui.Rect{X: list.bounds.X, Y: list.bounds.Y + float32(list.index)*(list.rowHeight+list.gap), Width: list.bounds.Width, Height: list.rowHeight}
 	list.index++
-	list.state.rows = append(list.state.rows, reorderHandle{id: id, disabled: disabled})
+	list.state.rows = append(list.state.rows, reorderHandle{id: id, disabled: disabled, bounds: bounds})
 	fill, edge := list.theme.Background, list.theme.Border
 	if list.state.active == id && list.state.pressed {
 		fill, edge = list.theme.Muted, list.theme.Primary
@@ -162,7 +208,9 @@ func (list *ReorderList) Row(id ui.ID, label string, disabled bool) ReorderRowLa
 		list.canvas.RoundedBorder(handle, list.theme.Metrics.RadiusControl, 1, list.theme.Ring, ui.Color{})
 	}
 	if !id.IsZero() {
-		list.canvas.HitWithOptions(id, handle, label, ui.HitOptions{Role: ui.RoleButton, Cursor: ui.PointerCursorHand, Disabled: disabled, PosInSet: int32(list.index)})
+		// PosInSet is left out on purpose: the set size is only known after the
+		// last Row, and half of that pair describes a position with no set.
+		list.canvas.HitWithOptions(id, handle, label, ui.HitOptions{Role: ui.RoleButton, Cursor: ui.PointerCursorHand, Disabled: disabled})
 	}
 	color := list.theme.MutedForeground
 	if disabled {
