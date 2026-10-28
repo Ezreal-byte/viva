@@ -101,6 +101,9 @@
 //   - Input group: `PaintInputGroup` paints an input with leading and
 //     trailing text, button, key-cap, or icon addons.
 //   - Select: `BeginSelect` paints the trigger and filtered list popup.
+//   - Single select: `PaintSingleSelect` combines one selected value, a native
+//     search editor and a filtered popup. `SingleSelectState` supports optional
+//     item creation, clearing, keyboard navigation and IME-safe confirmation.
 //   - Native select: `PaintNativeSelect` paints the platform-styled control
 //     and `PaintNativeSelectSemantics` declares its accessibility tree;
 //     `NativeSelectCommandForKey` maps key events.
