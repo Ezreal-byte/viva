@@ -58,6 +58,17 @@ func (s *SingleSelectState) SetValidateCreate(validate func(string) bool) {
 	s.revision++
 }
 
+// Dismiss closes the list and drops the search text without changing the
+// value. Call it when focus or a press leaves the field.
+func (s *SingleSelectState) Dismiss() {
+	if !s.Open && s.Query.String() == "" {
+		return
+	}
+	s.Query = text.Editor{}
+	s.Open = false
+	s.Active = 0
+}
+
 func (s *SingleSelectState) equal(a, b string) bool {
 	return a == b || s.MatchCaseInsensitive && strings.EqualFold(a, b)
 }
@@ -209,13 +220,14 @@ func (s *SingleSelectState) Key(event ui.KeyEvent) ui.EventResult {
 		return ui.EventResult{Handled: true, Repaint: true}
 	case ui.KeyEscape:
 		if s.Open || s.Query.String() != "" {
-			s.Query = text.Editor{}
-			s.Open = false
+			s.Dismiss()
 			return ui.EventResult{Handled: true, Repaint: true}
 		}
 	case ui.KeyTab:
 		if s.Open {
-			s.Open = false
+			// Leaving the field drops the search text: a closed field paints the
+			// selected label, never the query it did not commit.
+			s.Dismiss()
 			return ui.EventResult{Handled: true, Repaint: true, ContinueTraversal: true}
 		}
 	case ui.KeyBackspace:
@@ -236,6 +248,8 @@ func (s *SingleSelectState) Pointer(event ui.PointerEvent) ui.EventResult {
 	return ui.EventResult{Handled: true, Repaint: s.scroll.Drag(event)}
 }
 
+// SingleSelectOptions names the control's hit IDs, its popup layer and the
+// strings the caller supplies for its labels and create row.
 type SingleSelectOptions struct {
 	InputID, TriggerID, ClearID, DismissID, Scope, ScrollID  ui.ID
 	OptionIDs                                                ui.Scope
@@ -246,6 +260,8 @@ type SingleSelectOptions struct {
 	MaxRows                                                  int
 }
 
+// SingleSelectLayout is where the control, its native input and its popup were
+// painted, for callers that route text input or place overlays.
 type SingleSelectLayout struct{ Bounds, Input, Popup ui.Rect }
 
 // PaintSingleSelect shares text-entry and menu primitives with Combobox and
@@ -317,7 +333,7 @@ func PaintSingleSelect(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, s *Sin
 	if accessibleValue == "" {
 		accessibleValue = s.label(s.value)
 	}
-	canvas.HitWithOptions(o.InputID, layout.Input, o.Label, ui.HitOptions{Role: ui.RoleCombobox, Value: accessibleValue, Expanded: open, Disabled: o.Disabled, Cursor: ui.PointerCursorText, TextBounds: layout.Input, TextSize: theme.Metrics.FontSizeM, TextColor: theme.Foreground})
+	canvas.HitWithOptions(o.InputID, layout.Input, o.Label, ui.HitOptions{Role: ui.RoleCombobox, Value: accessibleValue, Expanded: open, Disabled: o.Disabled, Cursor: ui.PointerCursorText, TextBounds: layout.Input, TextSize: theme.Metrics.FontSizeM, TextColor: theme.Foreground, NavigationKeys: true})
 	paintChevron(canvas, &chevronDownIcon, trigger, iconColor)
 	if s.focusInput {
 		canvas.RequestFocus(o.InputID)
@@ -332,13 +348,18 @@ func PaintSingleSelect(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, s *Sin
 	}
 	height := float32(max(1, min(len(choices), rows))*32 + 8)
 	layout.Popup = ui.Rect{X: bounds.X, Y: bounds.Y + bounds.Height + 6, Width: bounds.Width, Height: height}
-	if bottom := o.Viewport.Y + o.Viewport.Height - 8; o.Viewport.Height > 0 && layout.Popup.Y+height > bottom {
-		if above := bounds.Y - o.Viewport.Y - 14; above > bottom-layout.Popup.Y {
-			layout.Popup.Height = min(height, max(above, 40))
-			layout.Popup.Y = bounds.Y - layout.Popup.Height - 6
-		} else {
-			layout.Popup.Height = max(40, bottom-layout.Popup.Y)
+	if o.Viewport.Height > 0 {
+		top, bottom := o.Viewport.Y+1, o.Viewport.Y+o.Viewport.Height-1
+		if layout.Popup.Y+layout.Popup.Height > bottom {
+			// Prefer the room above the field, but only when it holds a usable
+			// row; otherwise the list scrolls inside what is left below.
+			if above := bounds.Y - 6 - top; above >= min(height, 40) {
+				layout.Popup.Height = min(height, above)
+				layout.Popup.Y = bounds.Y - layout.Popup.Height - 6
+			}
 		}
+		layout.Popup.Y = max(top, min(layout.Popup.Y, bottom-1))
+		layout.Popup.Height = max(1, min(layout.Popup.Height, bottom-layout.Popup.Y))
 	}
 	canvas.Block(layout.Popup)
 	canvas.Container(layout.Popup, ui.RoleListBox, o.Label)

@@ -75,7 +75,7 @@ func (state *State) paintSingleSelect(canvas *ui.Canvas, theme ui.Theme, size ui
 	case canvas.Clicked(singleSelectClear):
 		state.singleSelect.Clear()
 	case canvas.Clicked(singleSelectDismiss):
-		state.singleSelect.Open = false
+		state.singleSelect.Dismiss()
 	default:
 		if i, ok := canvas.ClickedIn(singleSelectOptions); ok {
 			state.singleSelect.Choose(i)

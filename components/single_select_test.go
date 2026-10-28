@@ -177,3 +177,48 @@ func TestSingleSelectKeepsItsNativeInputAndPopupInBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestSingleSelectDismissDropsTheQueryAndKeepsTheValue(t *testing.T) {
+	s := singleSelectFixture()
+	s.SetValue("dev")
+	s.Open = true
+	s.Query.Insert("cust")
+	s.Key(ui.KeyEvent{Key: ui.KeyTab})
+	if s.Open || s.Query.String() != "" || s.Value() != "dev" {
+		t.Fatalf("Tab left open=%v query=%q value=%q", s.Open, s.Query.String(), s.Value())
+	}
+	s.Open = true
+	s.Query.Insert("cust")
+	s.Dismiss()
+	if s.Open || s.Query.String() != "" || s.Value() != "dev" {
+		t.Fatalf("Dismiss left open=%v query=%q value=%q", s.Open, s.Query.String(), s.Value())
+	}
+}
+
+func TestSingleSelectPopupStaysInsideAShortViewport(t *testing.T) {
+	var tree ui.Tree
+	f := tree.Feature("single-select-short-viewport")
+	o := SingleSelectOptions{InputID: tree.ID(f, "input"), TriggerID: tree.ID(f, "trigger"), ClearID: tree.ID(f, "clear"), DismissID: tree.ID(f, "dismiss"), Scope: tree.ID(f, "scope"), OptionIDs: tree.Sub(f, tree.Name("option")), Label: "Group", Layer: 4}
+	for _, test := range []struct {
+		name     string
+		viewport ui.Rect
+		field    ui.Rect
+	}{
+		{"below", ui.Rect{Width: 800, Height: 100}, ui.Rect{X: 20, Y: 40, Width: 240}},
+		{"near the bottom", ui.Rect{Width: 800, Height: 90}, ui.Rect{X: 20, Y: 20, Width: 240}},
+		{"tiny", ui.Rect{Width: 800, Height: 24}, ui.Rect{X: 20, Y: 2, Width: 240}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := singleSelectFixture()
+			s.SetValue("dev")
+			s.Open = true
+			var canvas ui.Canvas
+			o.Viewport = test.viewport
+			layout := PaintSingleSelect(&canvas, ui.DarkTheme(), test.field, s, o)
+			if layout.Popup.Y < test.viewport.Y || layout.Popup.Height < 1 ||
+				layout.Popup.Y+layout.Popup.Height > test.viewport.Y+test.viewport.Height {
+				t.Fatalf("popup %+v escaped viewport %+v", layout.Popup, test.viewport)
+			}
+		})
+	}
+}
