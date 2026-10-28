@@ -165,6 +165,9 @@
   .search-empty { padding: 10px; font-size: 13px; }
   .breadcrumb { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; font-size: 14px; color: var(--viva-muted); }
   .page-summary { margin-top: 12px; font-size: 17px; }
+  /* The guides index states what the section covers; it is prose, not a second
+     summary, so it sits one step quieter than the page summary. */
+  .docs-intro { margin-top: 8px; font-size: 15px; color: var(--viva-muted); }
   .not-found { max-width: 760px; margin: 0 auto; padding: 88px 32px 112px; }
   .not-found-code { margin: 0; font-size: 12px; letter-spacing: .14em; color: var(--viva-muted); }
   .not-found h1 { margin-top: 10px; }

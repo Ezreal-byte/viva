@@ -32,9 +32,23 @@ const headings = skillName
   : guideHeadings;
 const alternates = Object.fromEntries(locales.map(language => [language, docsPath(language, Astro.params.slug)])) as Record<Locale, string>;
 const navigation = guideNavigation(guides, locale, entry.id);
+// The guide describes itself. There is no publication date to state yet, so it
+// claims none rather than inventing one.
+const origin = (Astro.site?.href ?? 'https://vivaui.dev/').replace(/\/$/, '');
+const article = {
+  '@type': 'TechArticle',
+  '@id': `${origin}${Astro.url.pathname}#article`,
+  headline: entry.data.title,
+  description: entry.data.summary,
+  url: `${origin}${Astro.url.pathname}`,
+  inLanguage: locale === 'zh' ? 'zh-CN' : 'en',
+  isPartOf: { '@id': `${origin}/#website` },
+  author: { '@id': `${origin}/#organization` },
+  publisher: { '@id': `${origin}/#organization` },
+};
 ---
 
-<DocPageLayout {locale} title={entry.data.title} summary={entry.data.summary} section="docs" {alternates} {navigation} {headings}>
+<DocPageLayout {locale} title={entry.data.title} summary={entry.data.summary} section="docs" {alternates} {navigation} {headings} schema={[article]}>
   <div class="page-heading"><h1>{entry.data.title}</h1><p class="page-summary">{entry.data.summary}</p></div>
   <div class="markdown"><Content />
   {skillName && skillHtml && <section class="skill-text" aria-labelledby="skill-text">
