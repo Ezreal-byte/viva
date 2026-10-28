@@ -4411,6 +4411,7 @@ static void viva_set_secure_event_input(BOOL on) {
 }
 
 - (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     if ([_window.contentView isKindOfClass:[VivaMetalView class]]) {
         [(VivaMetalView *)_window.contentView shutdownTextInput];
     }
@@ -4451,6 +4452,8 @@ static void viva_set_secure_event_input(BOOL on) {
                                                  defer:NO];
     _window.title = _title;
     _window.delegate = self;
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(screenParametersChanged:)
+                                                 name:NSApplicationDidChangeScreenParametersNotification object:nil];
     _window.releasedWhenClosed = NO;
     if (_windowMode == VIVA_WINDOW_PANEL) {
         _window.minSize = NSMakeSize(1, 1);
@@ -4764,6 +4767,13 @@ static void viva_set_secure_event_input(BOOL on) {
 }
 
 - (void)windowDidChangeScreenProfile:(NSNotification *)notification {
+    (void)notification;
+    [self updateMinimumSize];
+}
+
+/* A resolution, arrangement, Dock or menu-bar change does not change the
+ * window's screen, so windowDidChangeScreen does not fire for it. */
+- (void)screenParametersChanged:(NSNotification *)notification {
     (void)notification;
     [self updateMinimumSize];
 }
