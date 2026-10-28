@@ -8,7 +8,8 @@ import (
 )
 
 func TestMinimumTrackingPreservesNativeMaximizeAndUnsetAxis(t *testing.T) {
-	state := windowState{config: platform.Config{WindowMode: platform.WindowCustomTitlebar, MinWidth: 300}, scale: 1.25}
+	desktop, _, _ := user.NewProc("GetDesktopWindow").Call()
+	state := windowState{window: desktop, config: platform.Config{WindowMode: platform.WindowCustomTitlebar, MinWidth: 300}, scale: 1.25}
 	info := minMaxInfo{MaxSize: point{1920, 1080}, MaxPosition: point{-8, -8}, MinTrack: point{120, 32}, MaxTrack: point{4096, 4096}}
 	before := info
 	state.constrainTracking(&info)
@@ -21,6 +22,17 @@ func TestMinimumTrackingPreservesNativeMaximizeAndUnsetAxis(t *testing.T) {
 	}
 	if size := unsafe.Sizeof(minMaxInfo{}); size != 40 {
 		t.Fatalf("MINMAXINFO ABI size = %d, want 40", size)
+	}
+
+	// A titled window adds its non-client area to the content minimum; with a
+	// real desktop handle the work-area query and the decoration call run too.
+	if desktop != 0 {
+		titled := windowState{window: desktop, config: platform.Config{WindowMode: platform.WindowTitled, MinWidth: 300}, scale: 1.25}
+		tracked := minMaxInfo{MinTrack: point{120, 32}}
+		titled.constrainTracking(&tracked)
+		if tracked.MinTrack.X <= 375 || tracked.MinTrack.Y != 32 {
+			t.Fatalf("titled minimum tracking size = %+v", tracked.MinTrack)
+		}
 	}
 }
 
