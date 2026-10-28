@@ -126,6 +126,9 @@
 //     ratio inside bounds.
 //   - Resizable: `BeginResizable` paints a two-panel split with a draggable
 //     handle.
+//   - Reorder list: `BeginReorderList` reserves independent drag handles and
+//     content slots. `ReorderListState` returns completed pointer/keyboard moves
+//     while the application keeps ownership of the ordered data.
 //   - Tree: `BeginTree` paints caller-flattened hierarchical rows with stable
 //     disclosure and selection semantics while leaving content application-owned.
 //   - Scroll area: `BeginScrollArea` paints a clipped viewport and scrollbar

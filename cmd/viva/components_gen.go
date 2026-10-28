@@ -60,6 +60,7 @@ var componentFiles = map[string]string{
 	"progress":          "progress.go.txt",
 	"questionnaire":     "questionnaire.go.txt",
 	"radio-group":       "radio_group.go.txt",
+	"reorder-list":      "reorder_list.go.txt",
 	"resizable":         "resizable.go.txt",
 	"scroll-area":       "scroll_area.go.txt",
 	"segmented-control": "segmented_control.go.txt",
