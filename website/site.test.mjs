@@ -275,6 +275,21 @@ test('the home page defines the product in its body text, not only in metadata',
   assert.ok(readPage('zh/').includes('是面向原生桌面应用的 Go 框架'), 'the Chinese lead never defines Viva');
 });
 
+test('every page opts out of Cloudflare email obfuscation around its body', () => {
+  // The zone setting rewrites anything that looks like an address, and the
+  // install command `go get github.com/vivaui/viva@v0.1.3` matches. The
+  // documented marker keeps the setting on for the rest of the site.
+  for (const locale of ['zh', 'en']) {
+    for (const path of [`${locale}/`, `${locale}/docs/getting-started/`, `${locale}/api/`]) {
+      const html = readPage(path);
+      const start = html.indexOf('<!--email_off-->');
+      const end = html.indexOf('<!--/email_off-->');
+      assert.ok(start > 0 && end > start, `${path}: no email_off marker around the body`);
+    }
+  }
+  assert.ok(readPage('en/docs/getting-started/').includes('viva@v0.1.3'), 'the install command lost its version');
+});
+
 test('the crawler files describe the site that was built', () => {
   const sitemap = readFileSync(new URL('sitemap.xml', output), 'utf8');
   for (const locale of ['zh', 'en']) {

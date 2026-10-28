@@ -156,13 +156,16 @@ Open Graph and Twitter card, and a schema.org graph (`Organization` and
 and `BreadcrumbList` in the guides). `site.test.mjs` checks all of it against
 the built output, so a new route that forgets a canonical fails `test:site`.
 
-Two settings live in the Cloudflare dashboard rather than in this repository:
+Email Address Obfuscation (Scrape Shield) rewrites anything that looks like an
+address, and it served `go get github.com/vivaui/viva@v0.1.3` as
+`github.com/vivaui/[email protected]` — what every reader copies and every crawler
+reads. `BaseLayout.astro` wraps `<body>` in Cloudflare's documented
+`<!--email_off-->` marker, which switches the rewrite off for these pages while
+the zone setting stays on. Keep the marker: without it, turning the setting back
+on silently breaks the install command again.
 
-1. **Turn Email Address Obfuscation off** (Scrape Shield). It rewrites anything
-   that looks like an address, and `go get github.com/vivaui/viva@v0.1.3` in the
-   getting-started guide was being served as `github.com/vivaui/[email protected]`,
-   which every reader copies verbatim and every crawler reads as the wrong
-   module version.
-2. **Keep the managed `robots.txt` policy in sync** with the built file. If it
+One setting lives in the Cloudflare dashboard rather than in this repository:
+
+1. **Keep the managed `robots.txt` policy in sync** with the built file. If it
    is enabled, its content-signal block replaces the generated directives.
 

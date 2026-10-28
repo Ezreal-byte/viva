@@ -61,6 +61,11 @@ const graph = [
   ...schema,
 ];
 const structuredData = JSON.stringify({ '@context': 'https://schema.org', '@graph': graph }).replace(/</g, '\\u003c');
+// Cloudflare's Email Address Obfuscation rewrites anything that looks like an
+// address, and `go get github.com/vivaui/viva@v0.1.3` was being served to
+// readers and crawlers as `github.com/vivaui/[email protected]`. The documented
+// <!--email_off--> marker switches it off for this document while the zone
+// setting stays on, and it survives someone toggling that setting again.
 ---
 
 <!doctype html>
@@ -110,6 +115,7 @@ const structuredData = JSON.stringify({ '@context': 'https://schema.org', '@grap
     </script>
   </head>
   <body>
+    <Fragment set:html="<!--email_off-->" />
     <a class="skip-link" href="#main-content">{text.skip}</a>
     <header class="site-header">
       <div class="header-inner">
@@ -150,5 +156,6 @@ const structuredData = JSON.stringify({ '@context': 'https://schema.org', '@grap
         <span>{text.footerBuilt}</span>
       </div>
     </footer>
+    <Fragment set:html="<!--/email_off-->" />
   </body>
 </html>
