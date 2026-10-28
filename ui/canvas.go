@@ -534,6 +534,9 @@ type Canvas struct {
 	pathPoints    []Point
 	contourEnds   []int32
 	contourClosed []bool
+	pathBuilder   PathBuilder
+	// gradientSource holds the flat triangles a path gradient recolors.
+	gradientSource []Triangle
 	// path and triangulation scratch survives Reset: reused every paint.
 	strokeSideA     []Point
 	strokeSideB     []Point
@@ -731,6 +734,8 @@ func (canvas *Canvas) Trim() {
 	canvas.pathPoints = trimCapacity(canvas.pathPoints)
 	canvas.contourEnds = trimCapacity(canvas.contourEnds)
 	canvas.contourClosed = trimCapacity(canvas.contourClosed)
+	canvas.pathBuilder.commands = trimCapacity(canvas.pathBuilder.commands)
+	canvas.gradientSource = trimCapacity(canvas.gradientSource)
 	canvas.strokeSideA = trimCapacity(canvas.strokeSideA)
 	canvas.strokeSideB = trimCapacity(canvas.strokeSideB)
 	canvas.strokeRing = trimCapacity(canvas.strokeRing)

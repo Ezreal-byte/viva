@@ -5,9 +5,9 @@ package ui
 // by casting a ray from the hole's leftmost vertex, ears are clipped from the
 // linked ring, and when clipping stalls the ring is first filtered, then its
 // small self-intersections are cured, and as a last resort it is split along a
-// valid diagonal. It follows Mapbox's earcut (ISC license), without the
-// z-order hash that only pays off for very large rings, and works on caller
-// scratch so a steady-state paint allocates nothing.
+// valid diagonal. It follows Mapbox's earcut (ISC license), including the
+// z-order hash that keeps the ear test from scanning the whole ring on a large
+// one, and works on caller scratch so a steady-state paint allocates nothing.
 //
 // Earcut knows nothing of anti-aliasing. Which triangle edges lie on the
 // outline (and so are feathered) is worked out afterwards from the input rings:
@@ -19,7 +19,16 @@ type earNode struct {
 	x, y       float64
 	index      int32 // position in the flat point list, shared by split copies
 	prev, next int32 // node ids, -1 for none
+	// z is the node's position on the z-order curve, and prevZ and nextZ link the
+	// nodes of a hashed ring in that order. They are only meaningful while the
+	// ring is indexed (see indexCurve); -1 is none.
+	z            uint32
+	prevZ, nextZ int32
 }
+
+// earcutHashThreshold is the point count above which the ear test uses the
+// z-order hash, as upstream earcut does.
+const earcutHashThreshold = 80
 
 // earcutScratch is the reusable working memory of one triangulation.
 type earcutScratch struct {
@@ -28,6 +37,10 @@ type earcutScratch struct {
 	nodes     []earNode // the linked rings
 	triangles []int32   // output: three point indexes per triangle
 	holes     []int32   // leftmost node of each hole, sorted by x
+
+	// minX, minY and invSize map the outer ring onto the 15-bit grid of the
+	// z-order curve; invSize is zero when the ring is small and the hash is off.
+	minX, minY, invSize float64
 }
 
 // earClipRings triangulates canvas.ringPoints as one fill group: ring zero is
@@ -72,6 +85,19 @@ func (canvas *Canvas) earClipRings(color Color) {
 	}
 	if len(scratch.ends) > 1 {
 		outer = scratch.eliminateHoles(outer)
+	}
+	scratch.invSize = 0
+	if len(scratch.points) > earcutHashThreshold {
+		first := scratch.points[0]
+		minX, minY, maxX, maxY := float64(first.X), float64(first.Y), float64(first.X), float64(first.Y)
+		for _, point := range scratch.points[:scratch.ends[0]] {
+			minX, maxX = min(minX, float64(point.X)), max(maxX, float64(point.X))
+			minY, maxY = min(minY, float64(point.Y)), max(maxY, float64(point.Y))
+		}
+		scratch.minX, scratch.minY = minX, minY
+		if size := max(maxX-minX, maxY-minY); size != 0 {
+			scratch.invSize = 32767 / size
+		}
 	}
 	scratch.earcutLinked(outer, 0)
 
@@ -133,7 +159,7 @@ func (scratch *earcutScratch) linkedList(points []Point, base int32, clockwise b
 
 func (scratch *earcutScratch) insertNode(index int32, point Point, last int32) int32 {
 	id := int32(len(scratch.nodes))
-	node := earNode{x: float64(point.X), y: float64(point.Y), index: index, prev: id, next: id}
+	node := earNode{x: float64(point.X), y: float64(point.Y), index: index, prev: id, next: id, prevZ: -1, nextZ: -1}
 	if last >= 0 {
 		node.next = scratch.nodes[last].next
 		node.prev = last
@@ -148,6 +174,12 @@ func (scratch *earcutScratch) removeNode(id int32) {
 	node := scratch.nodes[id]
 	scratch.nodes[node.next].prev = node.prev
 	scratch.nodes[node.prev].next = node.next
+	if node.prevZ >= 0 {
+		scratch.nodes[node.prevZ].nextZ = node.nextZ
+	}
+	if node.nextZ >= 0 {
+		scratch.nodes[node.nextZ].prevZ = node.prevZ
+	}
 }
 
 func (scratch *earcutScratch) equals(a, b int32) bool {
@@ -323,10 +355,20 @@ func (scratch *earcutScratch) earcutLinked(ear int32, pass int) {
 	if ear < 0 {
 		return
 	}
+	// Interlink the ring in z-order once; the later passes keep the links.
+	if pass == 0 && scratch.invSize != 0 {
+		scratch.indexCurve(ear)
+	}
 	stop := ear
 	for scratch.nodes[ear].prev != scratch.nodes[ear].next {
 		prev, next := scratch.nodes[ear].prev, scratch.nodes[ear].next
-		if scratch.isEar(ear) {
+		var ok bool
+		if scratch.invSize != 0 {
+			ok = scratch.isEarHashed(ear)
+		} else {
+			ok = scratch.isEar(ear)
+		}
+		if ok {
 			scratch.triangles = append(scratch.triangles, scratch.nodes[prev].index, scratch.nodes[ear].index, scratch.nodes[next].index)
 			scratch.removeNode(ear)
 			// Skipping the next vertex avoids long slivers.
@@ -370,6 +412,136 @@ func (scratch *earcutScratch) isEar(ear int32) bool {
 		}
 	}
 	return true
+}
+
+// isEarHashed is isEar for an indexed ring: only the nodes whose z-order falls
+// within the triangle's bounding box can lie inside it, and they sit on either
+// side of the ear in the z-ordered list.
+func (scratch *earcutScratch) isEarHashed(ear int32) bool {
+	nodes := scratch.nodes
+	b := nodes[ear]
+	ia, ic := b.prev, b.next
+	a, c := nodes[ia], nodes[ic]
+	if scratch.area(ia, ear, ic) >= 0 {
+		return false
+	}
+	x0, x1 := min(a.x, b.x, c.x), max(a.x, b.x, c.x)
+	y0, y1 := min(a.y, b.y, c.y), max(a.y, b.y, c.y)
+	minZ := scratch.zOrder(x0, y0)
+	maxZ := scratch.zOrder(x1, y1)
+	inside := func(id int32) bool {
+		node := &nodes[id]
+		return node.x >= x0 && node.x <= x1 && node.y >= y0 && node.y <= y1 && id != ia && id != ic &&
+			!(a.x == node.x && a.y == node.y) && pointInTriangleXY(a.x, a.y, b.x, b.y, c.x, c.y, node.x, node.y) &&
+			scratch.area(node.prev, id, node.next) >= 0
+	}
+	p, n := b.prevZ, b.nextZ
+	for p >= 0 && nodes[p].z >= minZ && n >= 0 && nodes[n].z <= maxZ {
+		if inside(p) {
+			return false
+		}
+		p = nodes[p].prevZ
+		if inside(n) {
+			return false
+		}
+		n = nodes[n].nextZ
+	}
+	for p >= 0 && nodes[p].z >= minZ {
+		if inside(p) {
+			return false
+		}
+		p = nodes[p].prevZ
+	}
+	for n >= 0 && nodes[n].z <= maxZ {
+		if inside(n) {
+			return false
+		}
+		n = nodes[n].nextZ
+	}
+	return true
+}
+
+// indexCurve links the ring through start in z-order.
+func (scratch *earcutScratch) indexCurve(start int32) {
+	nodes := scratch.nodes
+	p := start
+	for {
+		if nodes[p].z == 0 {
+			nodes[p].z = scratch.zOrder(nodes[p].x, nodes[p].y)
+		}
+		nodes[p].prevZ = nodes[p].prev
+		nodes[p].nextZ = nodes[p].next
+		p = nodes[p].next
+		if p == start {
+			break
+		}
+	}
+	last := nodes[p].prevZ
+	nodes[last].nextZ = -1
+	nodes[p].prevZ = -1
+	scratch.sortLinked(p)
+}
+
+// sortLinked merge-sorts the z-linked list that starts at list by z. It is
+// Simon Tatham's linked-list merge sort, bottom-up, so it needs no recursion.
+func (scratch *earcutScratch) sortLinked(list int32) {
+	nodes := scratch.nodes
+	for size := 1; ; size *= 2 {
+		p := list
+		list = -1
+		tail := int32(-1)
+		merges := 0
+		for p >= 0 {
+			merges++
+			q := p
+			pSize := 0
+			for i := 0; i < size && q >= 0; i++ {
+				pSize++
+				q = nodes[q].nextZ
+			}
+			qSize := size
+			for pSize > 0 || (qSize > 0 && q >= 0) {
+				var e int32
+				switch {
+				case pSize != 0 && (qSize == 0 || q < 0 || nodes[p].z <= nodes[q].z):
+					e = p
+					p = nodes[p].nextZ
+					pSize--
+				default:
+					e = q
+					q = nodes[q].nextZ
+					qSize--
+				}
+				if tail >= 0 {
+					nodes[tail].nextZ = e
+				} else {
+					list = e
+				}
+				nodes[e].prevZ = tail
+				tail = e
+			}
+			p = q
+		}
+		nodes[tail].nextZ = -1
+		if merges <= 1 {
+			return
+		}
+	}
+}
+
+// zOrder interleaves the bits of x and y, scaled onto a 15-bit grid, into the
+// node's position on the Morton curve.
+func (scratch *earcutScratch) zOrder(x, y float64) uint32 {
+	ix := uint32((x - scratch.minX) * scratch.invSize)
+	iy := uint32((y - scratch.minY) * scratch.invSize)
+	spread := func(v uint32) uint32 {
+		v = (v | v<<8) & 0x00FF00FF
+		v = (v | v<<4) & 0x0F0F0F0F
+		v = (v | v<<2) & 0x33333333
+		v = (v | v<<1) & 0x55555555
+		return v
+	}
+	return spread(ix) | spread(iy)<<1
 }
 
 // cureLocalIntersections removes small self-intersections: where the edge
@@ -521,9 +693,9 @@ func (scratch *earcutScratch) middleInside(a, b int32) bool {
 // the second ring's node on b's side.
 func (scratch *earcutScratch) splitPolygon(a, b int32) int32 {
 	a2 := int32(len(scratch.nodes))
-	scratch.nodes = append(scratch.nodes, earNode{x: scratch.nodes[a].x, y: scratch.nodes[a].y, index: scratch.nodes[a].index})
+	scratch.nodes = append(scratch.nodes, earNode{x: scratch.nodes[a].x, y: scratch.nodes[a].y, index: scratch.nodes[a].index, prevZ: -1, nextZ: -1})
 	b2 := int32(len(scratch.nodes))
-	scratch.nodes = append(scratch.nodes, earNode{x: scratch.nodes[b].x, y: scratch.nodes[b].y, index: scratch.nodes[b].index})
+	scratch.nodes = append(scratch.nodes, earNode{x: scratch.nodes[b].x, y: scratch.nodes[b].y, index: scratch.nodes[b].index, prevZ: -1, nextZ: -1})
 	nodes := scratch.nodes
 	an, bp := nodes[a].next, nodes[b].prev
 	nodes[a].next = b

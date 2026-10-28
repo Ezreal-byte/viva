@@ -89,13 +89,18 @@ const (
 
 // PathStyle describes a path fill and/or stroke. StrokeWidth is measured in
 // logical pixels after the view-box transform. Zero-alpha colors are skipped.
+//
+// FillGradient, when set, replaces Fill: it is a linear gradient in the path's
+// view-box units, held flat beyond both ends. It only colors the fill; the stroke
+// stays the solid Stroke color.
 type PathStyle struct {
-	Fill        Color
-	Stroke      Color
-	StrokeWidth float32
-	FillRule    PathFillRule
-	Cap         StrokeCap
-	Join        StrokeJoin
+	Fill         Color
+	FillGradient *LinearGradient
+	Stroke       Color
+	StrokeWidth  float32
+	FillRule     PathFillRule
+	Cap          StrokeCap
+	Join         StrokeJoin
 }
 
 // Path is immutable vector geometry in a fixed view box. NewPath copies the
@@ -138,7 +143,14 @@ func (canvas *Canvas) DrawPath(path Path, bounds Rect, style PathStyle) {
 	if path.width <= 0 || path.height <= 0 || bounds.Width <= 0 || bounds.Height <= 0 {
 		return
 	}
-	if style.Fill.Alpha <= 0 && (style.Stroke.Alpha <= 0 || style.StrokeWidth <= 0) {
+	fill := style.Fill
+	if style.FillGradient != nil {
+		// The gradient recolors the flat fill below; the flat color only needs
+		// to be visible so the fill is tessellated at all.
+		fill = style.FillGradient.From
+		fill.Alpha = max(style.FillGradient.From.Alpha, style.FillGradient.To.Alpha)
+	}
+	if fill.Alpha <= 0 && (style.Stroke.Alpha <= 0 || style.StrokeWidth <= 0) {
 		return
 	}
 	// The flatten tolerance scales with the display size but never drops
@@ -201,8 +213,12 @@ func (canvas *Canvas) DrawPath(path Path, bounds Rect, style PathStyle) {
 		return
 	}
 
-	if style.Fill.Alpha > 0 {
-		canvas.fillContours(style.FillRule, style.Fill)
+	if fill.Alpha > 0 {
+		start := len(canvas.triangles)
+		canvas.fillContours(style.FillRule, fill)
+		if style.FillGradient != nil {
+			canvas.shadeGradient(start, newGradientAxis(*style.FillGradient, bounds, sx, sy), style.FillGradient, 1)
+		}
 	}
 	if style.Stroke.Alpha > 0 && style.StrokeWidth > 0 {
 		half := style.StrokeWidth * 0.5

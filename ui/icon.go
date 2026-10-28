@@ -185,7 +185,7 @@ func (canvas *Canvas) paintIconShapes(icon Icon, target Rect, tint Color, shape 
 		if shape != nil {
 			shape(index)
 		} else if layer.Gradient != nil {
-			canvas.shadeGradient(start, newGradientAxis(*layer.Gradient, target, icon.ViewBox), layer.Gradient, tint.Alpha)
+			canvas.shadeGradient(start, newGradientAxis(*layer.Gradient, target, target.Width/icon.ViewBox, target.Width/icon.ViewBox), layer.Gradient, tint.Alpha)
 		}
 	}
 }

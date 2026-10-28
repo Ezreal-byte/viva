@@ -8,12 +8,11 @@ type gradientAxis struct {
 	base   float32 // 1 for a zero-length gradient, which paints its last color
 }
 
-// newGradientAxis places gradient, given in the icon's view-box units, into
-// target.
-func newGradientAxis(gradient LinearGradient, target Rect, viewBox float32) gradientAxis {
-	scale := target.Width / viewBox
-	axis := gradientAxis{origin: Point{X: target.X + gradient.Start.X*scale, Y: target.Y + gradient.Start.Y*scale}}
-	vx, vy := (gradient.End.X-gradient.Start.X)*scale, (gradient.End.Y-gradient.Start.Y)*scale
+// newGradientAxis places gradient, given in view-box units, into target; sx and
+// sy are the view-box to target scale along each axis.
+func newGradientAxis(gradient LinearGradient, target Rect, sx, sy float32) gradientAxis {
+	axis := gradientAxis{origin: Point{X: target.X + gradient.Start.X*sx, Y: target.Y + gradient.Start.Y*sy}}
+	vx, vy := (gradient.End.X-gradient.Start.X)*sx, (gradient.End.Y-gradient.Start.Y)*sy
 	if length := vx*vx + vy*vy; length > 1e-12 {
 		axis.dx, axis.dy = vx/length, vy/length
 	} else {
@@ -188,7 +187,8 @@ func (triangle *Triangle) visible() bool {
 // for one gradient layer in a flat color, with the same area cut where the
 // gradient starts and ends and colored from it.
 func (canvas *Canvas) shadeGradient(start int, axis gradientAxis, gradient *LinearGradient, alpha float32) {
-	source := append([]Triangle(nil), canvas.triangles[start:]...)
+	source := append(canvas.gradientSource[:0], canvas.triangles[start:]...)
+	canvas.gradientSource = source
 	canvas.triangles = canvas.triangles[:start]
 	for _, triangle := range source {
 		axis.each(triangle.Points, triangle.EdgeMask, func(points [3]Point, edges uint8) {

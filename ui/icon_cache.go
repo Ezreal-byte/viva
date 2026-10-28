@@ -176,7 +176,7 @@ func (canvas *Canvas) tessellateIcon(icon Icon, fit float32, tint Color) []iconT
 	var out []iconTriangle
 	canvas.paintIconShapes(icon, Rect{Width: fit, Height: fit * icon.height() / icon.ViewBox}, probe, func(layer int) {
 		if layer >= 0 && icon.Layers[layer].Gradient != nil {
-			axis := newGradientAxis(*icon.Layers[layer].Gradient, Rect{Width: fit, Height: fit * icon.height() / icon.ViewBox}, icon.ViewBox)
+			axis := newGradientAxis(*icon.Layers[layer].Gradient, Rect{Width: fit, Height: fit * icon.height() / icon.ViewBox}, fit/icon.ViewBox, fit/icon.ViewBox)
 			for _, triangle := range canvas.triangles[start:] {
 				axis.each(triangle.Points, triangle.EdgeMask, func(points [3]Point, edges uint8) {
 					out = append(out, iconTriangle{points: points, edges: edges, layer: int16(layer), t: axis.vertexT(points)})
