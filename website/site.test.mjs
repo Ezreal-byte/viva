@@ -12,6 +12,10 @@ const guideSlugs = readdirSync(guideDirectory).filter(name => name.endsWith('.md
 const lang = locale => (locale === 'zh' ? 'zh-CN' : 'en');
 
 test('the root redirects to the Chinese home page', () => {
+  // Pages answers this at the edge; the page with the meta refresh is only a
+  // fallback for hosts that ignore _redirects.
+  const redirects = readFileSync(new URL('./_redirects', output), 'utf8');
+  assert.match(redirects, /^\/\s+\/zh\/\s+302$/m, 'no edge redirect for the root');
   assert.ok(readPage('').includes('/zh/'));
 });
 
