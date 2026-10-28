@@ -49,6 +49,7 @@ var coreComponents = []Component{
 	buttonComponent, badgeComponent, checkboxComponent, colorSwatchComponent, colorPickerComponent,
 	switchComponent, inputComponent, dialogComponent,
 	codeEditorComponent, imageViewComponent,
+	reorderListComponent,
 }
 
 var catalog = buildCatalog()
@@ -95,6 +96,7 @@ type State struct {
 	// textarea keeps the rows and scroll of the Textarea example.
 	textarea    *components.TextareaLayout
 	codeEditor  *components.CodeEditor
+	reorder     *reorderDemoState
 	imageBitmap *ui.Bitmap
 	dialog      dialogState
 	slider      sliderDemoState
