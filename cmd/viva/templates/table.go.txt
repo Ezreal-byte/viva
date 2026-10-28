@@ -150,18 +150,26 @@ const (
 	tableRowFooter
 )
 
-func (table *Table) paintRow(id ui.ID, cells []string, state TableRowState, kind tableRowKind, cellsOut []ui.Rect) TableRowLayout {
+// rowHeightFor fits height into the room left below the cursor, so a row never
+// paints past the table's bottom edge.
+func (table *Table) rowHeightFor(height float32) float32 {
 	bottom := table.bounds.Y + table.bounds.Height
-	if table.y >= bottom || len(table.columns) == 0 {
+	if table.y >= bottom || height <= 0 {
+		return 0
+	}
+	return max(min(height, bottom-table.y), 0)
+}
+
+func (table *Table) paintRow(id ui.ID, cells []string, state TableRowState, kind tableRowKind, cellsOut []ui.Rect) TableRowLayout {
+	if len(table.columns) == 0 {
 		return TableRowLayout{}
 	}
+	bottom := table.bounds.Y + table.bounds.Height
 	height := table.rowHeight
 	if kind == tableRowHeader {
 		height = table.headerHeight
 	}
-	if table.y+height > bottom {
-		height = bottom - table.y
-	}
+	height = table.rowHeightFor(height)
 	if height <= 0 {
 		return TableRowLayout{}
 	}
@@ -416,12 +424,12 @@ func (table *Table) SortableHeader(cells []TableHeader) {
 	if table.headerSet {
 		return
 	}
-	y := table.y
-	table.Header(nil)
-	height := table.y - y
-	if height <= 0 {
+	height := table.rowHeightFor(table.headerHeight)
+	if len(table.columns) == 0 || height <= 0 {
+		table.headerSet = true
 		return
 	}
+	y := table.y
 	x, remaining := table.bounds.X, table.bounds.Width
 	for index, column := range table.columns {
 		width := tableColumnWidth(column, index == len(table.columns)-1, remaining)
@@ -433,6 +441,9 @@ func (table *Table) SortableHeader(cells []TableHeader) {
 		}
 		x, remaining = x+width, remaining-width
 	}
+	// Header owns the row's height and its rule; painting it last keeps the rule
+	// above the cell backgrounds a hover leaves behind, as a body row does.
+	table.Header(nil)
 }
 
 func (table *Table) paintSortableHeaderCell(bounds ui.Rect, column TableColumn, cell TableHeader) {

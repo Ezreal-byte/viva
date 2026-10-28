@@ -84,3 +84,39 @@ func BenchmarkTableSortableHeader(b *testing.B) {
 		table.SortableHeader(headers[:])
 	}
 }
+
+// A header cell's hover background must sit under the row's divider rather than
+// paint it out, and a heading without an ID still paints like an ordinary one.
+func TestSortableTableHeaderKeepsItsRuleAndStaticCell(t *testing.T) {
+	theme := ui.LightTheme()
+	var canvas ui.Canvas
+	columns := [...]TableColumn{{Width: 90}, {Width: 90}, {Width: 90}}
+	table := BeginTable(&canvas, theme, ui.Rect{Width: 270, Height: 100}, columns[:])
+	var zero ui.ID
+	canvas.SetInteraction(ui.Item(1), zero, zero, false)
+	table.SortableHeader([]TableHeader{{ID: ui.Item(1), Label: "Name"}, {ID: ui.Item(2), Label: "Size"}, {Label: "Notes"}})
+
+	var static bool
+	for _, text := range canvas.Texts() {
+		static = static || text.Value == "Notes"
+	}
+	if !static {
+		t.Fatal("a header cell without an ID did not paint its label")
+	}
+
+	ruleY := TableHeaderHeight(theme) - 1
+	var topmost ui.Rectangle
+	hovered := false
+	for _, rectangle := range canvas.Rectangles() {
+		if rectangle.Bounds.Y <= ruleY && ruleY < rectangle.Bounds.Y+rectangle.Bounds.Height {
+			topmost = rectangle
+		}
+		hovered = hovered || rectangle.Color == theme.Hover
+	}
+	if !hovered {
+		t.Fatal("hovering a sortable header painted no background")
+	}
+	if topmost.Color != theme.Border || topmost.Bounds.Height != 1 {
+		t.Fatalf("header rule is covered by %+v, want the border across its last pixel", topmost.Bounds)
+	}
+}
