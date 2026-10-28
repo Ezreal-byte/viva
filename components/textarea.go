@@ -60,6 +60,9 @@ type TextareaSnapshot struct {
 	// NoWrap keeps every line on one row, clipped at the edge of the box, as
 	// `white-space: pre` does. The default wraps.
 	NoWrap bool
+	// InsetTop reserves room above the editor for caller-owned controls. The
+	// native text bounds and caret placement use the same inset as the paint.
+	InsetTop float32
 	// InsetBottom keeps that much more of the bottom of the box free of text, for
 	// controls the caller lays over it, such as an input group's block-end addon:
 	// the rows scroll above them rather than behind.
@@ -123,7 +126,8 @@ func PaintTextarea(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, snapshot T
 	}
 	focused := !snapshot.Disabled && (snapshot.Focused || !snapshot.ID.IsZero() && canvas.Focused() == snapshot.ID)
 	paintTextEntrySurface(canvas, theme, bounds, textEntryState{Focused: focused, Invalid: snapshot.Invalid, Disabled: snapshot.Disabled})
-	content := ui.Rect{X: bounds.X + inputInsetX, Y: bounds.Y + textareaPadY, Width: textareaMax(0, bounds.Width-2*inputInsetX), Height: textareaMax(0, bounds.Height-2*textareaPadY-snapshot.InsetBottom)}
+	top := min(max(snapshot.InsetTop, 0), max(bounds.Height-2*textareaPadY, 0))
+	content := ui.Rect{X: bounds.X + inputInsetX, Y: bounds.Y + textareaPadY + top, Width: textareaMax(0, bounds.Width-2*inputInsetX), Height: textareaMax(0, bounds.Height-2*textareaPadY-top-snapshot.InsetBottom)}
 	content.Width = max(0, content.Width-snapshot.InsetRight)
 	display := snapshot.DisplayValue
 	if display == "" {
