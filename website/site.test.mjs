@@ -57,6 +57,25 @@ test('unknown paths fail with a 404 page instead of the root redirect', () => {
   }
 });
 
+test('theme tokens stay namespaced so an extension cannot repaint the page', () => {
+  // A browser extension that themes scrollbars declares its own
+  // `:root { --background: url(...) }`. Extension styles load after the page's,
+  // both selectors are `:root` at the same specificity, so a bare `--background`
+  // let it replace the whole page background with its artwork. Every token this
+  // site declares carries the product prefix for that reason, and these names
+  // are the ones a page-level stylesheet is most likely to collide with.
+  const cssDirectory = new URL('_astro/', output);
+  const css = readdirSync(cssDirectory)
+    .filter(name => name.endsWith('.css'))
+    .map(name => readFileSync(new URL(name, cssDirectory), 'utf8'))
+    .join('\n');
+  assert.ok(css.includes('--viva-background:'), 'no namespaced page background token');
+  for (const name of ['background', 'text', 'border', 'surface', 'surface-hover', 'muted', 'radius', 'strong-border', 'doc-secondary', 'brand', 'accent', 'accent-soft', 'error', 'success', 'mono', 'header-height']) {
+    assert.doesNotMatch(css, new RegExp(`(?<![\\w-])--${name}\\s*:`), `the bare token --${name} is declared again`);
+    assert.ok(!css.includes(`var(--${name})`), `something still reads the bare token --${name}`);
+  }
+});
+
 for (const locale of ['zh', 'en']) {
   test(`${locale} home page states its numbers, its platforms and where the rest lives`, () => {
     const html = readPage(`${locale}/`);
