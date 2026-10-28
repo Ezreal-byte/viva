@@ -770,7 +770,14 @@ func (painter *painter) paintCanvas() {
 	if painter.scale > 0 {
 		painter.canvas.SetPixelScale(painter.scale)
 	}
-	painter.canvas.SetInteraction(painter.hovered, painter.pressed, painter.focused, painter.keyboardFocus)
+	focused, visible := painter.focused, painter.keyboardFocus
+	if !painter.pendingFocus.IsZero() {
+		// A virtualized list needs the requested focus while laying out the
+		// reveal. Painting the old focus can scroll it back into view before
+		// the pending target has had a chance to enter the hit list.
+		focused, visible = painter.pendingFocus, painter.pendingVisible
+	}
+	painter.canvas.SetInteraction(painter.hovered, painter.pressed, focused, visible)
 	painter.canvas.SetScroll(painter.scrollX, painter.scrollY)
 	painter.canvas.BeginFrame()
 	painter.paint(painter.canvas, painter.size)
