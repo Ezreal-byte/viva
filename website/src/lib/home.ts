@@ -9,8 +9,10 @@ interface Platform { name: string; stack: string; detail: string }
 const english = {
   title: 'Viva — native desktop applications in Go',
   summary: 'Viva is a Go framework for native desktop applications: direct operating-system windows and GPU rendering, no WebView, nothing running while idle.',
-  eyebrow: 'macOS · Windows · Linux',
+  eyebrow: 'macOS · Windows · Linux · Web (WASM)',
   heading: 'Native desktop applications, written in Go.',
+  headingMark: 'Go',
+  headingKey: 'Native',
   lead: 'Viva draws windows, text and components straight through each operating system\'s own APIs and the GPU. There is no WebView, no browser engine and no bundled runtime, and an idle application does no work at all.',
   start: 'Get started', browse: 'Browse components',
   heroStats: [
@@ -18,8 +20,7 @@ const english = {
     { value: '0', label: 'GPU submissions while idle' },
     { value: '0.0%', label: 'idle CPU' },
   ],
-  previewHeading: 'This is the real component',
-  previewText: 'The control below is the production Go component compiled to WebAssembly, not an HTML imitation. The browser build draws with Canvas2D; native builds use Metal, Direct3D 11 or Vulkan.',
+  componentCountLabel: 'components',
   principlesHeading: 'What Viva is built around',
   principles: [
     { title: 'Native, not a browser', text: 'macOS calls Cocoa and Metal, Windows calls Win32 and Direct3D 11, Linux calls XCB and Vulkan from the system\'s own libraries. An application links system frameworks and the Go runtime, nothing else.' },
@@ -31,14 +32,14 @@ const english = {
   ] satisfies Card[],
   measuredHeading: 'Measured, reproducibly',
   measuredIntro: 'Every number is quoted from a benchmark report in the repository, on the machine and build named there — you can rerun them yourself.',
-  measuredLink: 'Full benchmarks →',
+  measuredLink: 'Full benchmarks',
   measures: {
     binary: { label: 'Stripped executable', value: '1.6 MiB', detail: '1,697,506 bytes, a minimal macOS window with a Metal pipeline (M0, Apple silicon).' },
     idle: { label: 'GPU submissions while idle', value: '0', detail: 'After the first present an unchanged window submits nothing, and settled CPU reads 0.0% (M0).' },
     scene: { label: 'Retained scene, 10,000 nodes', value: '2.0 ns · 12.4 ns', detail: 'Draining an unchanged scene, then updating one node. Both take zero allocations (M1).' },
     showcase: { label: 'The component showcase', value: '1.9 MiB', detail: '1,972,834 bytes stripped: the native showcase application with its previews and icons (Apple M2 Pro).' },
-    footprint: { label: 'Memory after the first present', value: '26.3–26.8 MiB', detail: 'Target is 15 MiB. This is a miss, and the fixed AppKit and Metal cost has not been separated from Viva\'s own yet.' },
-    firstFrame: { label: 'Time to first frame', value: '123–374 ms', detail: 'Target is 50 ms warm. This is a miss; it includes loading the Metal library and building the pipeline.' },
+    footprint: { label: 'Memory after the first present', value: '26.3–26.8 MiB', detail: 'The budget is 32 MiB and the goal is 15 MiB. The gap comes from the fixed AppKit and Metal cost, which has not been separated from Viva\'s own yet.' },
+    firstFrame: { label: 'Time to first frame', value: '123–374 ms', detail: 'The budget is 400 ms warm and the goal is 50 ms. The measurement includes loading the Metal library and building the pipeline.' },
   } satisfies Record<string, Measure>,
   platformsHeading: 'Where it runs today',
   platforms: [
@@ -47,13 +48,16 @@ const english = {
     { name: 'Linux', stack: 'X11 · Vulkan · Pango/Cairo', detail: 'X11 through system XCB and Vulkan libraries, with Pango/Cairo text and packaged builds.' },
   ] satisfies Platform[],
   platformsLink: 'Platform details',
+  platformsWebNote: 'There is also an optional web target: the same Go components compiled to WebAssembly and drawn with Canvas2D in the browser. It is a secondary deployment and preview target, not part of the desktop runtime, and it does not replace native verification.',
 };
 
 const chinese: typeof english = {
   title: 'Viva — 用 Go 写原生桌面应用',
   summary: 'Viva 是面向原生桌面应用的 Go 框架：直接使用操作系统窗口与 GPU 渲染，没有 WebView，空闲时不做任何事。',
-  eyebrow: 'macOS · Windows · Linux',
+  eyebrow: 'macOS · Windows · Linux · Web (WASM)',
   heading: '用 Go 写原生桌面应用。',
+  headingMark: 'Go',
+  headingKey: '原生',
   lead: 'Viva 直接通过各操作系统自己的接口和 GPU 绘制窗口、文字与组件。没有 WebView，没有浏览器引擎，也没有捆绑的运行时；应用空闲时完全不做事。',
   start: '开始使用', browse: '浏览组件',
   heroStats: [
@@ -61,8 +65,7 @@ const chinese: typeof english = {
     { value: '0', label: '空闲时的 GPU 提交' },
     { value: '0.0%', label: '空闲 CPU' },
   ],
-  previewHeading: '这就是真实的组件',
-  previewText: '下面的控件是编译成 WebAssembly 的生产 Go 组件，不是 HTML 仿制品。浏览器版本用 Canvas2D 绘制；原生版本使用 Metal、Direct3D 11 或 Vulkan。',
+  componentCountLabel: '个组件',
   principlesHeading: 'Viva 围绕什么构建',
   principles: [
     { title: '原生，不是浏览器', text: 'macOS 调用 Cocoa 与 Metal，Windows 调用 Win32 与 Direct3D 11，Linux 调用系统自带的 XCB 与 Vulkan 库。应用只链接系统框架和 Go 运行时，别无其他。' },
@@ -74,14 +77,14 @@ const chinese: typeof english = {
   ],
   measuredHeading: '实测，可复现',
   measuredIntro: '每个数字都引自仓库里的基准报告，写明了机器和构建方式——你可以自己重新跑一遍。',
-  measuredLink: '完整基准 →',
+  measuredLink: '完整基准',
   measures: {
     binary: { label: '剥离后的可执行文件', value: '1.6 MiB', detail: '1,697,506 字节，带 Metal 管线的最小 macOS 窗口（M0，Apple 芯片）。' },
     idle: { label: '空闲时的 GPU 提交', value: '0', detail: '首次呈现之后，未变化的窗口不提交任何东西，稳定后 CPU 读数为 0.0%（M0）。' },
     scene: { label: '保留式场景，10,000 个节点', value: '2.0 ns · 12.4 ns', detail: '先是清空一个未变化的场景，再是更新其中一个节点，两者都是零分配（M1）。' },
     showcase: { label: '组件展示应用', value: '1.9 MiB', detail: '剥离后 1,972,834 字节：带预览与图标的原生展示应用（Apple M2 Pro）。' },
-    footprint: { label: '首次呈现后的内存', value: '26.3–26.8 MiB', detail: '目标是 15 MiB，这一项未达标；AppKit 与 Metal 的固定开销还没有和 Viva 自身的部分分开。' },
-    firstFrame: { label: '首帧用时', value: '123–374 ms', detail: '预热目标是 50 ms，这一项未达标；其中包含加载 Metal 库与创建管线。' },
+    footprint: { label: '首次呈现后的内存', value: '26.3–26.8 MiB', detail: '预算 32 MiB，目标 15 MiB；差距来自 AppKit 与 Metal 的固定开销，它还没有和 Viva 自身的部分分开。' },
+    firstFrame: { label: '首帧用时', value: '123–374 ms', detail: '预算 400 ms（预热），目标 50 ms；其中包含加载 Metal 库与创建管线。' },
   },
   platformsHeading: '目前能在哪里运行',
   platforms: [
@@ -90,6 +93,7 @@ const chinese: typeof english = {
     { name: 'Linux', stack: 'X11 · Vulkan · Pango/Cairo', detail: '通过系统 XCB 与 Vulkan 库使用 X11，Pango/Cairo 文字，并提供打包构建。' },
   ],
   platformsLink: '平台详情',
+  platformsWebNote: '另有可选的 Web 目标：同一份 Go 组件编译为 WASM，在浏览器里用 Canvas2D 绘制。它是次要的部署与预览目标，不进入桌面运行时，也不替代原生验证。',
 };
 
 export const home = { zh: chinese, en: english } as const;

@@ -13,6 +13,7 @@
     --muted: #71717a;
     --border: #e4e4e7;
     --strong-border: #d4d4d8;
+    --brand: #d7263d;
     --accent: #18181b;
     --accent-soft: #f4f4f5;
     --accent-border: #e4e4e7;
@@ -20,7 +21,7 @@
     --success: #15803d;
     --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
     --radius: 8px;
-    --header-height: 64px;
+    --header-height: 56px;
     color-scheme: light;
   }
   :root[data-theme='dark'] {
@@ -84,20 +85,68 @@
   .docs-grid-wide { grid-template-columns: 200px minmax(0, 1fr); }
   .sidebar { min-width: 0; }
   .sidebar-shell { position: sticky; top: var(--header-height); }
-  .sidebar-panel { display: flex; flex-direction: column; height: calc(100dvh - var(--header-height)); padding: 30px 0 24px; gap: 32px; overflow-y: auto; }
+  .sidebar-panel { display: flex; flex-direction: column; height: calc(100dvh - var(--header-height)); padding: 40px 0 24px; gap: 32px; overflow-y: auto; }
   .main-content { min-width: 0; padding: 40px 0 64px; }
   .on-this-page { position: sticky; top: calc(var(--header-height) + 32px); height: fit-content; max-height: calc(100vh - 110px); overflow-y: auto; margin-top: 44px; font-size: 13px; }
   .on-this-page a { display: block; color: var(--muted); padding: 5px 0; line-height: 1.55; }
   .on-this-page a:hover { color: var(--text); }
   .on-this-page .toc-example { padding-left: 12px; }
   .toc-heading { color: var(--text); font-weight: 500; margin-bottom: 12px; }
-  .site-footer { max-width: 1440px; margin: auto; padding: 24px 32px; border-top: 1px solid var(--border); display: flex; gap: 24px; justify-content: space-between; font-size: 13px; color: var(--muted); }
+  /* The footer carries the site map, the licence and how the site is built;
+     the left offset on documentation pages keeps it clear of the fixed sidebar
+     (the same offset the content columns use). */
+  .site-footer { margin-top: 96px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
+  .footer-inner { max-width: 1200px; margin: 0 auto; padding: 56px 32px 36px; display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, .7fr) minmax(0, .7fr); gap: 48px; }
+  .footer-brand p { margin-top: 14px; max-width: 30em; line-height: 1.65; font-size: 14px; }
+  .footer-wordmark { display: inline-flex; align-items: center; gap: 9px; font-size: 22px; font-weight: 700; letter-spacing: -.04em; color: var(--text); }
+  .footer-wordmark img { display: block; height: 18px; width: auto; }
+  .footer-column h2 { font-size: 13px; font-weight: 500; color: var(--text); }
+  .footer-column ul { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 10px; }
+  .footer-column a { color: var(--muted); }
+  .footer-column a:hover { color: var(--text); }
+  .footer-bottom { max-width: 1200px; margin: 0 auto; padding: 18px 32px 32px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; font-size: 12px; }
 }
 
 @layer components {
   .skip-link { position: fixed; left: 16px; top: -80px; z-index: 50; background: var(--background); padding: 10px; }
   .skip-link:focus { top: 10px; }
   .mobile-nav-toggle { display: none; }
+  /* The catalog search in the sidebar is scoped to components; this one is the
+     whole site and opens from the header. */
+  /* Wide enough to read as a search field rather than an icon button: the label
+     takes the free space and the shortcut sits against the right edge. */
+  .search-trigger {
+    display: inline-flex; align-items: center; gap: 8px; height: 32px;
+    width: clamp(150px, 15vw, 210px); padding: 0 8px 0 10px;
+    border: 1px solid var(--border); border-radius: 7px; background: var(--background);
+    color: var(--muted); font-size: 13px;
+  }
+  .search-trigger-label { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .search-trigger:hover { color: var(--text); background: var(--surface-hover); }
+  .search-trigger kbd { font-size: 11px; line-height: 1; padding: 3px 5px; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); }
+  .search-dialog {
+    width: min(640px, calc(100vw - 32px)); margin: 10vh auto auto; padding: 0;
+    border: 1px solid var(--strong-border); border-radius: 12px;
+    background: var(--background); color: var(--text);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, .18);
+  }
+  .search-dialog::backdrop { background: rgba(0, 0, 0, .32); }
+  .search-field { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .search-field > svg { color: var(--muted); flex: none; }
+  .search-field input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 16px; }
+  .search-field kbd { font-size: 11px; padding: 3px 5px; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); }
+  .search-results { max-height: min(58vh, 440px); overflow-y: auto; padding: 6px 8px 10px; }
+  .search-group h2 { margin: 10px 8px 4px; font-size: 11px; font-weight: 500; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+  .search-group ul { list-style: none; margin: 0; padding: 0; }
+  .search-group a { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 7px; color: var(--text); }
+  .search-group a.active, .search-group a:hover { background: var(--surface-hover); }
+  .search-title { font-size: 14px; }
+  .search-sub { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .search-note { margin: 0; padding: 18px 12px; font-size: 13px; color: var(--muted); }
+  @media (max-width: 900px) {
+    .search-trigger-label, .search-trigger kbd { display: none; }
+    .search-trigger { width: 32px; padding: 0 8px; justify-content: center; }
+  }
   .search-box { position: relative; }
   .search-box > svg { position: absolute; left: 10px; top: 11px; width: 14px; height: 14px; color: var(--muted); pointer-events: none; z-index: 1; }
   .search-box kbd { position: absolute; right: 10px; top: 7px; font-size: 12px; color: var(--muted); pointer-events: none; }
@@ -185,29 +234,26 @@
 
 @layer responsive {
   @media (min-width: 801px) {
+    /* Sticky, not fixed: the sidebar belongs to its grid column, so it scrolls
+       away at the end of the document and the footer can span the full width
+       instead of being pushed aside by a floating panel. */
     .sidebar-shell {
-      position: fixed;
+      position: sticky;
       top: var(--header-height);
-      left: max(32px, calc((100vw - 1440px) / 2 + 32px));
       width: 200px;
       height: calc(100dvh - var(--header-height));
       z-index: 10;
       background: var(--background);
+      /* Without this the inner list keeps contributing its full height to the
+         document, leaving a blank band under the footer. */
+      overflow: clip;
     }
     .sidebar-panel { height: 100%; }
-    body:has(.docs-grid) .site-footer {
-      padding-left: calc(max(32px, calc((100vw - 1440px) / 2 + 32px)) + 240px);
-    }
     .docs-grid-guide .sidebar-shell { width: 240px; }
-    body:has(.docs-grid-guide) .site-footer {
-      padding-left: calc(max(32px, calc((100vw - 1440px) / 2 + 32px)) + 280px);
-    }
   }
   @media (min-width: 801px) and (max-width: 1150px) {
-    .sidebar-shell { left: 32px; width: 190px; }
+    .sidebar-shell { width: 190px; }
     .docs-grid-guide .sidebar-shell { width: 220px; }
-    body:has(.docs-grid) .site-footer { padding-left: 254px; }
-    body:has(.docs-grid-guide) .site-footer { padding-left: 284px; }
   }
   @media (max-width: 1150px) {
     .docs-grid { grid-template-columns: 190px minmax(0, 1fr); gap: 32px; }
@@ -225,7 +271,9 @@
     .enhanced .sidebar-panel:not(.open) { display: none; }
     .component-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .main-content { padding-top: 28px; }
-    .site-footer { flex-wrap: wrap; gap: 12px; padding: 20px 24px; }
+    .footer-inner { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; padding: 40px 24px 28px; }
+    .footer-brand { grid-column: 1 / -1; }
+    .footer-bottom { padding: 16px 24px 28px; }
   }
   @media (max-width: 480px) {
     .header-inner { padding: 0 16px; gap: 18px; }
@@ -251,29 +299,96 @@
 
 @layer layout {
   .docs-grid-guide { grid-template-columns: 240px minmax(0, 780px) 200px; }
-  .guide-navigation { padding-top: 36px; justify-content: flex-start; }
+  .guide-navigation { justify-content: flex-start; }
   .guide-navigation .component-group + .component-group { margin-top: 28px; }
   .home { max-width: 1200px; margin: auto; padding: 0 32px 72px; }
-  .home-hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 300px); column-gap: 64px; row-gap: 0; align-items: center; padding: 88px 0 24px; }
+  .home-hero { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 300px); column-gap: 64px; row-gap: 0; align-items: center; padding: 40px 0 24px; }
+  /* A drafting grid behind the hero: two one-pixel gradients, faded out by a
+     mask so it reads as texture rather than graph paper. No image, no request. */
+  .home-hero::before {
+    content: ""; position: absolute; inset: -16px 0 0; z-index: 0; pointer-events: none;
+    --grid-line: color-mix(in srgb, var(--strong-border) 72%, transparent);
+    background-image:
+      linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px),
+      linear-gradient(to right, color-mix(in srgb, var(--border) 78%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in srgb, var(--border) 78%, transparent) 1px, transparent 1px);
+    background-size: 92px 92px, 92px 92px, 23px 23px, 23px 23px;
+    -webkit-mask-image: radial-gradient(130% 120% at 58% 34%, #000 0%, rgba(0,0,0,.6) 52%, transparent 88%);
+    mask-image: radial-gradient(130% 120% at 58% 34%, #000 0%, rgba(0,0,0,.6) 52%, transparent 88%);
+  }
+  .home-hero > * { position: relative; z-index: 1; }
   .home-section { margin-top: 72px; }
 }
 
 @layer components {
-  .home-hero-art img { display: block; width: 100%; height: auto; }
-  .home-eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .02em; margin-bottom: 18px; }
+  /* The mark drifts a few pixels and sways less than two degrees: enough to
+     feel alive without pulling the eye off the headline. */
+  .home-hero-art { position: relative; }
+  .home-hero-art img { display: block; width: 100%; height: auto; animation: hero-mark-drift 11s ease-in-out infinite; }
+  .home-hero-art::after {
+    content: ""; position: absolute; inset: 12% 6%; z-index: -1; pointer-events: none;
+    background: radial-gradient(closest-side, rgba(215, 38, 61, .18), transparent 72%);
+    animation: hero-mark-glow 11s ease-in-out infinite;
+  }
+  @keyframes hero-mark-drift {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50% { transform: translateY(-12px) rotate(-1.6deg); }
+  }
+  @keyframes hero-mark-glow {
+    0%, 100% { opacity: .45; transform: scale(1); }
+    50% { opacity: .9; transform: scale(1.06); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .home-hero-art img, .home-hero-art::after { animation: none; }
+  }
+
+  /* One hand-drawn ring around the keyword in the headline. It is decoration,
+     so it carries no text of its own; the word stays selectable speech. */
+  .hero-mark { position: relative; display: inline-block; }
+  /* A marker stroke behind the claim, not another outline: the ring already
+     marks the language, so this one is a block of colour rather than a line. */
+  .hero-key { position: relative; display: inline-block; isolation: isolate; }
+  .hero-key::before {
+    content: ""; position: absolute; z-index: -1; left: -.06em; right: -.06em; top: 48%; bottom: 5%;
+    background: color-mix(in srgb, var(--brand) 32%, transparent);
+    border-radius: 3px 4px 2px 3px; transform: rotate(-.7deg) skewX(-5deg);
+  }
+  [data-theme='dark'] .hero-key::before { background: color-mix(in srgb, var(--brand) 40%, transparent); }
+  .hero-mark-ring {
+    position: absolute; left: -7%; top: -18%; width: 114%; height: 136%;
+    color: var(--brand); pointer-events: none; overflow: visible;
+    transform: rotate(-3.5deg);
+  }
+  .hero-mark-ring path { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; opacity: .82; vector-effect: non-scaling-stroke; }
+  .hero-mark-ring path + path { opacity: .3; stroke-width: 1.1; }
+  /* The supported targets read as one quiet chip rather than a line of text
+     floating on the grid; the web target stays last and qualified. */
+  .home-eyebrow {
+    display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
+    padding: 5px 11px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: 999px;
+    background: color-mix(in srgb, var(--background) 72%, transparent);
+    font-size: 12px; line-height: 1.5; color: var(--muted); letter-spacing: .01em;
+  }
   .home h1 { font-size: 52px; line-height: 1.12; letter-spacing: -.035em; overflow-wrap: break-word; word-break: normal; }
   .home-lead { margin-top: 22px; font-size: 18px; line-height: 1.75; max-width: 34em; }
+  .home-lead-brand { font-weight: 600; color: var(--text); }
   .home-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
   .home-button { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 18px; border: 1px solid var(--strong-border); border-radius: var(--radius); font-size: 14px; font-weight: 500; color: var(--text); background: var(--background); }
   .home-button:hover { background: var(--surface-hover); }
   .home-button-primary { background: var(--text); color: var(--background); border-color: var(--text); }
   .home-button-primary:hover { background: var(--text); opacity: .86; }
-  .home-stats { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; margin: 52px 0 0; padding-top: 30px; border-top: 1px solid var(--border); }
-  .home-stats div { display: flex; flex-direction: column-reverse; gap: 6px; }
+  .home-stats { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 32px; margin: 52px 0 0; padding-top: 30px; border-top: 1px solid var(--border); }
+  .home-stats div { display: flex; flex-direction: column-reverse; gap: 6px; align-items: center; text-align: center; }
   .home-stats dt { font-size: 13px; color: var(--muted); }
   .home-stats dd { margin: 0; font-size: 38px; font-weight: 600; letter-spacing: -.03em; line-height: 1.1; }
-  .home-section > h2 { font-size: 26px; letter-spacing: -.02em; }
+  .home-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 24px; flex-wrap: wrap; }
+  .home-section-head h2 { font-size: 26px; letter-spacing: -.02em; }
+  .home-section-link { font-size: 14px; color: var(--muted); white-space: nowrap; }
+  .home-section-link:hover { color: var(--text); }
+  .home-section-link span { margin-left: 2px; }
   .home-section-intro { margin: 10px 0 0; font-size: 15px; max-width: 46em; }
+  .home-footnote { margin: 18px 0 0; font-size: 14px; line-height: 1.7; color: var(--muted); }
   .home-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 24px; }
   .home-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; background: var(--surface); }
   .home-card h3 { font-size: 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -285,8 +400,7 @@
   .home-measure dd { margin: 6px 0 0; display: grid; gap: 6px; }
   .home-measure strong { font-size: 26px; font-weight: 600; letter-spacing: -.02em; color: var(--text); }
   .home-measure span { font-size: 13px; line-height: 1.6; color: var(--doc-secondary); }
-  .home-note { margin-top: 18px; font-size: 14px; }
-  .home-note a, .markdown a { color: var(--text); text-decoration: underline; text-decoration-color: var(--strong-border); text-underline-offset: 3px; }
+  .markdown a { color: var(--text); text-decoration: underline; text-decoration-color: var(--strong-border); text-underline-offset: 3px; }
   .home-note a:hover, .markdown a:hover { text-decoration-color: var(--text); }
   .guide-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 28px; }
   .guide-card { display: block; border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
@@ -332,6 +446,7 @@
     .docs-grid-guide { grid-template-columns: 220px minmax(0, 1fr); }
     .home-hero { grid-template-columns: minmax(0, 1fr) 220px; gap: 32px; padding-top: 56px; }
     .home-stats { grid-template-columns: minmax(0, 1fr); gap: 24px; margin-top: 40px; }
+    .home-stats div { align-items: flex-start; text-align: left; }
     .home-stats dd { font-size: 30px; }
     .home h1 { font-size: 44px; }
   }

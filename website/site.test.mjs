@@ -25,6 +25,23 @@ test('navigation is client-routed and the stored theme survives it', () => {
   assert.ok(html.includes('astro:after-swap'), 'no theme restore after a swap');
 });
 
+for (const locale of ['zh', 'en']) {
+  test(`${locale} header offers a site-wide search`, () => {
+    const html = readPage(`${locale}/`);
+    assert.ok(html.includes('search-trigger'), 'no search trigger in the header');
+    assert.ok(html.includes('SearchDialog'), 'the search dialog island is not in the header');
+  });
+
+  test(`${locale} search index covers components, guides and API`, () => {
+    const index = JSON.parse(readFileSync(new URL(`./search/${locale}.json`, output), 'utf8'));
+    const kinds = [...new Set(index.entries.map(entry => entry.kind))].sort();
+    assert.deepEqual(kinds, ['api', 'component', 'guide']);
+    assert.ok(index.entries.some(entry => entry.kind === 'component' && entry.href === `/${locale}/ui/button/`), 'no Button component');
+    assert.ok(index.entries.some(entry => entry.kind === 'guide' && entry.href === `/${locale}/docs/getting-started/`), 'no getting-started guide');
+    for (const entry of index.entries) assert.match(entry.href, /^\/[a-z]{2}\//, `bad href ${entry.href}`);
+  });
+}
+
 test('unknown paths fail with a 404 page instead of the root redirect', () => {
   // Pages treats a project without a top-level 404.html as a single-page
   // application: every unmatched path answers with the root document and a 200,
@@ -47,12 +64,22 @@ for (const locale of ['zh', 'en']) {
     for (const language of ['zh', 'en']) assert.ok(html.includes(`href="/${language}/"`));
     for (const text of ['1,697,506', 'macOS', 'Windows', 'Linux']) assert.ok(html.includes(text), `missing ${text}`);
     assert.ok(html.includes(`href="/${locale}/docs/getting-started/"`));
+    // The count is derived from the catalog, so a hardcoded number or a missing
+    // stat fails here instead of drifting.
+    assert.ok(html.includes(`<dd>${catalog.pages.length}</dd>`), 'the component count is missing');
     // The figures that have not reached their report's target live in the
     // performance guide; the landing page still has to lead a reader to them.
     assert.ok(html.includes(`href="/${locale}/docs/performance/"`), 'no link to the measurements that are not on the page');
-    assert.ok(!html.includes('26.3–26.8 MiB'), 'a figure below its target is on the landing page');
-    assert.ok(html.includes('class="preview-canvas"'), 'the live component preview is missing');
+    assert.ok(!html.includes('26.3–26.8 MiB'), 'a performance-guide figure is on the landing page');
     assert.equal([...html.matchAll(/<h1[ >]/g)].length, 1);
+  });
+
+  test(`${locale} footer carries the site map, the repository and the licence`, () => {
+    const footer = readPage(`${locale}/`).slice(readPage(`${locale}/`).indexOf('class="site-footer"'));
+    assert.ok(footer.includes('https://github.com/vivaui/viva'), 'no repository link');
+    assert.ok(footer.includes('blob/main/LICENSE'), 'no licence link');
+    assert.ok(footer.includes(`href="/${locale}/docs/"`), 'no guides link');
+    assert.ok(footer.includes(`href="/${locale}/components/"`), 'no catalog link');
   });
 
   test(`${locale} documentation has an index and every guide`, () => {

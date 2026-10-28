@@ -46,7 +46,8 @@
     if (event.isComposing || event.defaultPrevented) return;
     const target = event.target;
     const editing = target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
-    if ((event.key.toLowerCase() === 'k' && (event.metaKey || event.ctrlKey) && !event.altKey) || (event.key === '/' && !editing && !event.metaKey && !event.ctrlKey && !event.altKey)) {
+    // The site-wide dialog owns Cmd/Ctrl+K; this field keeps the slash shortcut.
+    if (event.key === '/' && !editing && !event.metaKey && !event.ctrlKey && !event.altKey) {
       event.preventDefault();
       focusSearch();
     }

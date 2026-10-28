@@ -1,11 +1,10 @@
 ---
 import type { GetStaticPaths } from 'astro';
 import BaseLayout from '../../layouts/BaseLayout.astro';
-import Preview from '../../components/Preview.svelte';
 import markOnly from '../../assets/viva-mark-only.svg?url';
 import Icon from '../../components/Icon.svelte';
 import { readCatalog } from '../../lib/catalog';
-import { locales, isLocale, localizePage, componentPath, type Locale } from '../../lib/i18n';
+import { locales, isLocale, componentPath, type Locale } from '../../lib/i18n';
 import { homeText } from '../../lib/home';
 import { homepageTiles } from '../../lib/figures';
 import { homePath, docsPath } from '../../lib/routes';
@@ -14,8 +13,26 @@ export const getStaticPaths = (() => locales.map(lang => ({ params: { lang } }))
 const locale = Astro.params.lang;
 if (!isLocale(locale)) throw new Error('Unsupported locale');
 const text = homeText(locale);
-const catalog = readCatalog();
-const button = localizePage(catalog.pages.find(entry => entry.ID === 'button')!, locale);
+// Counted from the generated catalog, so the landing page cannot drift from the
+// component index it links to.
+const componentCount = readCatalog().pages.length;
+// The headline is one localised string; the decorated words are split out so a
+// doodle can sit behind them without touching the copy or hard-coding offsets.
+type Piece = { text: string; mark: 'word' | 'key' | null };
+const decorated = (heading: string): Piece[] => {
+  const marks = [text.headingMark, text.headingKey].filter(Boolean).map(mark => mark.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (marks.length === 0) return [{ text: heading, mark: null }];
+  return heading.split(new RegExp(`(${marks.join('|')})`)).filter(part => part !== '').map(part => ({
+    text: part,
+    mark: part === text.headingMark ? 'word' : part === text.headingKey ? 'key' : null,
+  }));
+};
+const headingPieces = decorated(text.heading);
+// The lead names the product once; it is marked up so the emphasis is in the
+// copy, not in a hard-coded offset.
+const leadSplit = text.lead.split('Viva');
+const [leadBefore, ...leadRest] = leadSplit;
+const leadAfter = leadRest.join('Viva');
 const alternates = Object.fromEntries(locales.map(language => [language, homePath(language)])) as Record<Locale, string>;
 ---
 
@@ -24,8 +41,17 @@ const alternates = Object.fromEntries(locales.map(language => [language, homePat
     <section class="home-hero">
       <div class="home-hero-copy">
         <p class="home-eyebrow">{text.eyebrow}</p>
-        <h1>{text.heading}</h1>
-        <p class="home-lead">{text.lead}</p>
+        <h1>
+          {headingPieces.map(piece => piece.mark === 'word'
+            ? <span class="hero-mark">{piece.text}<svg class="hero-mark-ring" viewBox="0 0 120 48" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path d="M8,30 C6,14 30,6 62,5 C94,4 114,12 114,24 C114,36 92,44 60,44 C28,44 9,37 8,28 C7.6,24 10,20 15,16.5" /><path d="M14,35 C10,20 34,10 63,9 C92,8 110,16 109,25" /></svg></span>
+            : piece.mark === 'key' ? <span class="hero-key">{piece.text}</span>
+            : piece.text)}
+        </h1>
+        <p class="home-lead">
+          {leadSplit.length > 1
+            ? <>{leadBefore}<strong class="home-lead-brand">Viva</strong>{leadAfter}</>
+            : text.lead}
+        </p>
         <div class="home-actions">
           <a class="home-button home-button-primary" href={docsPath(locale, 'getting-started')}>{text.start}<Icon name="arrow" size={14} /></a>
           <a class="home-button" href={componentPath(locale)}>{text.browse}</a>
@@ -36,34 +62,36 @@ const alternates = Object.fromEntries(locales.map(language => [language, homePat
       </div>
       <dl class="home-stats">
         {text.heroStats.map(stat => <div><dt>{stat.label}</dt><dd>{stat.value}</dd></div>)}
+        <div><dt>{text.componentCountLabel}</dt><dd>{componentCount}</dd></div>
       </dl>
     </section>
 
-    <section class="home-section" aria-labelledby="preview">
-      <h2 id="preview">{text.previewHeading}</h2>
-      <p class="home-section-intro">{text.previewText}</p>
-      <Preview {locale} componentID={button.ID} title={button.Title} example={button.Examples[0]} revision={button.Revision} client:load />
-    </section>
-
     <section class="home-section" aria-labelledby="principles">
-      <h2 id="principles">{text.principlesHeading}</h2>
+      <div class="home-section-head">
+        <h2 id="principles">{text.principlesHeading}</h2>
+      </div>
       <div class="home-grid">{text.principles.map(card => <article class="home-card"><h3>{card.title}</h3><p>{card.text}</p></article>)}</div>
     </section>
 
     <section class="home-section" aria-labelledby="measured">
-      <h2 id="measured">{text.measuredHeading}</h2>
+      <div class="home-section-head">
+        <h2 id="measured">{text.measuredHeading}</h2>
+        <a class="home-section-link" href={docsPath(locale, 'performance')}>{text.measuredLink} <span aria-hidden="true">→</span></a>
+      </div>
       <p class="home-section-intro">{text.measuredIntro}</p>
       <dl class="home-measures">{homepageTiles.map(entry => {
         const measure = text.measures[entry.id as keyof typeof text.measures];
         return <div class="home-measure"><dt>{measure.label}</dt><dd><strong>{measure.value}</strong><span>{measure.detail}</span></dd></div>;
       })}</dl>
-      <p class="home-note"><a href={docsPath(locale, 'performance')}>{text.measuredLink}</a></p>
     </section>
 
     <section class="home-section" aria-labelledby="platforms">
-      <h2 id="platforms">{text.platformsHeading}</h2>
+      <div class="home-section-head">
+        <h2 id="platforms">{text.platformsHeading}</h2>
+        <a class="home-section-link" href={docsPath(locale, 'platforms')}>{text.platformsLink} <span aria-hidden="true">→</span></a>
+      </div>
       <div class="home-grid">{text.platforms.map(platform => <article class="home-card"><h3>{platform.name}</h3><p class="home-stack">{platform.stack}</p><p>{platform.detail}</p></article>)}</div>
-      <p class="home-note"><a href={docsPath(locale, 'platforms')}>{text.platformsLink} →</a></p>
+      <p class="home-footnote">{text.platformsWebNote}</p>
     </section>
 
   </main>
