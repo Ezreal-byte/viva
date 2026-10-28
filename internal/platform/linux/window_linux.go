@@ -518,10 +518,13 @@ func (application *linuxApplication) fail(err error) {
 // reportFrame tells the application where its content area is now, in logical
 // pixels. It asks the X server for the window's origin inside the frame the
 // window manager may have put it in, and reports only changes.
-func (state *linuxWindowState) reportFrame() {
+// reportFrame reports the content rectangle to OnFrameChange. It returns the
+// content's root position when it had to read it, so a caller that also needs
+// the position (the minimum-size constraint) shares one query.
+func (state *linuxWindowState) reportFrame() (int32, int32, bool) {
 	win, config := state.win, state.config
 	if config.OnFrameChange == nil || win.frame.maximized {
-		return
+		return 0, 0, false
 	}
 	x, y := win.contentOrigin()
 	scale := win.displayScale()
@@ -530,10 +533,11 @@ func (state *linuxWindowState) reportFrame() {
 		Width: float32(contentSize(win.width, win.margin)) / scale, Height: float32(contentSize(win.height, win.margin)) / scale,
 	}
 	if frame == win.lastFrame {
-		return
+		return x, y, true
 	}
 	win.lastFrame = frame
 	config.OnFrameChange(frame)
+	return x, y, true
 }
 
 func (state *linuxWindowState) handleEvent(event unsafe.Pointer) (bool, error) {
@@ -656,9 +660,13 @@ func (state *linuxWindowState) handleEvent(event unsafe.Pointer) (bool, error) {
 				return false, err
 			}
 		}
-		state.reportFrame()
+		x, y, frameKnown := state.reportFrame()
 		win.answerSync()
-		win.updateMinimumSize(config)
+		if frameKnown {
+			win.updateMinimumSizeAt(config, x, y)
+		} else {
+			win.updateMinimumSize(config)
+		}
 	case xcbButtonPress:
 		inputEvent := (*xcbInputEvent)(event)
 		if win.beginWindowMove(config, inputEvent) {

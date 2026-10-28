@@ -41,6 +41,14 @@ func (win *window) minimumSizeProperty(config platform.Config, event *xcbPropert
 // updateMinimumSize publishes ICCCM PMinSize without discarding a saved-position
 // hint. X11 (including XWayland) lets the window manager enforce the border drag.
 func (win *window) updateMinimumSize(config platform.Config) {
+	x, y := win.rootOrigin()
+	win.updateMinimumSizeAt(config, x, y)
+}
+
+// updateMinimumSizeAt is updateMinimumSize with the window's root position
+// already known: a ConfigureNotify that reported its frame passes the position
+// it read, so a resize does not query the X server for it a second time.
+func (win *window) updateMinimumSizeAt(config platform.Config, rootX, rootY int32) {
 	if config.MinWidth <= 0 && config.MinHeight <= 0 {
 		return
 	}
@@ -52,8 +60,7 @@ func (win *window) updateMinimumSize(config platform.Config) {
 	if len(monitors) == 1 {
 		monitor = monitors[0]
 	} else {
-		x, y := win.rootOrigin()
-		monitor, _ = monitorAt(monitors, int(x)+int(win.width)/2, int(y)+int(win.height)/2)
+		monitor, _ = monitorAt(monitors, int(rootX)+int(win.width)/2, int(rootY)+int(win.height)/2)
 	}
 	scale := win.displayScale()
 	cached := win.minimumSize

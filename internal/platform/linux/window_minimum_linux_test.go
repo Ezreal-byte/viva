@@ -34,3 +34,17 @@ func TestNoMinimumKeepsTheNativeWindowUnconfigured(t *testing.T) {
 		t.Fatal("window without a minimum allocated a cache")
 	}
 }
+
+func TestMultiMonitorResizeReusesThePositionItAlreadyReported(t *testing.T) {
+	left := monitorGeometry{Name: "left", Width: 1920, Height: 1080, Primary: true}
+	right := monitorGeometry{Name: "right", X: 1920, Width: 1280, Height: 720}
+	win := &window{
+		tracker:     &scaleTracker{monitors: []monitorGeometry{left, right}},
+		minimumSize: &minimumSizeCache{monitor: left, scale: 1, valid: true},
+	}
+	win.width, win.height = 1200, 800
+	// No X connection is installed: with more than one monitor this must reuse
+	// the position the ConfigureNotify pass reported instead of translating the
+	// coordinates again.
+	win.updateMinimumSizeAt(platform.Config{MinWidth: 960, MinHeight: 600}, 200, 100)
+}
