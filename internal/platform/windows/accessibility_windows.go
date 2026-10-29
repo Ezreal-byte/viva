@@ -2,6 +2,7 @@ package windows
 
 import (
 	"math"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -212,6 +213,11 @@ var uiaProviders sync.Map
 var uiaFromPointCallback uintptr
 
 func initializeUIACallbacks() bool {
+	// VIVA_ACCESSIBILITY=0 leaves the window without a UI Automation tree, as on
+	// Linux: a way to tell whether an assistive client is what a fault depends on.
+	if os.Getenv("VIVA_ACCESSIBILITY") == "0" {
+		return false
+	}
 	entry := uiaFromPointThunkAddress()
 	if entry == 0 {
 		return false

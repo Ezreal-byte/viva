@@ -30,6 +30,17 @@ func SetFaultHandler(handler func(Fault)) {
 	})
 }
 
+// EnableCrashDumps asks the system to leave a dump of the process when it dies of
+// a fault no Go code can see: a driver crash, a fast-fail, a corrupted heap. On
+// Windows (11 22H2 or later) it registers a folder below %LOCALAPPDATA% for
+// Windows Error Reporting and returns its absolute path; a dump is a copy of
+// memory, so a program should tell its user before asking for one to be shared.
+// Elsewhere it returns ErrUnsupported: macOS keeps its own crash reports and a
+// Linux system its core files.
+func EnableCrashDumps(relativeDir string) (string, error) {
+	return nativeEnableCrashDumps(relativeDir)
+}
+
 // ShowFatalError tells the user, in the system's own message box, that the
 // program cannot start or go on. It is for a program with no window to show the
 // reason in: without it a failed start is a window that flickers and is gone. It
