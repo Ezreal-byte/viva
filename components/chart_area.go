@@ -362,7 +362,7 @@ type chartLabels struct {
 	xText     []string
 	xBuffer   []byte
 	yStep     float32
-	plotLeft  float32
+	plotLeft  float32 // offsets from the current plot container, never window coordinates
 	plotRight float32
 }
 
@@ -461,7 +461,7 @@ func chartBeginFrame(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, spec *ch
 		chartBuildLabels(canvas, spec, labels, key, area, step, fontSize, scale)
 	}
 
-	plot := ui.Rect{X: labels.plotLeft, Y: top, Width: labels.plotRight - labels.plotLeft, Height: height}
+	plot := ui.Rect{X: area.X + labels.plotLeft, Y: top, Width: labels.plotRight - labels.plotLeft, Height: height}
 	geo.plot, geo.xMin, geo.xMax, geo.low, geo.high = plot, xMin, xMax, low, high
 	if plot.Width < 1 {
 		return chartFrame{layout: layout, plot: ChartPlot{ChartLayout: layout, geo: chartGeometry{count: count, x: spec.x, band: spec.band}}, scale: scale}
@@ -541,11 +541,11 @@ func chartBuildLabels(canvas *ui.Canvas, spec *chartSpec, labels *chartLabels, k
 		}
 	}
 
-	labels.plotLeft = area.X + chartPlotInsetSide*scale
+	labels.plotLeft = chartPlotInsetSide * scale
 	if !spec.yAxis.Hidden {
-		labels.plotLeft = area.X + labels.yWidth + chartAxisGap*scale
+		labels.plotLeft = labels.yWidth + chartAxisGap*scale
 	}
-	labels.plotRight = area.X + area.Width - chartPlotInsetSide*scale
+	labels.plotRight = area.Width - chartPlotInsetSide*scale
 	plotWidth := labels.plotRight - labels.plotLeft
 
 	labels.xFrac = labels.xFrac[:0]
@@ -780,6 +780,10 @@ func chartPaintAreaSeries(canvas *ui.Canvas, theme ui.Theme, chart *AreaChart, s
 	geo := &frame.plot.geo
 	plot := frame.plot.Plot
 	count := geo.count
+	// Fixed domains may deliberately retain a point outside the visible window
+	// for interpolation. Neither its stroke nor fill may cover axes or siblings.
+	canvas.Clip(plot)
+	defer canvas.Unclip()
 	scratch := &state.scratch
 	stacked := spec.stack != ChartStackNone
 	width := chart.StrokeWidth
@@ -838,6 +842,7 @@ func chartPaintAreaFill(canvas *ui.Canvas, chart *AreaChart, spec *chartSpec, fr
 	points := scratch.points
 	view := func(builder *ui.PathBuilder) ui.Path { return builder.Path(plot.Width, plot.Height) }
 	var gradient ui.LinearGradient
+	areaStyle := spec.series[series].AreaStyle
 
 	if spec.stack != ChartStackNone {
 		// A stack's band lies between the curve of the stack below it and its own,
@@ -858,7 +863,7 @@ func chartPaintAreaFill(canvas *ui.Canvas, chart *AreaChart, spec *chartSpec, fr
 		builder.LineTo(last.X, last.Y)
 		chartCurveReverse(builder, chart.Curve, lower, scratch)
 		builder.Close()
-		canvas.DrawPath(view(builder), plot, chartAreaFillStyle(&gradient, chart.Fill, color, top, bottom))
+		canvas.DrawPath(view(builder), plot, chartAreaFillStyle(&gradient, chart.Fill, color, top, bottom, areaStyle))
 		return
 	}
 
@@ -896,7 +901,7 @@ func chartPaintAreaFill(canvas *ui.Canvas, chart *AreaChart, spec *chartSpec, fr
 			builder.LineTo(points[0].X, edge)
 			builder.Close()
 			canvas.Clip(clip)
-			canvas.DrawPath(view(builder), plot, chartAreaFillStyle(&gradient, chart.Fill, color, extreme, baseline))
+			canvas.DrawPath(view(builder), plot, chartAreaFillStyle(&gradient, chart.Fill, color, extreme, baseline, areaStyle))
 			canvas.Unclip()
 		}
 		return
@@ -911,18 +916,29 @@ func chartPaintAreaFill(canvas *ui.Canvas, chart *AreaChart, spec *chartSpec, fr
 	builder.LineTo(points[len(points)-1].X, baseline)
 	builder.LineTo(points[0].X, baseline)
 	builder.Close()
-	canvas.DrawPath(view(builder), plot, chartAreaFillStyle(&gradient, chart.Fill, color, extreme, baseline))
+	canvas.DrawPath(view(builder), plot, chartAreaFillStyle(&gradient, chart.Fill, color, extreme, baseline, areaStyle))
 }
 
 // chartAreaFillStyle is the fill of an area whose farthest edge from its baseline
 // is at extreme (plot-local Y): a flat translucent color, or a vertical gradient
 // from the full area opacity at the extreme to a faint tail at the baseline. The
 // gradient is written to the caller's storage so a paint allocates nothing.
-func chartAreaFillStyle(gradient *ui.LinearGradient, fill ChartFill, color ui.Color, extreme, baseline float32) ui.PathStyle {
+func chartAreaFillStyle(gradient *ui.LinearGradient, fill ChartFill, color ui.Color, extreme, baseline float32, area *ChartAreaStyle) ui.PathStyle {
 	var style ui.PathStyle
+	opacity := chartFillOpacity
+	if area != nil {
+		opacity = area.Opacity
+		if !chartFinite(opacity) {
+			opacity = 0
+		}
+		opacity = min(max(opacity, 0), 1)
+		if area.Color != (ui.Color{}) {
+			color = area.Color
+		}
+	}
 	if fill == ChartFillSolid {
 		style.Fill = color
-		style.Fill.Alpha *= chartFillOpacity
+		style.Fill.Alpha *= opacity
 		return style
 	}
 	span := baseline - extreme
@@ -930,8 +946,13 @@ func chartAreaFillStyle(gradient *ui.LinearGradient, fill ChartFill, color ui.Co
 		span = 1
 	}
 	from, to := color, color
-	from.Alpha *= chartGradientTop * chartFillOpacity
-	to.Alpha *= chartGradientBottom * chartFillOpacity
+	from.Alpha *= chartGradientTop
+	to.Alpha *= chartGradientBottom
+	if area != nil && area.Gradient != nil {
+		from, to = area.Gradient.From, area.Gradient.To
+	}
+	from.Alpha *= opacity
+	to.Alpha *= opacity
 	*gradient = ui.LinearGradient{
 		Start: ui.Point{Y: extreme + 0.05*span}, End: ui.Point{Y: extreme + 0.95*span},
 		From: from, To: to,
@@ -950,6 +971,11 @@ func chartPaintAreaCursor(canvas *ui.Canvas, theme ui.Theme, spec *chartSpec, fr
 	}
 	plot := frame.plot.Plot
 	x := geo.px(index)
+	if x < plot.X || x > plot.X+plot.Width {
+		return
+	}
+	canvas.Clip(plot)
+	defer canvas.Unclip()
 	canvas.Fill(ui.Rect{X: x - 0.5, Y: plot.Y, Width: 1, Height: plot.Height}, theme.Border)
 	radius := 4 * frame.scale
 	ring := 2 * frame.scale

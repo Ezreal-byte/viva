@@ -92,6 +92,35 @@ func TestChartIndexAt(t *testing.T) {
 	}
 }
 
+func TestChartCachedGeometryFollowsContainerPosition(t *testing.T) {
+	for _, hidden := range []bool{false, true} {
+		theme := ui.LightTheme()
+		chart := chartTestArea(theme)
+		chart.YAxis.Hidden = hidden
+		var state ChartState
+		var canvas ui.Canvas
+		bounds := ui.Rect{X: 10, Y: 20, Width: 300, Height: 180}
+		first := PaintAreaChart(&canvas, theme, bounds, ui.ID{}, chart, &state)
+		key := state.labels.key
+		bounds.X += 640
+		bounds.Y += 80
+		canvas.Reset()
+		second := PaintAreaChart(&canvas, theme, bounds, ui.ID{}, chart, &state)
+		if state.labels.key != key {
+			t.Fatal("moving a chart invalidated its label cache")
+		}
+		if second.Plot.X != first.Plot.X+640 || second.Plot.Y != first.Plot.Y+80 || second.Plot.Width != first.Plot.Width || second.Plot.Height != first.Plot.Height {
+			t.Fatalf("moved chart geometry: first=%+v second=%+v", first.Plot, second.Plot)
+		}
+		if got, want := second.PointX(2), first.PointX(2)+640; math.Abs(float64(got-want)) > .001 {
+			t.Fatalf("data point=%v, want %v", got, want)
+		}
+		if got := second.IndexAt(second.PointX(2)); got != 2 {
+			t.Fatalf("moved hit geometry=%d, want 2", got)
+		}
+	}
+}
+
 func TestChartStepForKey(t *testing.T) {
 	cases := []struct {
 		key          ui.Key
