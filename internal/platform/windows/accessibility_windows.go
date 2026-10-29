@@ -1,9 +1,7 @@
 package windows
 
 import (
-	"fmt"
 	"math"
-	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -203,6 +201,9 @@ var variantClear = automation.NewProc("VariantClear")
 var getWindowRectangle = user.NewProc("GetWindowRect")
 var clientToScreen = user.NewProc("ClientToScreen")
 
+// uiaFault names the boundary of a fault in a UI Automation callback.
+const uiaFault = "UI Automation provider"
+
 var uiaCallbackOnce sync.Once
 var uiaSimpleTable [7]uintptr
 var uiaFragmentTable [9]uintptr
@@ -217,28 +218,28 @@ func initializeUIACallbacks() bool {
 	}
 	uiaCallbackOnce.Do(func() {
 		unknown := [...]uintptr{
-			syscall.NewCallback(uiaQueryInterface),
-			syscall.NewCallback(uiaAddReference),
-			syscall.NewCallback(uiaReleaseReference),
+			guarded3(uiaFault, uiaQueryInterface),
+			guarded1(uiaFault, uiaAddReference),
+			guarded1(uiaFault, uiaReleaseReference),
 		}
 		copy(uiaSimpleTable[:3], unknown[:])
-		uiaSimpleTable[3] = syscall.NewCallback(uiaGetProviderOptions)
-		uiaSimpleTable[4] = syscall.NewCallback(uiaGetPatternProvider)
-		uiaSimpleTable[5] = syscall.NewCallback(uiaGetPropertyValue)
-		uiaSimpleTable[6] = syscall.NewCallback(uiaGetHostProvider)
+		uiaSimpleTable[3] = guarded2(uiaFault, uiaGetProviderOptions)
+		uiaSimpleTable[4] = guarded3(uiaFault, uiaGetPatternProvider)
+		uiaSimpleTable[5] = guarded3(uiaFault, uiaGetPropertyValue)
+		uiaSimpleTable[6] = guarded2(uiaFault, uiaGetHostProvider)
 
 		copy(uiaFragmentTable[:3], unknown[:])
-		uiaFragmentTable[3] = syscall.NewCallback(uiaNavigate)
-		uiaFragmentTable[4] = syscall.NewCallback(uiaGetRuntimeID)
-		uiaFragmentTable[5] = syscall.NewCallback(uiaGetBoundingRectangle)
-		uiaFragmentTable[6] = syscall.NewCallback(uiaGetEmbeddedRoots)
-		uiaFragmentTable[7] = syscall.NewCallback(uiaSetFocus)
-		uiaFragmentTable[8] = syscall.NewCallback(uiaGetFragmentRoot)
+		uiaFragmentTable[3] = guarded3(uiaFault, uiaNavigate)
+		uiaFragmentTable[4] = guarded2(uiaFault, uiaGetRuntimeID)
+		uiaFragmentTable[5] = guarded2(uiaFault, uiaGetBoundingRectangle)
+		uiaFragmentTable[6] = guarded2(uiaFault, uiaGetEmbeddedRoots)
+		uiaFragmentTable[7] = guarded1(uiaFault, uiaSetFocus)
+		uiaFragmentTable[8] = guarded2(uiaFault, uiaGetFragmentRoot)
 
 		copy(uiaFragmentRootTable[:9], uiaFragmentTable[:])
-		uiaFromPointCallback = syscall.NewCallback(uiaElementProviderFromPointBits)
+		uiaFromPointCallback = guarded4(uiaFault, uiaElementProviderFromPointBits)
 		uiaFragmentRootTable[9] = entry
-		uiaFragmentRootTable[10] = syscall.NewCallback(uiaGetFocus)
+		uiaFragmentRootTable[10] = guarded2(uiaFault, uiaGetFocus)
 
 		initializePatternTables(unknown[:])
 	})
@@ -247,9 +248,9 @@ func initializeUIACallbacks() bool {
 
 func (tree *uiaTree) initialize(state *windowState, nodes []platform.AccessibilityNode) error {
 	if !initializeUIACallbacks() {
-		if len(nodes) != 0 {
-			return fmt.Errorf("windows: UI Automation is unsupported on %s", runtime.GOARCH)
-		}
+		// Where the callbacks cannot be built (arm64: the floating-point thunk
+		// exists for amd64 only) the window simply has no UI Automation tree.
+		// It is a missing capability, not a reason to refuse to open.
 		return nil
 	}
 	tree.mu.Lock()
@@ -318,9 +319,6 @@ func (tree *uiaTree) update(nodes []platform.AccessibilityNode) error {
 	}
 	if !tree.supported {
 		tree.mu.Unlock()
-		if len(nodes) != 0 {
-			return fmt.Errorf("windows: UI Automation is unsupported on %s", runtime.GOARCH)
-		}
 		return nil
 	}
 	if !tree.engaged {

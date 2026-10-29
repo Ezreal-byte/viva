@@ -98,6 +98,8 @@ func nativeDeleteSecret(service, account string) error {
 	return secretError(darwinplatform.DeleteSecret(service, account))
 }
 
+func nativeShowFatalError(title, message string) { darwinplatform.ShowFatalError(title, message) }
+
 func nativeMonospaceFamilies() []string { return darwinplatform.MonospaceFamilies() }
 
 func nativeAppearance() Appearance {

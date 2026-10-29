@@ -112,6 +112,8 @@ func nativeDeleteSecret(service, account string) error {
 	return secretError(linuxplatform.DeleteSecret(service, account))
 }
 
+func nativeShowFatalError(title, message string) { linuxplatform.ShowFatalError(title, message) }
+
 func nativeMonospaceFamilies() []string { return linuxplatform.MonospaceFamilies() }
 
 func nativeAppearance() Appearance { return appearanceOf(linuxplatform.DarkAppearance()) }

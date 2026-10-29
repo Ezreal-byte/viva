@@ -86,6 +86,8 @@ func nativeLoadSecret(string, string) ([]byte, error) { return nil, ErrSecretSto
 func nativeDeleteSecret(string, string) error         { return ErrSecretStoreUnavailable }
 
 // A page cannot list the fonts of the machine it runs on.
+func nativeShowFatalError(string, string) {}
+
 func nativeMonospaceFamilies() []string { return nil }
 
 func nativeAppearance() Appearance { return appearanceOf(webplatform.DarkAppearance()) }

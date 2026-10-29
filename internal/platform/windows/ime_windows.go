@@ -562,20 +562,21 @@ func (state *windowState) setCaretVisible(visible bool) {
 }
 
 func (state *windowState) handleComposition(flags uintptr) {
+	// An input method that has no context to give, or a composition string it
+	// cannot report, loses that one composition. Closing the window over it would
+	// end the whole session for a password typed through a third-party IME.
 	context, _, _ := getInputContext.Call(state.window)
 	if context == 0 {
-		state.fail(fmt.Errorf("windows: acquire IME context"))
 		return
 	}
 	defer releaseInputContext.Call(state.window, context)
 	if flags&resultString != 0 {
 		value, err := compositionText(context, resultString)
-		if err != nil {
-			state.fail(err)
-			return
-		}
 		state.imeComposing = false
 		state.imeHasTarget = false
+		if err != nil {
+			return
+		}
 		state.handleTextEvent(platform.TextEvent{Kind: platform.TextInsert, Text: value})
 		return
 	}
@@ -584,7 +585,6 @@ func (state *windowState) handleComposition(flags uintptr) {
 	}
 	value, err := compositionText(context, compositionString)
 	if err != nil {
-		state.fail(err)
 		return
 	}
 	state.imeTarget, state.imeHasTarget = compositionTarget(context, value)
