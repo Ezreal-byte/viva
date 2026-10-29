@@ -36,7 +36,7 @@ const (
 
 const (
 	chartLineWidth        float32 = 2
-	chartFillOpacity      float32 = 0.4
+	chartFillOpacity      float32 = ChartAreaDefaultOpacity
 	chartGradientTop      float32 = 0.8
 	chartGradientBottom   float32 = 0.1
 	chartTooltipLayer     uint16  = 4

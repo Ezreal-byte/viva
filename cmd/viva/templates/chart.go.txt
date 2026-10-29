@@ -20,9 +20,14 @@ type ChartSeries struct {
 	AreaStyle *ChartAreaStyle
 }
 
+// ChartAreaDefaultOpacity is the fill alpha a chart uses when its series has no
+// ChartAreaStyle. Set ChartAreaStyle.Opacity to this value to keep the default
+// alpha while overriding only the color or gradient.
+const ChartAreaDefaultOpacity = 0.4
+
 // ChartAreaStyle controls a series' fill independently of its line. The
-// pointer on ChartSeries is optional; an explicit zero Opacity is transparent.
-// It does not affect gaps, stacking, stroke color, or tooltip markers.
+// pointer on ChartSeries is optional; an explicit zero Opacity is transparent,
+// so use ChartAreaDefaultOpacity when only the color should change.
 type ChartAreaStyle struct {
 	// Color overrides the series fill color. A zero color uses the series color.
 	Color ui.Color

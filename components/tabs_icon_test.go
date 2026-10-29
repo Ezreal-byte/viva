@@ -73,3 +73,32 @@ func TestTabIconWithoutTextIsCenteredEvenInAShortTrigger(t *testing.T) {
 		}
 	}
 }
+
+// An icon-only tab still needs a name: the label is hidden, not dropped from
+// the accessibility tree.
+func TestIconOnlyTabKeepsItsAccessibleName(t *testing.T) {
+	icon := ui.Icon{ViewBox: 24, Commands: []ui.PathCommand{ui.MoveTo(2, 12), ui.LineTo(22, 12)}}
+	var canvas ui.Canvas
+	theme := ui.LightTheme()
+	canvas.SetMeasurer(chartTestMeasure)
+	options := []TabOption{
+		{ID: ui.Item(1), Label: "Overview", Icon: icon, IconOnly: true},
+		{ID: ui.Item(2), Label: "Disk", Icon: icon, IconOnly: true},
+	}
+	BeginTabs(&canvas, theme, ui.Rect{X: 10, Y: 20, Width: 300, Height: 36}, options, ui.Item(1)).Paint()
+	if texts := canvas.Texts(); len(texts) != 0 {
+		t.Fatalf("icon-only tabs painted %d labels", len(texts))
+	}
+	hits := canvas.Hits()
+	if len(hits) != 2 || hits[0].Label != "Overview" || hits[1].Label != "Disk" {
+		t.Fatalf("icon-only tabs lost their names: %+v", hits)
+	}
+	canvas.Reset()
+	BeginTabs(&canvas, theme, ui.Rect{}, nil, ui.ID{}).Fit()
+	for index, option := range options {
+		width := tabsTriggerPad*2 + theme.Metrics.FontSizeM
+		if got := (Tabs{canvas: &canvas, theme: theme, options: options, fit: true}).contentWidth(option) + tabsTriggerPad*2; got != width {
+			t.Fatalf("tab %d icon-only Fit width=%v want %v", index, got, width)
+		}
+	}
+}

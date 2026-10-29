@@ -27,6 +27,9 @@ type TabOption struct {
 	Disabled bool
 	// Icon is an optional leading icon. Icon and label form one centered group.
 	Icon ui.Icon
+	// IconOnly hides the label while keeping it as the tab's accessible name.
+	// Set Label even when only the icon is painted.
+	IconOnly bool
 }
 
 // Tabs paints a compact Base UI-style tab list. The active tab and associated
@@ -407,10 +410,13 @@ func (tabs Tabs) itemGap() float32 {
 }
 
 func (tabs Tabs) contentWidth(option TabOption) float32 {
-	width := tabs.canvas.TextWidthWeight(option.Label, tabs.theme.Metrics.FontSizeM, ui.WeightMedium)
+	width := float32(0)
+	if !option.IconOnly {
+		width = tabs.canvas.TextWidthWeight(option.Label, tabs.theme.Metrics.FontSizeM, ui.WeightMedium)
+	}
 	if len(option.Icon.Commands) > 0 || len(option.Icon.Layers) > 0 {
 		width += tabs.theme.Metrics.FontSizeM
-		if option.Label != "" {
+		if option.Label != "" && !option.IconOnly {
 			width += 6
 		}
 	}
@@ -431,18 +437,22 @@ func (tabs Tabs) paintContent(option TabOption, trigger ui.Rect, style ui.TextSt
 	}
 	size := min(tabs.theme.Metrics.FontSizeM, max(0, b.Height))
 	gap := float32(0)
-	if option.Label != "" {
+	if option.Label != "" && !option.IconOnly {
 		gap = 6
 	}
-	width := min(tabs.canvas.TextWidthWeight(option.Label, style.Size, style.Weight)+size+gap, b.Width)
+	text := option.Label
+	if option.IconOnly {
+		text = ""
+	}
+	width := min(tabs.canvas.TextWidthWeight(text, style.Size, style.Weight)+size+gap, b.Width)
 	if tabs.direction != TabsVertical {
 		b.X += (b.Width - width) / 2
 	}
 	tabs.canvas.DrawIcon(option.Icon, ui.Rect{X: b.X, Y: b.Y + (b.Height-size)/2, Width: size, Height: size}, style.Color)
-	if option.Label == "" {
+	if text == "" {
 		return
 	}
 	b.X += size + gap
 	b.Width = max(0, width-size-gap)
-	tabs.canvas.Label(option.Label, b, style)
+	tabs.canvas.Label(text, b, style)
 }
