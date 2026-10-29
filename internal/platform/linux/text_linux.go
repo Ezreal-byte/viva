@@ -349,14 +349,31 @@ func MeasureMono(size float32, face ui.MonoFace) (width, height float32, err err
 	return metrics.Width, metrics.Height, nil
 }
 
+// monoFamily is the Pango family list of a face: its primary font, then the
+// families that draw what the primary lacks, in the order the application gave,
+// then the generic fixed-pitch family fontconfig chooses for the rest.
 func monoFamily(face ui.MonoFace) string {
-	if name := ui.MonoFamilyName(face); name != "" {
-		return name + ", monospace"
+	name := ui.MonoFamilyName(face)
+	fallbacks := ui.MonoFallbacks(face)
+	switch {
+	case name == "" && len(fallbacks) == 0:
+		if ui.MonoIsClassic(face) {
+			return "DejaVu Sans Mono"
+		}
+		return "monospace"
+	case name == "":
+		if ui.MonoIsClassic(face) {
+			name = "DejaVu Sans Mono"
+		}
 	}
-	if face == ui.MonoClassic {
-		return "DejaVu Sans Mono"
+	list := name
+	for _, fallback := range fallbacks {
+		if list != "" {
+			list += ", "
+		}
+		list += fallback
 	}
-	return "monospace"
+	return list + ", monospace"
 }
 
 func NewTextMeasurer() (text.MeasureFunc, func(), error) {

@@ -1113,8 +1113,13 @@ static NSUInteger viva_text_index_at(viva_editor_line line, NSString *shown, CGF
 
 // viva_mono_font is the system fixed-pitch font, the one every fixed-pitch label
 // and the cell metrics are built from.
-#define VIVA_MONO_FAMILY_SLOTS 256
+//
+// A face from 2 up stands for an installed family and the families that draw what it
+// lacks; viva_register_mono_family teaches the numbers, in registration order.
+#define VIVA_MONO_FAMILY_SLOTS 4098 /* the 2 built-in faces and ui.MaxMonoFaces */
 static NSString *viva_mono_families[VIVA_MONO_FAMILY_SLOTS];
+static NSArray<NSString *> *viva_mono_fallbacks[VIVA_MONO_FAMILY_SLOTS];
+static BOOL viva_mono_classic[VIVA_MONO_FAMILY_SLOTS];
 static NSObject *viva_mono_family_lock(void) {
     static NSObject *lock;
     static dispatch_once_t once;
@@ -1122,22 +1127,36 @@ static NSObject *viva_mono_family_lock(void) {
     return lock;
 }
 
-void viva_register_mono_family(int face, const char *utf8) {
-    if (face < 2 || face >= VIVA_MONO_FAMILY_SLOTS || utf8 == NULL) {
+void viva_register_mono_family(int face, const char *utf8, int classic, const char *fallbacks) {
+    if (face < 2 || face >= VIVA_MONO_FAMILY_SLOTS) {
         return;
     }
     @synchronized(viva_mono_family_lock()) {
         [viva_mono_families[face] release];
-        viva_mono_families[face] = [[NSString alloc] initWithUTF8String:utf8];
+        [viva_mono_fallbacks[face] release];
+        viva_mono_families[face] = (utf8 != NULL && utf8[0] != '\0') ? [[NSString alloc] initWithUTF8String:utf8] : nil;
+        viva_mono_classic[face] = classic != 0;
+        // The fallbacks arrive as one name per line.
+        NSString *joined = fallbacks != NULL ? [[NSString alloc] initWithUTF8String:fallbacks] : nil;
+        viva_mono_fallbacks[face] = (joined != nil && joined.length > 0) ? [[joined componentsSeparatedByString:@"\n"] retain] : nil;
+        [joined release];
     }
 }
 
-static NSString *viva_mono_family_name(int face) {
+// viva_mono_face_traits copies what a face stands for: its primary family (nil for a
+// built-in one), whether the built-in primary is the classic face, and its fallback
+// families in order.
+static void viva_mono_face_traits(int face, NSString **family, BOOL *classic, NSArray<NSString *> **fallbacks) {
+    *family = nil;
+    *classic = face == 1;
+    *fallbacks = nil;
     if (face < 2 || face >= VIVA_MONO_FAMILY_SLOTS) {
-        return nil;
+        return;
     }
     @synchronized(viva_mono_family_lock()) {
-        return [[viva_mono_families[face] retain] autorelease];
+        *family = [[viva_mono_families[face] retain] autorelease];
+        *classic = viva_mono_classic[face];
+        *fallbacks = [[viva_mono_fallbacks[face] retain] autorelease];
     }
 }
 
@@ -1159,8 +1178,8 @@ char *viva_list_mono_families(void) {
     }
 }
 
-static NSFont *viva_mono_font(CGFloat size, CGFloat weight, int face) {
-    NSString *family = viva_mono_family_name(face);
+// viva_mono_base_font is the primary font of a face, without its fallbacks.
+static NSFont *viva_mono_base_font(CGFloat size, CGFloat weight, NSString *family, BOOL classic) {
     if (family != nil) {
         NSFont *named = [[NSFontManager sharedFontManager] fontWithFamily:family
                                                                    traits:(weight >= 0.34 ? NSBoldFontMask : 0)
@@ -1170,14 +1189,46 @@ static NSFont *viva_mono_font(CGFloat size, CGFloat weight, int face) {
             return named;
         }
     }
-    if (face == 1) {
-        NSFont *classic = [NSFont userFixedPitchFontOfSize:size];
-        if (classic != nil) {
-            return classic;
+    if (classic) {
+        NSFont *classicFont = [NSFont userFixedPitchFontOfSize:size];
+        if (classicFont != nil) {
+            return classicFont;
         }
     }
     NSFont *font = [NSFont monospacedSystemFontOfSize:size weight:weight];
     return font != nil ? font : [NSFont userFixedPitchFontOfSize:size];
+}
+
+// viva_mono_font_primary is the primary font of a face alone, the one the cell is measured in.
+static NSFont *viva_mono_font_primary(CGFloat size, CGFloat weight, int face) {
+    NSString *family = nil;
+    BOOL classic = NO;
+    NSArray<NSString *> *fallbacks = nil;
+    viva_mono_face_traits(face, &family, &classic, &fallbacks);
+    return viva_mono_base_font(size, weight, family, classic);
+}
+
+// viva_mono_font is the font of a face at a size and weight: its primary font, with the
+// families that draw what the primary lacks as the font's cascade list, so CoreText
+// tries them in order, before its own choice, for every character the primary has no
+// glyph for. A family that is not installed is skipped. The cell is the primary's: the
+// fallbacks never take part in the metrics, and every glyph is placed on the grid.
+static NSFont *viva_mono_font(CGFloat size, CGFloat weight, int face) {
+    NSString *family = nil;
+    BOOL classic = NO;
+    NSArray<NSString *> *fallbacks = nil;
+    viva_mono_face_traits(face, &family, &classic, &fallbacks);
+    NSFont *base = viva_mono_base_font(size, weight, family, classic);
+    if (base == nil || fallbacks.count == 0) {
+        return base;
+    }
+    NSMutableArray<NSFontDescriptor *> *cascade = [NSMutableArray arrayWithCapacity:fallbacks.count];
+    for (NSString *name in fallbacks) {
+        [cascade addObject:[NSFontDescriptor fontDescriptorWithFontAttributes:@{NSFontFamilyAttribute: name}]];
+    }
+    NSFontDescriptor *descriptor = [base.fontDescriptor fontDescriptorByAddingAttributes:@{NSFontCascadeListAttribute: cascade}];
+    NSFont *stacked = [NSFont fontWithDescriptor:descriptor size:size];
+    return stacked != nil ? stacked : base;
 }
 
 // viva_font_smoothing_enabled is whether the user leaves font smoothing on. AppKit turns it
@@ -1205,7 +1256,8 @@ static void viva_prepare_text_context(CGContextRef context, CGFloat scale) {
 // The native editor and the headless renderer both build it here, so they can only ever
 // look the same.
 static CTLineRef viva_new_mono_line(NSString *shown, CGFloat fontSize, NSColor *color, int monoFace) {
-    CTFontRef font = CTFontCreateWithName((CFStringRef)viva_mono_font(fontSize, 0, monoFace).fontName, fontSize, NULL);
+    // The NSFont itself, not its name looked up again: the name loses the fallback families.
+    CTFontRef font = (CTFontRef)CFRetain(viva_mono_font(fontSize, 0, monoFace));
     if (font == NULL) {
         return NULL;
     }
@@ -1316,7 +1368,8 @@ static id<MTLTexture> viva_text_input_texture(
     if (terminal) {
         // Sit on the same baseline as the terminal's own text, whatever the
         // composed characters' fallback fonts measure.
-        CTFontRef gridFont = CTFontCreateWithName((CFStringRef)viva_mono_font(fontSize, 0, monoFace).fontName, fontSize, NULL);
+        // The primary font alone: the fallbacks never take part in the metrics.
+        CTFontRef gridFont = CTFontCreateWithName((CFStringRef)viva_mono_font_primary(fontSize, 0, monoFace).fontName, fontSize, NULL);
         ascent = CTFontGetAscent(gridFont);
         descent = CTFontGetDescent(gridFont);
         CFRelease(gridFont);
@@ -5674,7 +5727,8 @@ int viva_measure_mono(double font_size, int mono_face, double *advance, double *
         return 1;
     }
     @autoreleasepool {
-        NSFont *native = viva_mono_font(font_size, 0, mono_face);
+        // The cell is the primary font's, whatever the face's fallbacks hold.
+        NSFont *native = viva_mono_font_primary(font_size, 0, mono_face);
         if (native == nil) {
             return 2;
         }
