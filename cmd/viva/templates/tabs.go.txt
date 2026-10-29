@@ -409,7 +409,10 @@ func (tabs Tabs) itemGap() float32 {
 func (tabs Tabs) contentWidth(option TabOption) float32 {
 	width := tabs.canvas.TextWidthWeight(option.Label, tabs.theme.Metrics.FontSizeM, ui.WeightMedium)
 	if len(option.Icon.Commands) > 0 || len(option.Icon.Layers) > 0 {
-		width += tabs.theme.Metrics.FontSizeM + 6
+		width += tabs.theme.Metrics.FontSizeM
+		if option.Label != "" {
+			width += 6
+		}
 	}
 	return width
 }
@@ -426,13 +429,20 @@ func (tabs Tabs) paintContent(option TabOption, trigger ui.Rect, style ui.TextSt
 		}
 		return
 	}
-	width := min(tabs.contentWidth(option), b.Width)
+	size := min(tabs.theme.Metrics.FontSizeM, max(0, b.Height))
+	gap := float32(0)
+	if option.Label != "" {
+		gap = 6
+	}
+	width := min(tabs.canvas.TextWidthWeight(option.Label, style.Size, style.Weight)+size+gap, b.Width)
 	if tabs.direction != TabsVertical {
 		b.X += (b.Width - width) / 2
 	}
-	size := min(tabs.theme.Metrics.FontSizeM, max(0, b.Height))
 	tabs.canvas.DrawIcon(option.Icon, ui.Rect{X: b.X, Y: b.Y + (b.Height-size)/2, Width: size, Height: size}, style.Color)
-	b.X += size + 6
-	b.Width = max(0, width-size-6)
+	if option.Label == "" {
+		return
+	}
+	b.X += size + gap
+	b.Width = max(0, width-size-gap)
 	tabs.canvas.Label(option.Label, b, style)
 }

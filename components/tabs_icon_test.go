@@ -1,9 +1,10 @@
 package components
 
 import (
-	"github.com/vivaui/viva/ui"
 	"math"
 	"testing"
+
+	"github.com/vivaui/viva/ui"
 )
 
 func TestTabsIconsCenterWithLabelAndFit(t *testing.T) {
@@ -45,6 +46,30 @@ func TestTabsIconsCenterWithLabelAndFit(t *testing.T) {
 			if got := canvas.Hits()[0].Bounds.Width; got != want {
 				t.Fatalf("Fit icon width=%v want%v", got, want)
 			}
+		}
+	}
+}
+
+func TestTabIconWithoutTextIsCenteredEvenInAShortTrigger(t *testing.T) {
+	icon := ui.Icon{ViewBox: 24, Layers: []ui.IconLayer{{Fill: ui.RGB(0, 100, 200), Commands: []ui.PathCommand{ui.MoveTo(2, 2), ui.LineTo(22, 2), ui.LineTo(22, 22), ui.LineTo(2, 22), ui.ClosePath()}}}}
+	for _, height := range []float32{8, 26, 36} {
+		var canvas ui.Canvas
+		theme := ui.LightTheme()
+		option := TabOption{ID: ui.Item(1), Icon: icon}
+		tabs := BeginTabs(&canvas, theme, ui.Rect{}, nil, ui.ID{})
+		trigger := ui.Rect{X: 30, Y: 45, Width: 100, Height: height}
+		tabs.paintContent(option, trigger, ui.TextStyle{Size: theme.Metrics.FontSizeM, Weight: ui.WeightMedium, Color: theme.Foreground})
+		lowX, lowY, highX, highY := float32(math.MaxFloat32), float32(math.MaxFloat32), float32(-math.MaxFloat32), float32(-math.MaxFloat32)
+		for _, triangle := range canvas.Triangles() {
+			for _, p := range triangle.Points {
+				lowX = min(lowX, p.X)
+				highX = max(highX, p.X)
+				lowY = min(lowY, p.Y)
+				highY = max(highY, p.Y)
+			}
+		}
+		if math.Abs(float64((lowX+highX)/2-(trigger.X+trigger.Width/2))) > .001 || math.Abs(float64((lowY+highY)/2-(trigger.Y+trigger.Height/2))) > .001 {
+			t.Fatal("icon-only tab is not centered")
 		}
 	}
 }

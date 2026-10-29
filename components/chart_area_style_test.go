@@ -1,9 +1,11 @@
 package components
 
 import (
-	"github.com/vivaui/viva/ui"
 	"math"
+	"slices"
 	"testing"
+
+	"github.com/vivaui/viva/ui"
 )
 
 func TestChartAreaStyleOpacityAndGradient(t *testing.T) {
@@ -25,7 +27,7 @@ func TestChartAreaStyleOpacityAndGradient(t *testing.T) {
 		}
 	}
 	from, to := ui.RGB(100, 10, 200), ui.Color{Red: .2, Blue: 1, Alpha: .1}
-	for _, bounds := range [][2]float32{{10, 100}, {100, 10}, {10, 10}} {
+	for _, bounds := range [][2]float32{{10, 100}, {100, 10}, {10, 10}, {10, 10.1}, {10.1, 10}} {
 		style := ChartAreaStyle{Opacity: .25, Gradient: &ChartAreaGradient{From: from, To: to}}
 		chartAreaFillStyle(&gradient, ChartFillGradient, color, bounds[0], bounds[1], &style)
 		if !close(gradient.From.Alpha, .25) || !close(gradient.To.Alpha, .025) || gradient.From.Red != from.Red || gradient.To.Blue != to.Blue {
@@ -34,11 +36,35 @@ func TestChartAreaStyleOpacityAndGradient(t *testing.T) {
 		if !chartFinite(gradient.Start.Y) || !chartFinite(gradient.End.Y) || gradient.Start == gradient.End {
 			t.Fatal("degenerate gradient")
 		}
+		if bounds[1] < bounds[0] && gradient.End.Y >= gradient.Start.Y {
+			t.Fatal("subpixel negative area inverted its gradient")
+		}
 	}
 	override := ui.RGB(255, 0, 0)
 	fill := chartAreaFillStyle(&gradient, ChartFillSolid, color, 10, 100, &ChartAreaStyle{Color: override, Opacity: .5})
 	if fill.Fill.Red != override.Red || fill.Fill.Green != 0 || fill.Fill.Alpha != .5 {
 		t.Fatal("fill color override changed")
+	}
+}
+
+func TestTransparentAreaDoesNotTessellateAnInvisibleFill(t *testing.T) {
+	theme := ui.LightTheme()
+	chart := chartTestArea(theme)
+	chart.HideTooltip = true
+	chart.YAxis = ChartAxis{Fixed: true, Min: 0, Max: 400}
+	var canvas ui.Canvas
+	chart.Fill = ChartFillNone
+	PaintAreaChart(&canvas, theme, ui.Rect{Width: 320, Height: 180}, ui.Item(1), chart, nil)
+	lines := slices.Clone(canvas.Triangles())
+	canvas.Reset()
+	area := ChartAreaStyle{Opacity: 0}
+	for i := range chart.Series {
+		chart.Series[i].AreaStyle = &area
+	}
+	chart.Fill = ChartFillGradient
+	PaintAreaChart(&canvas, theme, ui.Rect{Width: 320, Height: 180}, ui.Item(1), chart, nil)
+	if !slices.Equal(lines, canvas.Triangles()) {
+		t.Fatal("transparent series changed the line or tessellated a fill")
 	}
 }
 

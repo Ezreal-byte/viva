@@ -800,6 +800,10 @@ func chartPaintAreaSeries(canvas *ui.Canvas, theme ui.Theme, chart *AreaChart, s
 			continue
 		}
 		color := spec.series[series].Color
+		fillVisible := chart.Fill != ChartFillNone
+		if area := spec.series[series].AreaStyle; area != nil {
+			fillVisible = fillVisible && chartFinite(area.Opacity) && area.Opacity > 0
+		}
 		from := 0
 		for from < count {
 			start, end := from, count-1
@@ -816,7 +820,7 @@ func chartPaintAreaSeries(canvas *ui.Canvas, theme ui.Theme, chart *AreaChart, s
 				_, top := spec.span(series, index)
 				points[index-start] = ui.Point{X: geo.px(index) - origin.X, Y: geo.py(top) - origin.Y}
 			}
-			if chart.Fill != ChartFillNone && end > start {
+			if fillVisible && end > start {
 				chartPaintAreaFill(canvas, chart, spec, frame, scratch, series, start, end, color, baseline, origin)
 			}
 			if end > start && width > 0 {
@@ -943,7 +947,11 @@ func chartAreaFillStyle(gradient *ui.LinearGradient, fill ChartFill, color ui.Co
 	}
 	span := baseline - extreme
 	if span > -1 && span < 1 {
-		span = 1
+		if span < 0 {
+			span = -1
+		} else {
+			span = 1
+		}
 	}
 	from, to := color, color
 	from.Alpha *= chartGradientTop

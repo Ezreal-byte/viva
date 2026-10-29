@@ -13,11 +13,13 @@ var chartAreaComponent = Component{
 	paint: (*State).paintChartArea, pointer: (*State).pointerChart, key: (*State).keyChart,
 	initialize: (*State).initializeChart,
 	Examples: []Example{
-		{ID: "area-style", Title: "自定义渐变填充", Description: "每个序列单独配置填充透明度和渐变端点，折线与图例颜色保持独立。", Height: 320, Snippet: `series[0].AreaStyle = &components.ChartAreaStyle{
+		{ID: "area-style", Title: "自定义渐变填充", Description: "每个序列单独配置填充透明度和渐变端点，折线与图例颜色保持独立。", Height: 320, Snippet: `transparent := theme.Chart[0]
+transparent.Alpha = 0
+series[0].AreaStyle = &components.ChartAreaStyle{
     Opacity: .24,
     Gradient: &components.ChartAreaGradient{
         From: theme.Chart[0],
-        To: ui.Color{}, // transparent at the baseline
+        To: transparent,
     },
 }
 chart := components.AreaChart{
@@ -208,7 +210,8 @@ func (state *State) paintChartArea(canvas *ui.Canvas, theme ui.Theme, size ui.Si
 	title := state.Text("面积图 · 月访问量", "Area chart · Monthly visitors")
 	switch state.exampleID {
 	case "area-style":
-		demo.areaGradient = components.ChartAreaGradient{From: theme.Chart[0], To: ui.Color{}}
+		demo.areaGradient = components.ChartAreaGradient{From: theme.Chart[0], To: theme.Chart[0]}
+		demo.areaGradient.To.Alpha = 0
 		demo.areaStyle = components.ChartAreaStyle{Opacity: .24, Gradient: &demo.areaGradient}
 		series[0].AreaStyle = &demo.areaStyle
 		chart.Curve, chart.Legend = components.ChartCurveMonotone, components.ChartLegendBottom
