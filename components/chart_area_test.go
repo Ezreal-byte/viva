@@ -552,3 +552,29 @@ func TestLinearXAxisTicksAreRoundValues(t *testing.T) {
 		t.Fatalf("only %d x ticks", seen)
 	}
 }
+
+func TestXAxisTimeLabelsStayInsideChart(t *testing.T) {
+	for _, width := range []float32{180, 300, 480} {
+		for _, stamp := range []string{"20:33:25", "10-29 20:33", "2026-10-29 20:33:25"} {
+			var canvas ui.Canvas
+			canvas.SetMeasurer(chartTestMeasure)
+			theme := ui.LightTheme()
+			bounds := ui.Rect{X: 120, Y: 30, Width: width, Height: 200}
+			chart := AreaChart{Series: chartTestSeries(theme)[:1], X: []float32{0, .5, 1}, Values: [][]float32{{10, 30, 20}}, XAxis: ChartAxis{Linear: true, Fixed: true, Min: 0, Max: 1, Ticks: 3, Format: func(dst []byte, value float32) []byte { return append(dst, stamp...) }}}
+			plot := PaintAreaChart(&canvas, theme, bounds, ui.Item(1), chart, nil)
+			seen := 0
+			for _, text := range canvas.Texts() {
+				if text.Bounds.Y <= plot.Plot.Y+plot.Plot.Height {
+					continue
+				}
+				seen++
+				if text.Bounds.X < bounds.X || text.Bounds.X+text.Bounds.Width > bounds.X+bounds.Width+.001 {
+					t.Fatalf("time label %q escaped width %v: %+v", stamp, width, text.Bounds)
+				}
+			}
+			if seen < 2 {
+				t.Fatal("time-axis labels disappeared")
+			}
+		}
+	}
+}
