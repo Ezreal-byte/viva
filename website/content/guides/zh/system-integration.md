@@ -23,6 +23,7 @@ group: guides
 | 状态栏图标与面板 | `Application.AddStatusItem`、`app.WindowPanel` |
 | 等宽字体 | `app.MonospaceFamilies` |
 | Dock 角标 | `Application.SetDockBadge` |
+| 文件管理器为文件或文件夹显示的图标 | `app.FileIcon` |
 
 ## 各平台用什么实现
 

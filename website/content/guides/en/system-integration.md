@@ -23,6 +23,7 @@ The `app` package exposes a small, synchronous set of system integrations. An op
 | Status-area icons and panels | `Application.AddStatusItem`, `app.WindowPanel` |
 | Fixed-pitch fonts | `app.MonospaceFamilies` |
 | Dock badge | `Application.SetDockBadge` |
+| The icon the file manager shows for a file or folder | `app.FileIcon` |
 
 ## What each platform uses
 
