@@ -98,6 +98,8 @@ WebView and no bundled rendering runtime.
   menu (NSMenu, a Win32 popup menu, `com.canonical.dbusmenu`); `WindowPanel` is
   the borderless popup that opens beside it and closes when it loses focus;
   `Window.Hide`/`Show` keep an application running without a visible window.
+- `Application.SetDockBadge` puts a label in the red badge macOS draws at the
+  corner of the application's Dock tile, and an empty label removes it.
 - `app.StoreSecret`/`LoadSecret`/`DeleteSecret` keep a small secret in the
   system's own store (Keychain, Credential Manager, Secret Service).
 - `ui.MonoFamily` draws fixed-pitch text in any installed family and
