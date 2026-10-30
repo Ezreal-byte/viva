@@ -197,11 +197,12 @@ func TestGenerateUserScope(t *testing.T) {
 		`VIProductVersion "2.0.1.0"`, `VIAddVersionKey /LANG=${LANG_ENGLISH} "FileVersion" "${APP_VERSION}"`,
 		`VIAddVersionKey /LANG=${LANG_SIMPCHINESE} "ProductName" "${APP_NAME}"`,
 		`!insertmacro MUI_LANGUAGE "English"`, `!insertmacro MUI_LANGUAGE "SimpChinese"`,
+		"!define MUI_FINISHPAGE_SHOWREADME\n",
 		`!define MUI_FINISHPAGE_SHOWREADME_TEXT "$(CREATE_DESKTOP_SHORTCUT)"`,
 		`!define MUI_FINISHPAGE_SHOWREADME_FUNCTION CreateDesktopShortcut`,
 		`LangString CREATE_DESKTOP_SHORTCUT ${LANG_ENGLISH} "Create a desktop shortcut"`,
 		`LangString CREATE_DESKTOP_SHORTCUT ${LANG_SIMPCHINESE} "创建桌面快捷方式"`,
-		`WriteRegDWORD HKCU "${UNINSTALL_KEY}" "DesktopShortcut" 1`,
+		`${IfNot} ${Errors}` + "\n" + `    WriteRegDWORD HKCU "${UNINSTALL_KEY}" "DesktopShortcut" 1`,
 		`!define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"`, "/SD IDCANCEL IDRETRY retry",
 		`RMDir "$INSTDIR"`, "  SetDateSave off\n",
 	} {
@@ -222,7 +223,8 @@ func TestGenerateUserScope(t *testing.T) {
 		`Delete "$INSTDIR\Uninstall.exe"`,
 		`Delete "$SMPROGRAMS\${APP_NAME}.lnk"`,
 		`ReadRegDWORD $0 HKCU "${UNINSTALL_KEY}" "DesktopShortcut"`,
-		"${If} $0 == 1\n    Delete \"$DESKTOP\\${APP_NAME}.lnk\"\n  ${EndIf}",
+		`${If} $0 == 1`,
+		`Delete "$DESKTOP\${APP_NAME}.lnk"`,
 	} {
 		if !strings.Contains(uninstall, want) {
 			t.Errorf("the uninstaller lacks %q", want)
@@ -237,7 +239,7 @@ func TestGenerateMachineScope(t *testing.T) {
 	for _, want := range []string{
 		"RequestExecutionLevel admin\n", `InstallDir "$PROGRAMFILES64\${APP_NAME}"`, "SetShellVarContext all",
 		`!define MUI_FINISHPAGE_SHOWREADME_FUNCTION CreateDesktopShortcut`,
-		`WriteRegDWORD HKLM "${UNINSTALL_KEY}" "DesktopShortcut" 1`,
+		`${IfNot} ${Errors}` + "\n" + `    WriteRegDWORD HKLM "${UNINSTALL_KEY}" "DesktopShortcut" 1`,
 		`ReadRegDWORD $0 HKLM "${UNINSTALL_KEY}" "DesktopShortcut"`,
 		`WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayName"`, `DeleteRegKey HKLM "${UNINSTALL_KEY}"`,
 		`ReadRegStr $0 HKLM "${UNINSTALL_KEY}" "InstallLocation"`, "SetRegView 64",

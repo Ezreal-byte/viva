@@ -254,15 +254,22 @@ func (script Script) Generate() ([]byte, error) {
 	line(`!insertmacro EnsureClosed "un."`)
 	line("")
 
-	// The finish page runs after installation. Record ownership separately so
-	// uninstalling never removes a same-named shortcut the installer did not make.
+	// The finish page runs after installation. The checkbox is MUI's "show
+	// readme" option, so a silent install (/S) skips it and creates no shortcut.
+	// The marker records that this installer created the shortcut once; the
+	// uninstaller deletes only on that marker, so a same-named shortcut the
+	// installer never made survives.
 	line(`Function CreateDesktopShortcut`)
 	if script.Icon != "" {
 		line(`  CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_ICON}"`)
 	} else {
 		line(`  CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"`)
 	}
-	line(`  WriteRegDWORD %s "${UNINSTALL_KEY}" "DesktopShortcut" 1`, root)
+	// A failed CreateShortcut leaves the error flag set; do not claim a shortcut
+	// the uninstaller would then delete.
+	line(`  ${IfNot} ${Errors}`)
+	line(`    WriteRegDWORD %s "${UNINSTALL_KEY}" "DesktopShortcut" 1`, root)
+	line(`  ${EndIf}`)
 	line(`FunctionEnd`)
 	line("")
 
