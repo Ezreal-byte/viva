@@ -19,6 +19,9 @@ func TestCheckboxEnclosingCardHasOneSemanticTarget(t *testing.T) {
 	if hit.Bounds != card || !hit.Checked || hit.Role != ui.RoleCheckbox || hit.Label != "Production server" {
 		t.Fatalf("selection card target: %+v", hit)
 	}
+	if !hit.Focusable || hit.SkipTab {
+		t.Fatalf("enclosing target must keep the checkbox in the Tab order: %+v", hit)
+	}
 	if got := canvas.Rectangles()[0].Bounds; got.X != 270 || got.Y != 40 || got.Width != 16 {
 		t.Fatalf("enclosing target changed the visual square: %+v", got)
 	}

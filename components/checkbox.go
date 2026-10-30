@@ -42,7 +42,13 @@ func (checkbox Checkbox) Label(label string) Checkbox {
 
 // HitBounds makes an enclosing label or selection card activate this checkbox.
 // The visual square keeps its normal position and size; zero bounds use the
-// default enlarged target. The entire target exposes one checkbox semantic hit.
+// default enlarged target. The entire target exposes one checkbox semantic hit,
+// so it replaces the square's target rather than adding to it: the rect must
+// contain the square, and it must not cover other interactive hits painted
+// after this checkbox, because the later hit wins. Canvas.HitLabel is the other
+// way to make an enclosing region activate a control; it keeps the control's
+// own bounds and exposes the region as that control's label, so prefer it when
+// the semantic target should stay the square.
 func (checkbox Checkbox) HitBounds(bounds ui.Rect) Checkbox {
 	checkbox.hitBounds = bounds
 	return checkbox
