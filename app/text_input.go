@@ -75,6 +75,11 @@ const (
 	TextMoveWordRightAndModifySelection
 	TextDeleteWordBackward
 	TextDeleteWordForward
+	// TextDeleteToLineStart and TextDeleteToLineEnd remove the text between the
+	// caret and the start or end of its line (Command+Backspace and
+	// Command+Delete on macOS).
+	TextDeleteToLineStart
+	TextDeleteToLineEnd
 )
 
 // TextEvent contains rune-indexed selection and replacement ranges.
