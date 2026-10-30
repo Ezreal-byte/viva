@@ -709,6 +709,12 @@ func chartFinish(canvas *ui.Canvas, theme ui.Theme, frame chartFrame, spec *char
 	if active {
 		cache = chartBuildTooltip(spec, state, index)
 		value = cache.description
+	} else if !id.IsZero() && count > 0 && canvas.Focused() == id {
+		// A pointer fills the group's value by hovering a point; a keyboard
+		// user has no hover, so the focused chart describes its latest point
+		// instead of announcing nothing.
+		cache = chartBuildTooltip(spec, state, count-1)
+		value = cache.description
 	}
 	label := spec.label
 	if label == "" {
