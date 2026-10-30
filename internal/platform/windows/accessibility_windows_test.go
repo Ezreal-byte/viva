@@ -18,6 +18,7 @@ func TestUIAStructureABI(t *testing.T) {
 		{"VARIANT", unsafe.Sizeof(variant{}), 24},
 		{"UiaRect", unsafe.Sizeof(uiaRectangle{}), 32},
 		{"COM interface tear-off", unsafe.Sizeof(uiaInterface{}), 16},
+		{"MEMORY_BASIC_INFORMATION", unsafe.Sizeof(memoryBasicInformation{}), 48},
 	} {
 		if layout.size != layout.want {
 			t.Errorf("%s: size %d, want %d", layout.name, layout.size, layout.want)
@@ -343,5 +344,15 @@ func TestUIAUpdateCostsNothingUntilAClientAsks(t *testing.T) {
 	}
 	if len(tree.children) != 0 {
 		t.Fatal("elements exist with no client")
+	}
+}
+
+func TestUIANavigateRejectsAnUnwritableResult(t *testing.T) {
+	var result uintptr
+	if status := uiaNavigate(0, 0, uintptr(unsafe.Pointer(&result))); uint32(status) != resultElementNotAvailable {
+		t.Fatalf("valid result without a provider: status %#x, want element not available", status)
+	}
+	if status := uiaNavigate(0, 0, ^uintptr(0)); uint32(status) != resultPointer {
+		t.Fatalf("unwritable result: status %#x, want E_POINTER", status)
 	}
 }
