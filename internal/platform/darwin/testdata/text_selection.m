@@ -530,6 +530,26 @@ int main(void) {
         unichar f5 = NSF5FunctionKey;
         [view keyDown:keyEvent([NSString stringWithCharacters:&f5 length:1], 0)];
         assert(rawCount == 3 && rawKeys[2] == VIVA_KEY_F1 + 4);
+        // AppKit's window keeps Control+Tab for itself, so the view claims it as a
+        // key equivalent and hands it to the application; the other Tab chords
+        // are left to the normal key path.
+        rawCount = 0;
+        assert([view performKeyEquivalent:keyEvent(@"\t", NSEventModifierFlagControl)]);
+        assert(rawCount == 1 && rawKeys[0] == VIVA_KEY_TAB && rawModifiers[0] == VIVA_MODIFIER_CONTROL && rawText[0][0] == 0);
+        unichar backTab = NSBackTabCharacter;
+        assert([view performKeyEquivalent:keyEvent([NSString stringWithCharacters:&backTab length:1],
+            NSEventModifierFlagControl | NSEventModifierFlagShift)]);
+        assert(rawCount == 2 && rawKeys[1] == VIVA_KEY_TAB && rawModifiers[1] == (VIVA_MODIFIER_CONTROL | VIVA_MODIFIER_SHIFT));
+        assert(![view performKeyEquivalent:keyEvent(@"\t", 0)]);
+        assert(![view performKeyEquivalent:keyEvent(@"\t", NSEventModifierFlagShift)]);
+        assert(![view performKeyEquivalent:keyEvent(@"\t", NSEventModifierFlagCommand)]);
+        assert(![view performKeyEquivalent:keyEvent(@"\t", NSEventModifierFlagControl | NSEventModifierFlagCommand)]);
+        assert(![view performKeyEquivalent:keyEvent(@"a", NSEventModifierFlagControl)]);
+        assert(rawCount == 2);
+        rawCount = 0;
+        [view beginComposition];
+        assert(![view performKeyEquivalent:keyEvent(@"\t", NSEventModifierFlagControl)] && rawCount == 0);
+        [view endComposition];
         // Plain text and composition never come out raw.
         rawCount = 0;
         [view keyDown:keyEvent(@"a", 0)];

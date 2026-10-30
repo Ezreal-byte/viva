@@ -673,6 +673,18 @@ int viva_terminal_key_routes_raw(
         (alt != 0 && alt_sends_escape != 0);
 }
 
+/* viva_control_tab reports whether a key equivalent is Tab (or Shift+Tab, which
+ * AppKit types as the back-tab character) with Control held and Command not:
+ * the chord the window reserves for key view navigation. */
+static int viva_control_tab(NSEventModifierFlags modifiers, NSString *characters) {
+    if ((modifiers & NSEventModifierFlagControl) == 0 || (modifiers & NSEventModifierFlagCommand) != 0 ||
+        characters.length != 1) {
+        return 0;
+    }
+    unichar character = [characters characterAtIndex:0];
+    return character == NSTabCharacter || character == NSBackTabCharacter;
+}
+
 int viva_terminal_key_code(unsigned short character) {
     switch (character) {
         case NSTabCharacter:
@@ -3307,6 +3319,17 @@ static int viva_navigation_command(SEL selector) {
         (NSEventModifierFlagCommand | NSEventModifierFlagControl |
          NSEventModifierFlagOption | NSEventModifierFlagShift);
     NSString *characters = event.charactersIgnoringModifiers;
+    if (_keyEventsEnabled && _callbackHandle != 0 && !_hasMarkedText && viva_control_tab(modifiers, characters)) {
+        // AppKit's window keeps Control+Tab and Control+Shift+Tab to move the
+        // key view and never passes them to keyDown:, so an application would
+        // not see the chord browsers and terminals switch tabs with. It is
+        // delivered here, before the window can take it. No release is
+        // promised: the window may swallow the matching keyUp too.
+        viva_key_event_count++;
+        vivaKeyEvent(_callbackHandle, self, VIVA_KEY_TAB, viva_modifier_flags(event.modifierFlags),
+            event.isARepeat ? 1 : 0, NULL, 0);
+        return YES;
+    }
     if (_textInputEnabled && _textTerminal && modifiers == NSEventModifierFlagCommand) {
         // A terminal has no selection to edit yet; only paste is meant here.
         if ([characters isEqualToString:@"v"] || [characters isEqualToString:@"V"]) {
