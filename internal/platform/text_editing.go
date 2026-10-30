@@ -169,12 +169,17 @@ func AppleTextEditingCommand(event KeyEvent) (TextCommand, bool) {
 // TextClipboardEvent performs clipboard I/O before returning an edit. A failed
 // read/write never changes the document, so a field with no selection and a broken
 // pasteboard keeps its text; secure fields never copy or cut. A cut is an empty
-// TextPaste, which the editor applies as a delete in the same undo unit.
+// TextPaste, which the editor applies as a delete in the same undo unit. A paste
+// with no text on the clipboard is a TextPasteNoText, so that a field which also
+// takes pictures can look for one.
 func TextClipboardEvent(state TextState, secure bool, action byte, read func() (string, error), write func(string) error) (TextEvent, bool, error) {
 	if action == 'v' {
 		value, err := read()
-		if err != nil || value == "" {
+		if err != nil {
 			return TextEvent{}, false, err
+		}
+		if value == "" {
+			return TextEvent{Kind: TextPasteNoText}, true, nil
 		}
 		return TextEvent{Kind: TextPaste, Text: value}, true, nil
 	}

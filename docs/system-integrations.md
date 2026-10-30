@@ -34,6 +34,21 @@ semantics; adapters never report a fabricated success.
 
 Callers should use `errors.Is` rather than matching error strings.
 
+## Pasting a picture into a text field
+
+A text field cannot hold a picture, so a paste (Command or Control+V, Shift+Insert)
+with no text on the clipboard changes nothing. The field is told: its
+`TextInput.OnEvent` receives a `TextPasteNoText` event and may then read the
+picture with `ClipboardImagePNG`, as a chat box that accepts a screenshot does.
+`TextEvent.Apply` ignores the event, so an ordinary editor needs no code for it,
+and a terminal never receives it. macOS, Windows, Linux and the headless driver
+send it; the browser sends it from the `paste` event when the clipboard data has
+no `text/plain` (not yet exercised in a browser).
+
+On Linux a focused text field that is not a terminal also takes Control+C, Control+X
+and Control+V (and the Insert and Delete forms) itself, ahead of `OnShortcut`, as
+it does on Windows; before, those chords reached only the application.
+
 ## Linux Boundary
 
 Linux clipboard and cursor support use the already-loaded XCB system library.

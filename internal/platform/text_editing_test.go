@@ -63,9 +63,21 @@ func TestClipboardEditingIsAtomicAndSecure(t *testing.T) {
 			t.Fatal("secure field was changed")
 		}
 	}
-	_, changed, err := TextClipboardEvent(state, false, 'v', func() (string, error) { return "", nil }, nil)
-	if changed || err != nil {
-		t.Fatal("empty clipboard deleted selection")
+	// A clipboard with no text deletes nothing; it is reported as a paste of no
+	// text, for a field that takes pictures.
+	event, changed, err := TextClipboardEvent(state, false, 'v', func() (string, error) { return "", nil }, nil)
+	if !changed || err != nil || event.Kind != TextPasteNoText || event.Text != "" || event.HasReplacement {
+		t.Fatalf("empty clipboard paste = %+v changed=%v err=%v", event, changed, err)
+	}
+	editor := text.NewEditor("secret")
+	editor.SetSelection(text.Range{End: 6})
+	event.Apply(editor)
+	if editor.String() != "secret" {
+		t.Fatalf("a paste of no text edited the field to %q", editor.String())
+	}
+	// A clipboard that cannot be read reports the error and sends nothing.
+	if _, changed, err := TextClipboardEvent(state, false, 'v', func() (string, error) { return "", errors.New("busy") }, nil); changed || err == nil {
+		t.Fatalf("an unreadable clipboard: changed=%v err=%v", changed, err)
 	}
 }
 

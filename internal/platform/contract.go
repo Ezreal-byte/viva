@@ -685,6 +685,11 @@ const (
 	// separate undo unit; a terminal decides how to forward it (for example
 	// inside bracketed-paste markers).
 	TextPaste
+	// TextPasteNoText reports a paste asked for while the pasteboard holds no text.
+	// It edits nothing: an editor that takes text only ignores it. An application
+	// whose field accepts more than text (a chat box that takes a screenshot) reads
+	// the other formats itself, with ClipboardImagePNG. Terminals never receive it.
+	TextPasteNoText
 )
 
 // TextCommand identifies keyboard editing commands emitted by AppKit.

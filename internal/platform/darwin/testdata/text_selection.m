@@ -470,11 +470,19 @@ int main(void) {
         assert([view->lastText isEqualToString:@"one\r\ntwo\nthree\n"]);
         [view setMultiline:NO];
 
-        // An empty or non-text pasteboard inserts nothing.
+        // An empty or non-text pasteboard inserts nothing, and says so: a field
+        // that takes pictures then looks at the pasteboard's other formats.
         [board clearContents];
         edits = view->editEvents;
         [view paste:nil];
+        assert(view->editEvents == edits + 1 && view->lastKind == VIVA_TEXT_PASTE_NO_TEXT);
+        assert([view->lastText length] == 0);
+        // Text that is only line breaks flattens to nothing and says nothing.
+        [board setString:@"\n\r\n" forType:NSPasteboardTypeString];
+        edits = view->editEvents;
+        [view paste:nil];
         assert(view->editEvents == edits);
+        [board clearContents];
 
         // A password field never exports its text but accepts a paste.
         [view setSecure:YES];
@@ -578,6 +586,11 @@ int main(void) {
         assert([view->lastText isEqualToString:@"ls\nrm\r\n"]);
         assert(![view performKeyEquivalent:keyEvent(@"a", NSEventModifierFlagCommand)]);
         assert(![view performKeyEquivalent:keyEvent(@"x", NSEventModifierFlagCommand)]);
+        // A terminal is never told of a paste with no text.
+        [terminalBoard clearContents];
+        pastes = view->editEvents;
+        [view paste:nil];
+        assert(view->editEvents == pastes);
         // Moving the editor does not cancel a composition and checks its size.
         [view beginComposition];
         assert([view moveTextInputToFrame:NSMakeRect(100, 50, 8, 16)] == 0);

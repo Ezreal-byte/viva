@@ -313,6 +313,7 @@ enum {
     VIVA_TEXT_COMMAND_EVENT = 4,
     VIVA_TEXT_SET_SELECTION = 5,
     VIVA_TEXT_PASTE = 6,
+    VIVA_TEXT_PASTE_NO_TEXT = 7,
 };
 
 enum {
@@ -4310,11 +4311,21 @@ static void viva_set_secure_event_input(BOOL on) {
         }
         return;
     }
-    if (!_textInputMultiline && value != nil) {
-        value = viva_single_line_paste(value);
-    }
     if (value.length == 0) {
+        // Nothing to insert. An application that takes pictures looks at the
+        // pasteboard itself; for any other editor the event changes nothing.
+        [self emitTextKind:VIVA_TEXT_PASTE_NO_TEXT
+                      text:@""
+             selectedRange:NSMakeRange(0, 0)
+           replacementRange:NSMakeRange(NSNotFound, 0)
+                   command:0];
         return;
+    }
+    if (!_textInputMultiline) {
+        value = viva_single_line_paste(value);
+        if (value.length == 0) {
+            return;
+        }
     }
     [self emitTextKind:VIVA_TEXT_PASTE
                   text:value
