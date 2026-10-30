@@ -105,6 +105,36 @@ func TestTerminalPreeditDrawsNoCaretOrSelection(t *testing.T) {
 	}
 }
 
+// TestTerminalPreeditStandsOnTheTerminalGrid guards the composition drawn in the
+// fixed-pitch font on the terminal's cells: the label is a grid line, and the
+// underline covers the cells of the composed characters (a wide one takes two),
+// not the width the system UI font gives them.
+func TestTerminalPreeditStandsOnTheTerminalGrid(t *testing.T) {
+	state := dynamicTextState(0, 0)
+	state.textRectangles = make([]render.Rectangle, textRectangleCount)
+	state.textLabels = make([]platform.TextLabel, 1)
+	field := testTextInput("ni好", 4)
+	field.Terminal = true
+	field.MonoFace = ui.MonoClassic
+	field.State.Composing = true
+	field.State.Composition = text.Range{End: 3}
+	state.textInput, state.textState, state.textEnabled = field, field.State, true
+	if err := state.updateTextVisuals(); err != nil {
+		t.Fatal(err)
+	}
+	cell := terminalCellWidth(field.FontSize)
+	label := state.textLabels[0]
+	if !label.Mono || label.MonoFace != ui.MonoClassic || label.CellWidth != cell {
+		t.Fatalf("label mono %v face %v cell %v, want a grid line of %v on the terminal face", label.Mono, label.MonoFace, label.CellWidth, cell)
+	}
+	if len(label.Runs) != 2 || label.Runs[0].Cells != 2 || label.Runs[1].Column != 2 || label.Runs[1].Cells != 2 {
+		t.Fatalf("runs = %+v, want the letters on cells 0-1 and the wide character on cells 2-3", label.Runs)
+	}
+	if underline := state.textRectangles[2].Bounds; underline.X != field.X || underline.Width != 4*cell {
+		t.Fatalf("underline = %+v, want %v wide from the field's left", underline, 4*cell)
+	}
+}
+
 // TestTerminalPreeditDoesNotBlinkANativeCaret guards the other half of the same
 // contract: a terminal input never starts the caret blink timer, which would
 // repaint the window every blink for a caret that is not drawn.

@@ -11,6 +11,7 @@ import (
 	"github.com/vivaui/viva/internal/platform"
 	"github.com/vivaui/viva/internal/render"
 	"github.com/vivaui/viva/internal/scene"
+	"github.com/vivaui/viva/internal/textmetrics"
 	"github.com/vivaui/viva/text"
 	"github.com/vivaui/viva/ui"
 )
@@ -118,19 +119,27 @@ func (state *windowState) updateTextVisuals() error {
 	}
 	input := &state.textInput
 	caretX := state.textCaret(input.FontSize, state.textCaretIndex())
-	textWidth := state.textEngine.Width(state.textDisplayValue(), input.FontSize, 0)
+	textWidth := state.textWidth()
 	visibleWidth := max(1, input.Width-textCaretWidth)
 	state.textScroll = max(0, min(state.textScroll, caretX, max(0, textWidth-visibleWidth)))
 	if caretX-state.textScroll > visibleWidth {
 		state.textScroll = caretX - visibleWidth
 	}
 	originX := input.X - state.textScroll
-	state.textLabels[state.baseTextLabelCount] = platform.TextLabel{
+	label := platform.TextLabel{
 		Value: state.textDisplayValue(), X: originX, Y: input.Y,
 		Width:  max(input.Width+state.textScroll, textWidth+textCaretWidth),
 		Height: input.Height, FontSize: input.FontSize, Color: input.Color, Layer: input.Layer,
 		Clipped: true, Clip: ui.Rect{X: input.X, Y: input.Y, Width: input.Width, Height: input.Height},
 	}
+	if input.Terminal {
+		// A terminal's preedit stands on the terminal's cells, in its fixed-pitch font,
+		// not on the advances of the system UI font.
+		color := ui.Color{Red: float32(input.Color.Red), Green: float32(input.Color.Green), Blue: float32(input.Color.Blue), Alpha: float32(input.Color.Alpha)}
+		state.textRuns = platform.TerminalPreeditRuns(state.textRuns[:0], label.Value, color)
+		label.Mono, label.MonoFace, label.CellWidth, label.Runs = true, input.MonoFace, terminalCellWidth(input.FontSize), state.textRuns
+	}
+	state.textLabels[state.baseTextLabelCount] = label
 	base := state.baseRectangleCount
 	caretHeight := min(input.Height, input.FontSize*1.35)
 	caretColor := scene.Color{Red: float32(input.Color.Red), Green: float32(input.Color.Green), Blue: float32(input.Color.Blue), Alpha: float32(input.Color.Alpha)}
@@ -206,6 +215,20 @@ func (state *windowState) textCaretIndex() int {
 	return state.textState.Selection.End
 }
 
+// textWidth is the width of the input's display value.
+func (state *windowState) textWidth() float32 {
+	if state.textInput.Terminal {
+		return state.textCaret(state.textInput.FontSize, utf8.RuneCountInString(state.textDisplayValue()))
+	}
+	return state.textEngine.Width(state.textDisplayValue(), state.textInput.FontSize, 0)
+}
+
+// terminalCellWidth is the width of one terminal cell at a font size: the pitch every
+// platform's fixed-pitch text is placed on (see ui.Canvas.MonoCellSize).
+func terminalCellWidth(size float32) float32 {
+	return size * textmetrics.MonoAdvance
+}
+
 // textByte is the byte offset of the rune index in the text input's display value.
 func (state *windowState) textByte(runeIndex int) int {
 	value := state.textDisplayValue()
@@ -219,6 +242,9 @@ func (state *windowState) textByte(runeIndex int) int {
 
 // textCaret is the x of the caret before the rune index, from the left of the input.
 func (state *windowState) textCaret(size float32, runeIndex int) float32 {
+	if state.textInput.Terminal {
+		return float32(platform.TerminalPreeditColumn(state.textDisplayValue(), runeIndex)) * terminalCellWidth(size)
+	}
 	return state.textEngine.Caret(state.textDisplayValue(), size, 0, state.textByte(runeIndex))
 }
 
@@ -226,6 +252,9 @@ func (state *windowState) textCaret(size float32, runeIndex int) float32 {
 // rectangle a selection or a composition underline is drawn as. A range with text of
 // both directions is drawn from its leftmost to its rightmost glyph.
 func (state *windowState) textExtent(size float32, runes text.Range) (left, right float32) {
+	if state.textInput.Terminal {
+		return state.textCaret(size, runes.Start), state.textCaret(size, runes.End)
+	}
 	state.textSpans = state.textEngine.Selection(state.textSpans[:0], state.textDisplayValue(), size, 0, state.textByte(runes.Start), state.textByte(runes.End))
 	if len(state.textSpans) == 0 {
 		return 0, 0

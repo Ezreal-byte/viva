@@ -94,6 +94,7 @@ type windowState struct {
 	textRectangles                         []render.Rectangle
 	textEngine                             ui.TextEngine
 	textSpans                              []ui.TextSpan
+	textRuns                               []ui.TextRun
 	captionPress                           captionPress
 	imeComposing                           bool
 	pendingHighSurrogate                   uint16
