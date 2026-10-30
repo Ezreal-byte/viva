@@ -93,6 +93,9 @@ func TestIconOnlyTabKeepsItsAccessibleName(t *testing.T) {
 	if len(hits) != 2 || hits[0].Label != "Overview" || hits[1].Label != "Disk" {
 		t.Fatalf("icon-only tabs lost their names: %+v", hits)
 	}
+	if hits[0].Hint != hits[0].Label || hits[1].Hint != hits[1].Label {
+		t.Fatalf("icon-only tabs lost their hover descriptions: %+v", hits)
+	}
 	canvas.Reset()
 	BeginTabs(&canvas, theme, ui.Rect{}, nil, ui.ID{}).Fit()
 	for index, option := range options {

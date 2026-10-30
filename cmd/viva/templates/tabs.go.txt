@@ -375,8 +375,12 @@ func (tabs Tabs) Paint() TabsResult {
 		style := ui.TextStyle{Size: metrics.FontSizeM, Weight: weight, Color: foreground}
 		tabs.paintContent(option, trigger, style)
 		if !option.ID.IsZero() {
+			hint := ""
+			if option.IconOnly {
+				hint = option.Label
+			}
 			tabs.canvas.HitWithOptions(option.ID, trigger, option.Label, ui.HitOptions{
-				Role: ui.RoleTab, Value: option.Label,
+				Role: ui.RoleTab, Value: option.Label, Hint: hint,
 				Disabled: dimmed, FocusableWhenDisabled: true,
 				Selected: active,
 				SkipTab:  option.ID != tabs.tabStop,

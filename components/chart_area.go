@@ -498,8 +498,12 @@ func chartBeginFrame(canvas *ui.Canvas, theme ui.Theme, bounds ui.Rect, spec *ch
 				break
 			}
 			text := labels.xText[index]
-			width := canvas.TextWidth(text, fontSize) + 2
-			canvas.Label(text, ui.Rect{X: plot.X + frac*plot.Width - width/2, Y: plot.Y + plot.Height + chartAxisGap*scale, Width: width, Height: rowHeight}, labelStyle)
+			width := min(canvas.TextWidth(text, fontSize)+2, area.Width)
+			// Edge ticks remain anchored to their data, but their labels must
+			// fit inside the chart container rather than spill into a neighbor.
+			x := min(max(plot.X+frac*plot.Width-width/2, area.X), area.X+area.Width-width)
+			text = canvas.FitLine(text, fontSize, ui.WeightRegular, width)
+			canvas.Label(text, ui.Rect{X: x, Y: plot.Y + plot.Height + chartAxisGap*scale, Width: width, Height: rowHeight}, labelStyle)
 		}
 	}
 	return chartFrame{layout: layout, plot: ChartPlot{ChartLayout: layout, Plot: plot, geo: geo}, scale: scale}
