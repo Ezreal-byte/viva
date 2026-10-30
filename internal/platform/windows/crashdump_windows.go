@@ -11,8 +11,10 @@ import (
 )
 
 var (
-	werDLL                = systemDLL("wer.dll")
-	werRegisterAppLocal   = werDLL.NewProc("WerRegisterAppLocalDump")
+	// WerRegisterAppLocalDump is exported by kernelbase.dll; wer.dll does not
+	// export it, so a lookup there never succeeds.
+	kernelBase            = systemDLL("kernelbase.dll")
+	werRegisterAppLocal   = kernelBase.NewProc("WerRegisterAppLocalDump")
 	errCrashDumpsDisabled = errors.New("windows: native crash dumps need Windows 11 22H2 or later")
 )
 
