@@ -208,6 +208,10 @@ const (
 // on its own cell; a run holding a single character is centered within its
 // Cells. Decorations are drawn across the run's whole cell span.
 //
+// Block Elements (U+2580 to U+259F: halves, eighths, quadrants, shades) are not drawn from
+// a font: the renderer fills their exact fraction of the cell, so neighbouring cells meet
+// without a seam; see BlockRectangles.
+//
 // Ligatures asks the fixed-pitch renderer to shape the run as one line instead
 // of placing one glyph per cell, so a font's programming ligatures appear. The
 // shaped run is fitted to the run's full cell span; it therefore needs ASCII
