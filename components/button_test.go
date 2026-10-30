@@ -38,6 +38,23 @@ func TestButtonIconAndTextFitTogether(t *testing.T) {
 	}
 }
 
+func TestNarrowIconButtonKeepsItsIconInside(t *testing.T) {
+	bounds := ui.Rect{X: 40, Y: 10, Width: 12}
+	var canvas ui.Canvas
+	BeginButton(&canvas, ui.LightTheme(), ui.Item(1), bounds).WithIcon(checkIcon).Ghost("Edit panel")
+	triangles := canvas.Triangles()
+	if len(triangles) == 0 {
+		t.Fatal("narrow icon button drew no icon")
+	}
+	for _, triangle := range triangles {
+		for _, point := range triangle.Points {
+			if point.X < bounds.X-.001 || point.X > bounds.X+bounds.Width+.001 {
+				t.Fatalf("icon vertex X %.2f escaped %+v", point.X, bounds)
+			}
+		}
+	}
+}
+
 func TestButtonOfficialVariants(t *testing.T) {
 	theme := ui.LightTheme()
 	tests := [...]struct {

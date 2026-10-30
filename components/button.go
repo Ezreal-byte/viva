@@ -125,6 +125,19 @@ func (button Button) Disabled() Button {
 	return button
 }
 
+// The leading icon keeps one square, one gap and one vertical inset in every
+// size, so SizeToFit and paint agree and a narrow control shrinks the icon
+// instead of drawing it past its own edge.
+const (
+	buttonIconSize  = 16
+	buttonIconGap   = 8
+	buttonIconInset = 8
+)
+
+func buttonIconExtent(height float32) float32 {
+	return max(0, min(float32(buttonIconSize), height-buttonIconInset))
+}
+
 // SizeToFit widens the button to its label plus the selected size padding.
 func (button Button) SizeToFit(label string) Button {
 	height, padding, fontSize, iconOnly := button.geometry()
@@ -133,9 +146,9 @@ func (button Button) SizeToFit(label string) Button {
 		if iconOnly {
 			button.bounds.Width = height
 		} else {
-			button.bounds.Width += 16
+			button.bounds.Width += buttonIconExtent(height)
 			if label != "" {
-				button.bounds.Width += 8
+				button.bounds.Width += buttonIconGap
 			}
 		}
 	}
@@ -326,17 +339,19 @@ func (button Button) paint(label string, variant ButtonVariant) ButtonResult {
 	}
 	hint := ""
 	if button.hasIcon() {
-		size := min(float32(16), height-8)
+		size := min(buttonIconExtent(height), button.bounds.Width)
 		width := size
 		if !iconOnly && label != "" {
-			width = min(button.bounds.Width, width+8+button.canvas.TextWidthWeight(label, fontSize, ui.WeightMedium))
+			width = min(button.bounds.Width, width+buttonIconGap+button.canvas.TextWidthWeight(label, fontSize, ui.WeightMedium))
 		}
 		x := button.bounds.X + (button.bounds.Width-width)/2
-		button.canvas.DrawIcon(button.icon, ui.Rect{X: x, Y: button.bounds.Y + (height-size)/2, Width: size, Height: size}, style.foreground)
+		if size > 0 {
+			button.canvas.DrawIcon(button.icon, ui.Rect{X: x, Y: button.bounds.Y + (height-size)/2, Width: size, Height: size}, style.foreground)
+		}
 		if iconOnly {
 			hint = label
 		} else if label != "" {
-			text := ui.Rect{X: x + size + 8, Y: button.bounds.Y, Width: max(0, width-size-8), Height: height}
+			text := ui.Rect{X: x + size + buttonIconGap, Y: button.bounds.Y, Width: max(0, width-size-buttonIconGap), Height: height}
 			paintButtonLabel(button.canvas, label, text, fontSize, style)
 		}
 	} else {
