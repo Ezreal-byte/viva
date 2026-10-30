@@ -259,7 +259,7 @@ const uiaFault = "UI Automation provider"
 var uiaCallbackOnce sync.Once
 var uiaSimpleTable [7]uintptr
 var uiaFragmentTable [9]uintptr
-var uiaFragmentRootTable [11]uintptr
+var uiaFragmentRootTable [5]uintptr
 var uiaProviders sync.Map
 var uiaFromPointCallback uintptr
 
@@ -293,10 +293,13 @@ func initializeUIACallbacks() bool {
 		uiaFragmentTable[7] = guarded1(uiaFault, uiaSetFocus)
 		uiaFragmentTable[8] = guarded2(uiaFault, uiaGetFragmentRoot)
 
-		copy(uiaFragmentRootTable[:9], uiaFragmentTable[:])
+		// IRawElementProviderFragmentRoot derives from IUnknown, not from
+		// IRawElementProviderFragment: its two methods follow the IUnknown ones
+		// directly, so a client that calls slot 3 means ElementProviderFromPoint.
+		copy(uiaFragmentRootTable[:3], unknown[:])
 		uiaFromPointCallback = guarded4(uiaFault, uiaElementProviderFromPointBits)
-		uiaFragmentRootTable[9] = entry
-		uiaFragmentRootTable[10] = guarded2(uiaFault, uiaGetFocus)
+		uiaFragmentRootTable[3] = entry
+		uiaFragmentRootTable[4] = guarded2(uiaFault, uiaGetFocus)
 
 		initializePatternTables(unknown[:])
 	})
@@ -659,11 +662,16 @@ func (provider *uiaProvider) simplePointer() uintptr {
 	return uintptr(unsafe.Pointer(&provider.Simple))
 }
 
+// fragmentPointer is the element's IRawElementProviderFragment, the type of every
+// element UI Automation is handed back, the window's own included.
 func (provider *uiaProvider) fragmentPointer() uintptr {
-	if provider.Root {
-		return uintptr(unsafe.Pointer(&provider.FragmentRoot))
-	}
 	return uintptr(unsafe.Pointer(&provider.Fragment))
+}
+
+// fragmentRootPointer is the window element's IRawElementProviderFragmentRoot,
+// a separate interface with its own table.
+func (provider *uiaProvider) fragmentRootPointer() uintptr {
+	return uintptr(unsafe.Pointer(&provider.FragmentRoot))
 }
 
 func (provider *uiaProvider) addReference() uint32 {
@@ -710,7 +718,7 @@ func uiaQueryInterface(this, requested, result uintptr) uintptr {
 		selected = provider.fragmentPointer()
 	case iidRawElementProviderFragmentRoot:
 		if provider.Root {
-			selected = provider.fragmentPointer()
+			selected = provider.fragmentRootPointer()
 		}
 	default:
 		if kind, ok := patternKindForIID(id); ok && provider.supports(kind) {
@@ -998,7 +1006,7 @@ func uiaGetFragmentRoot(this, result uintptr) uintptr {
 	closed := provider.Tree.closed
 	if !closed && root != nil {
 		root.addReference()
-		*(*uintptr)(pointer(result)) = root.fragmentPointer()
+		*(*uintptr)(pointer(result)) = root.fragmentRootPointer()
 	}
 	provider.Tree.mu.RUnlock()
 	if closed || root == nil {
