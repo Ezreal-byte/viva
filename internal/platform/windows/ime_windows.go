@@ -131,22 +131,29 @@ func (state *windowState) updateTextVisuals() error {
 		Height: input.Height, FontSize: input.FontSize, Color: input.Color, Layer: input.Layer,
 		Clipped: true, Clip: ui.Rect{X: input.X, Y: input.Y, Width: input.Width, Height: input.Height},
 	}
-	selection := state.textState.Selection
-	selectionStart, selectionEnd := state.textExtent(input.FontSize, selection)
 	base := state.baseRectangleCount
-	state.textRectangles[base] = render.Rectangle{
-		Bounds: scene.Rect{X: originX + selectionStart, Y: input.Y, Width: selectionEnd - selectionStart, Height: input.Height},
-		Color:  scene.Color{Red: 0.22, Green: 0.48, Blue: 1, Alpha: 0.34},
-		Layer:  input.Layer,
-	}
 	caretHeight := min(input.Height, input.FontSize*1.35)
 	caretColor := scene.Color{Red: float32(input.Color.Red), Green: float32(input.Color.Green), Blue: float32(input.Color.Blue), Alpha: float32(input.Color.Alpha)}
+	state.textRectangles[base] = render.Rectangle{}
 	state.textRectangles[base+1] = render.Rectangle{}
-	if state.caretVisible {
-		state.textRectangles[base+1] = render.Rectangle{
-			Bounds: scene.Rect{X: originX + caretX, Y: input.Y + (input.Height-caretHeight)/2, Width: textCaretWidth, Height: caretHeight},
-			Color:  caretColor,
+	// A terminal is a preedit surface with a cursor of its own: the native
+	// editor draws the composition only, never a caret or a selection (see
+	// platform.TextInput.Terminal), which would otherwise blink in the cursor's
+	// cell.
+	if !input.Terminal {
+		selection := state.textState.Selection
+		selectionStart, selectionEnd := state.textExtent(input.FontSize, selection)
+		state.textRectangles[base] = render.Rectangle{
+			Bounds: scene.Rect{X: originX + selectionStart, Y: input.Y, Width: selectionEnd - selectionStart, Height: input.Height},
+			Color:  scene.Color{Red: 0.22, Green: 0.48, Blue: 1, Alpha: 0.34},
 			Layer:  input.Layer,
+		}
+		if state.caretVisible {
+			state.textRectangles[base+1] = render.Rectangle{
+				Bounds: scene.Rect{X: originX + caretX, Y: input.Y + (input.Height-caretHeight)/2, Width: textCaretWidth, Height: caretHeight},
+				Color:  caretColor,
+				Layer:  input.Layer,
+			}
 		}
 	}
 	state.textRectangles[base+2] = render.Rectangle{}
@@ -508,9 +515,16 @@ func (state *windowState) cancelComposition() {
 	releaseInputContext.Call(state.window, context)
 }
 
+// caretBlinks reports whether a native caret belongs on screen: the window has
+// the keyboard and the input is not a terminal preedit surface, which draws its
+// own cursor and asks for no caret (see platform.TextInput.Terminal).
+func (state *windowState) caretBlinks() bool {
+	return state.textEnabled && state.focused && !state.textInput.Terminal
+}
+
 func (state *windowState) restartCaretTimer() error {
 	state.stopCaretTimer()
-	if !state.textEnabled || !state.focused || state.window == 0 {
+	if !state.caretBlinks() || state.window == 0 {
 		return nil
 	}
 	interval, _, _ := getCaretBlinkTime.Call()
