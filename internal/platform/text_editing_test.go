@@ -69,6 +69,35 @@ func TestClipboardEditingIsAtomicAndSecure(t *testing.T) {
 	}
 }
 
+func TestAppleEditingKeyMap(t *testing.T) {
+	for _, tc := range []struct {
+		key     input.Key
+		mods    input.Modifiers
+		command TextCommand
+	}{
+		{input.KeyLeft, input.ModifierAlt, TextMoveWordLeft},
+		{input.KeyRight, input.ModifierAlt | input.ModifierShift, TextMoveWordRightAndModifySelection},
+		{input.KeyBackspace, input.ModifierAlt, TextDeleteWordBackward},
+		{input.KeyDelete, input.ModifierAlt, TextDeleteWordForward},
+		{input.KeyLeft, input.ModifierMeta, TextMoveLineStart},
+		{input.KeyRight, input.ModifierMeta | input.ModifierShift, TextMoveLineEndAndModifySelection},
+		{input.KeyUp, input.ModifierMeta, TextMoveDocumentStart},
+		{input.KeyDown, input.ModifierMeta | input.ModifierShift, TextMoveDocumentEndAndModifySelection},
+		{input.KeyBackspace, input.ModifierMeta, TextDeleteToLineStart},
+	} {
+		got, ok := AppleTextEditingCommand(KeyEvent{Key: tc.key, Modifiers: tc.mods})
+		if !ok || got != tc.command {
+			t.Fatalf("%+v: %v %v", tc, got, ok)
+		}
+	}
+	// Plain arrows, Control (Windows and Linux) and mixed chords are not Apple's.
+	for _, mods := range []input.Modifiers{0, input.ModifierShift, input.ModifierControl, input.ModifierAlt | input.ModifierMeta, input.ModifierAlt | input.ModifierControl} {
+		if command, ok := AppleTextEditingCommand(KeyEvent{Key: input.KeyLeft, Modifiers: mods}); ok {
+			t.Fatalf("modifiers %v mapped to %v", mods, command)
+		}
+	}
+}
+
 func TestEditingKeyMapPreservesModifiers(t *testing.T) {
 	for _, tc := range []struct {
 		key       input.Key

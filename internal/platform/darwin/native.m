@@ -327,6 +327,24 @@ enum {
     VIVA_TEXT_INSERT_LINE_BREAK = 9,
     VIVA_TEXT_UNDO = 10,
     VIVA_TEXT_REDO = 11,
+    /* The rest continue platform.TextCommand's numbering, which the Go side takes
+     * as it is; TestNativeTextSelection checks every value against it. */
+    VIVA_TEXT_MOVE_LINE_START = 13,
+    VIVA_TEXT_MOVE_LINE_END = 14,
+    VIVA_TEXT_MOVE_LINE_START_AND_MODIFY_SELECTION = 15,
+    VIVA_TEXT_MOVE_LINE_END_AND_MODIFY_SELECTION = 16,
+    VIVA_TEXT_MOVE_DOCUMENT_START = 17,
+    VIVA_TEXT_MOVE_DOCUMENT_END = 18,
+    VIVA_TEXT_MOVE_DOCUMENT_START_AND_MODIFY_SELECTION = 19,
+    VIVA_TEXT_MOVE_DOCUMENT_END_AND_MODIFY_SELECTION = 20,
+    VIVA_TEXT_MOVE_WORD_LEFT = 21,
+    VIVA_TEXT_MOVE_WORD_RIGHT = 22,
+    VIVA_TEXT_MOVE_WORD_LEFT_AND_MODIFY_SELECTION = 23,
+    VIVA_TEXT_MOVE_WORD_RIGHT_AND_MODIFY_SELECTION = 24,
+    VIVA_TEXT_DELETE_WORD_BACKWARD = 25,
+    VIVA_TEXT_DELETE_WORD_FORWARD = 26,
+    VIVA_TEXT_DELETE_TO_LINE_START = 27,
+    VIVA_TEXT_DELETE_TO_LINE_END = 28,
 };
 
 extern void vivaPointerEvent(
@@ -2609,6 +2627,48 @@ static void viva_encode_scene(
 - (void)paste:(id)sender;
 @end
 
+/* The selectors AppKit's key bindings send for the navigation and deleting chords:
+ * Option with Left, Right, Backspace and Delete by word; Command with Left and
+ * Right to the ends of the line, with Up and Down (and Home and End, which AppKit
+ * scrolls with) to the ends of the text, Command+Backspace and Control+K removing
+ * to the ends of the line. A line is the text up to a newline. 0 for any other
+ * selector. */
+static int viva_navigation_command(SEL selector) {
+    static const struct { const char *name; int command; } table[] = {
+        {"moveWordLeft:", VIVA_TEXT_MOVE_WORD_LEFT},
+        {"moveWordRight:", VIVA_TEXT_MOVE_WORD_RIGHT},
+        {"moveWordLeftAndModifySelection:", VIVA_TEXT_MOVE_WORD_LEFT_AND_MODIFY_SELECTION},
+        {"moveWordRightAndModifySelection:", VIVA_TEXT_MOVE_WORD_RIGHT_AND_MODIFY_SELECTION},
+        {"deleteWordBackward:", VIVA_TEXT_DELETE_WORD_BACKWARD},
+        {"deleteWordForward:", VIVA_TEXT_DELETE_WORD_FORWARD},
+        {"moveToBeginningOfLine:", VIVA_TEXT_MOVE_LINE_START},
+        {"moveToLeftEndOfLine:", VIVA_TEXT_MOVE_LINE_START},
+        {"moveToEndOfLine:", VIVA_TEXT_MOVE_LINE_END},
+        {"moveToRightEndOfLine:", VIVA_TEXT_MOVE_LINE_END},
+        {"moveToBeginningOfLineAndModifySelection:", VIVA_TEXT_MOVE_LINE_START_AND_MODIFY_SELECTION},
+        {"moveToLeftEndOfLineAndModifySelection:", VIVA_TEXT_MOVE_LINE_START_AND_MODIFY_SELECTION},
+        {"moveToEndOfLineAndModifySelection:", VIVA_TEXT_MOVE_LINE_END_AND_MODIFY_SELECTION},
+        {"moveToRightEndOfLineAndModifySelection:", VIVA_TEXT_MOVE_LINE_END_AND_MODIFY_SELECTION},
+        {"moveToBeginningOfDocument:", VIVA_TEXT_MOVE_DOCUMENT_START},
+        {"scrollToBeginningOfDocument:", VIVA_TEXT_MOVE_DOCUMENT_START},
+        {"moveToEndOfDocument:", VIVA_TEXT_MOVE_DOCUMENT_END},
+        {"scrollToEndOfDocument:", VIVA_TEXT_MOVE_DOCUMENT_END},
+        {"moveToBeginningOfDocumentAndModifySelection:", VIVA_TEXT_MOVE_DOCUMENT_START_AND_MODIFY_SELECTION},
+        {"moveToEndOfDocumentAndModifySelection:", VIVA_TEXT_MOVE_DOCUMENT_END_AND_MODIFY_SELECTION},
+        {"deleteToBeginningOfLine:", VIVA_TEXT_DELETE_TO_LINE_START},
+        {"deleteToEndOfLine:", VIVA_TEXT_DELETE_TO_LINE_END},
+        {"deleteToBeginningOfParagraph:", VIVA_TEXT_DELETE_TO_LINE_START},
+        {"deleteToEndOfParagraph:", VIVA_TEXT_DELETE_TO_LINE_END},
+    };
+    const char *name = sel_getName(selector);
+    for (size_t index = 0; index < sizeof(table) / sizeof(table[0]); index++) {
+        if (strcmp(name, table[index].name) == 0) {
+            return table[index].command;
+        }
+    }
+    return 0;
+}
+
 @implementation VivaMetalView
 
 - (instancetype)initWithFrame:(NSRect)frame
@@ -4285,6 +4345,8 @@ static void viva_set_secure_event_input(BOOL on) {
         command = VIVA_TEXT_UNDO;
     } else if (selector == @selector(redo:)) {
         command = VIVA_TEXT_REDO;
+    } else {
+        command = viva_navigation_command(selector);
     }
     if (command != 0) {
         [self emitTextKind:VIVA_TEXT_COMMAND_EVENT

@@ -333,6 +333,92 @@ int main(void) {
         assert(view->lastCommand == VIVA_TEXT_UNDO);
         assert([view performKeyEquivalent:keyEvent(@"Z", NSEventModifierFlagCommand | NSEventModifierFlagShift)]);
         assert(view->lastCommand == VIVA_TEXT_REDO);
+
+        // The navigation chords AppKit's key bindings turn into selectors: Option
+        // moves and deletes by word, Command goes to the ends of the line, and
+        // Command with Up and Down, like Home and End, to the ends of the text.
+        // The numbers are platform.TextCommand's, which the Go test passes in.
+        _Static_assert(VIVA_TEXT_MOVE_LINE_START == GO_TEXT_MOVE_LINE_START, "line start");
+        _Static_assert(VIVA_TEXT_MOVE_LINE_END == GO_TEXT_MOVE_LINE_END, "line end");
+        _Static_assert(VIVA_TEXT_MOVE_LINE_START_AND_MODIFY_SELECTION == GO_TEXT_MOVE_LINE_START_AND_MODIFY_SELECTION, "line start selection");
+        _Static_assert(VIVA_TEXT_MOVE_LINE_END_AND_MODIFY_SELECTION == GO_TEXT_MOVE_LINE_END_AND_MODIFY_SELECTION, "line end selection");
+        _Static_assert(VIVA_TEXT_MOVE_DOCUMENT_START == GO_TEXT_MOVE_DOCUMENT_START, "document start");
+        _Static_assert(VIVA_TEXT_MOVE_DOCUMENT_END == GO_TEXT_MOVE_DOCUMENT_END, "document end");
+        _Static_assert(VIVA_TEXT_MOVE_DOCUMENT_START_AND_MODIFY_SELECTION == GO_TEXT_MOVE_DOCUMENT_START_AND_MODIFY_SELECTION, "document start selection");
+        _Static_assert(VIVA_TEXT_MOVE_DOCUMENT_END_AND_MODIFY_SELECTION == GO_TEXT_MOVE_DOCUMENT_END_AND_MODIFY_SELECTION, "document end selection");
+        _Static_assert(VIVA_TEXT_MOVE_WORD_LEFT == GO_TEXT_MOVE_WORD_LEFT, "word left");
+        _Static_assert(VIVA_TEXT_MOVE_WORD_RIGHT == GO_TEXT_MOVE_WORD_RIGHT, "word right");
+        _Static_assert(VIVA_TEXT_MOVE_WORD_LEFT_AND_MODIFY_SELECTION == GO_TEXT_MOVE_WORD_LEFT_AND_MODIFY_SELECTION, "word left selection");
+        _Static_assert(VIVA_TEXT_MOVE_WORD_RIGHT_AND_MODIFY_SELECTION == GO_TEXT_MOVE_WORD_RIGHT_AND_MODIFY_SELECTION, "word right selection");
+        _Static_assert(VIVA_TEXT_DELETE_WORD_BACKWARD == GO_TEXT_DELETE_WORD_BACKWARD, "delete word backward");
+        _Static_assert(VIVA_TEXT_DELETE_WORD_FORWARD == GO_TEXT_DELETE_WORD_FORWARD, "delete word forward");
+        _Static_assert(VIVA_TEXT_DELETE_TO_LINE_START == GO_TEXT_DELETE_TO_LINE_START, "delete to line start");
+        _Static_assert(VIVA_TEXT_DELETE_TO_LINE_END == GO_TEXT_DELETE_TO_LINE_END, "delete to line end");
+        const struct { const char *selector; int command; } navigation[] = {
+            {"moveWordLeft:", VIVA_TEXT_MOVE_WORD_LEFT},
+            {"moveWordRight:", VIVA_TEXT_MOVE_WORD_RIGHT},
+            {"moveWordLeftAndModifySelection:", VIVA_TEXT_MOVE_WORD_LEFT_AND_MODIFY_SELECTION},
+            {"moveWordRightAndModifySelection:", VIVA_TEXT_MOVE_WORD_RIGHT_AND_MODIFY_SELECTION},
+            {"deleteWordBackward:", VIVA_TEXT_DELETE_WORD_BACKWARD},
+            {"deleteWordForward:", VIVA_TEXT_DELETE_WORD_FORWARD},
+            {"moveToBeginningOfLine:", VIVA_TEXT_MOVE_LINE_START},
+            {"moveToLeftEndOfLine:", VIVA_TEXT_MOVE_LINE_START},
+            {"moveToEndOfLine:", VIVA_TEXT_MOVE_LINE_END},
+            {"moveToRightEndOfLine:", VIVA_TEXT_MOVE_LINE_END},
+            {"moveToBeginningOfLineAndModifySelection:", VIVA_TEXT_MOVE_LINE_START_AND_MODIFY_SELECTION},
+            {"moveToLeftEndOfLineAndModifySelection:", VIVA_TEXT_MOVE_LINE_START_AND_MODIFY_SELECTION},
+            {"moveToEndOfLineAndModifySelection:", VIVA_TEXT_MOVE_LINE_END_AND_MODIFY_SELECTION},
+            {"moveToRightEndOfLineAndModifySelection:", VIVA_TEXT_MOVE_LINE_END_AND_MODIFY_SELECTION},
+            {"moveToBeginningOfDocument:", VIVA_TEXT_MOVE_DOCUMENT_START},
+            {"scrollToBeginningOfDocument:", VIVA_TEXT_MOVE_DOCUMENT_START},
+            {"moveToEndOfDocument:", VIVA_TEXT_MOVE_DOCUMENT_END},
+            {"scrollToEndOfDocument:", VIVA_TEXT_MOVE_DOCUMENT_END},
+            {"moveToBeginningOfDocumentAndModifySelection:", VIVA_TEXT_MOVE_DOCUMENT_START_AND_MODIFY_SELECTION},
+            {"moveToEndOfDocumentAndModifySelection:", VIVA_TEXT_MOVE_DOCUMENT_END_AND_MODIFY_SELECTION},
+            {"deleteToBeginningOfLine:", VIVA_TEXT_DELETE_TO_LINE_START},
+            {"deleteToEndOfLine:", VIVA_TEXT_DELETE_TO_LINE_END},
+            {"deleteToBeginningOfParagraph:", VIVA_TEXT_DELETE_TO_LINE_START},
+            {"deleteToEndOfParagraph:", VIVA_TEXT_DELETE_TO_LINE_END},
+        };
+        for (size_t index = 0; index < sizeof(navigation) / sizeof(navigation[0]); index++) {
+            NSUInteger before = view->editEvents;
+            [view doCommandBySelector:NSSelectorFromString(@(navigation[index].selector))];
+            assert(view->editEvents == before + 1);
+            assert(view->lastKind == VIVA_TEXT_COMMAND_EVENT);
+            assert(view->lastCommand == navigation[index].command);
+        }
+        // The chords themselves, through AppKit's own key bindings: what each
+        // key sends is the system's, and these are the commands it must become.
+        // Command with Forward Delete is bound to nothing (noop:), so it stays so.
+        {
+            const struct { unichar character; unsigned short code; NSEventModifierFlags flags; int command; } chords[] = {
+                {0x7f, 51, NSEventModifierFlagCommand, VIVA_TEXT_DELETE_TO_LINE_START},
+                {0x7f, 51, NSEventModifierFlagOption, VIVA_TEXT_DELETE_WORD_BACKWARD},
+                {NSDeleteFunctionKey, 117, NSEventModifierFlagOption, VIVA_TEXT_DELETE_WORD_FORWARD},
+                {NSLeftArrowFunctionKey, 123, NSEventModifierFlagOption, VIVA_TEXT_MOVE_WORD_LEFT},
+                {NSRightArrowFunctionKey, 124, NSEventModifierFlagOption | NSEventModifierFlagShift, VIVA_TEXT_MOVE_WORD_RIGHT_AND_MODIFY_SELECTION},
+                {NSLeftArrowFunctionKey, 123, NSEventModifierFlagCommand, VIVA_TEXT_MOVE_LINE_START},
+                {NSRightArrowFunctionKey, 124, NSEventModifierFlagCommand | NSEventModifierFlagShift, VIVA_TEXT_MOVE_LINE_END_AND_MODIFY_SELECTION},
+                {NSUpArrowFunctionKey, 126, NSEventModifierFlagCommand, VIVA_TEXT_MOVE_DOCUMENT_START},
+                {NSHomeFunctionKey, 115, 0, VIVA_TEXT_MOVE_DOCUMENT_START},
+                {NSEndFunctionKey, 119, 0, VIVA_TEXT_MOVE_DOCUMENT_END},
+                {NSDeleteFunctionKey, 117, NSEventModifierFlagCommand, -1},
+            };
+            for (size_t index = 0; index < sizeof(chords) / sizeof(chords[0]); index++) {
+                NSString *characters = [NSString stringWithCharacters:&chords[index].character length:1];
+                NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint
+                    modifierFlags:chords[index].flags timestamp:0 windowNumber:0 context:nil
+                    characters:characters charactersIgnoringModifiers:characters isARepeat:NO
+                    keyCode:chords[index].code];
+                view->lastCommand = -1;
+                [view interpretKeyEvents:@[event]];
+                assert(view->lastCommand == chords[index].command);
+            }
+        }
+        // A selector no key binding of ours stands for does nothing.
+        NSUInteger unmapped = view->editEvents;
+        [view doCommandBySelector:@selector(moveUp:)];
+        assert(view->editEvents == unmapped);
         view->recordEdits = NO;
 
         // Clipboard shortcuts. A private pasteboard keeps the test away from the
