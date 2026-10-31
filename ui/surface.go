@@ -154,6 +154,45 @@ func (surface *Surface) Draw(canvas *Canvas, bounds Rect) {
 	}
 }
 
+// DrawPixels paints the picture one picture pixel to one device pixel, with its
+// top-left corner on the device pixel nearest origin, and returns the logical
+// rectangle it covers. A picture the size of the window's pixels, as a remote
+// desktop that follows its window is, then reaches the screen unscaled at any
+// display scale: Draw rounds tile edges to logical pixels, which at 125% or
+// 150% resamples every tile by up to a pixel and blurs the text in it. The
+// canvas must know the display scale (SetPixelScale); without it a device pixel
+// is taken to be half a logical one.
+func (surface *Surface) DrawPixels(canvas *Canvas, origin Point) Rect {
+	scale := canvas.PixelScale()
+	left, top := deviceEdge(origin.X, scale), deviceEdge(origin.Y, scale)
+	covered := Rect{
+		X: float32(left) / scale, Y: float32(top) / scale,
+		Width: float32(surface.width) / scale, Height: float32(surface.height) / scale,
+	}
+	edge := surface.edge
+	for index := range surface.tiles {
+		tile := &surface.tiles[index]
+		row, column := index/surface.columns, index%surface.columns
+		before := len(canvas.images)
+		canvas.DrawBitmap(Bitmap{
+			Pix: tile.pix, Width: tile.width, Height: tile.height, Stride: tile.width * 4,
+			ID: surface.base + uint64(index), Version: tile.version,
+		}, Rect{
+			X: float32(left+column*edge) / scale, Y: float32(top+row*edge) / scale,
+			Width: float32(tile.width) / scale, Height: float32(tile.height) / scale,
+		})
+		if len(canvas.images) > before {
+			canvas.images[before].DevicePixels = true
+		}
+	}
+	return covered
+}
+
+// deviceEdge is the device pixel nearest a logical coordinate.
+func deviceEdge(value, scale float32) int {
+	return int(math.Floor(float64(value)*float64(scale) + 0.5))
+}
+
 // snapEdge rounds a coordinate to the nearest whole pixel, as the painter does
 // for the bounds it receives.
 func snapEdge(value float32) float32 { return float32(math.Floor(float64(value) + 0.5)) }

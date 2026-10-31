@@ -191,3 +191,49 @@ func BenchmarkSurfaceDraw(b *testing.B) {
 		surface.Draw(&canvas, Rect{Width: 1280, Height: 720})
 	}
 }
+
+func TestSurfaceDrawPixelsPutsEveryTilePixelOnADevicePixel(t *testing.T) {
+	var surface Surface
+	surface.Resize(1750, 903)
+	for _, scale := range []float32{1, 1.25, 1.5, 1.75, 2, 3} {
+		var canvas Canvas
+		canvas.SetPixelScale(scale)
+		covered := surface.DrawPixels(&canvas, Point{X: 3.3, Y: 17.9})
+		if wantX := float32(int(3.3*scale+0.5)) / scale; covered.X != wantX {
+			t.Fatalf("scale %g: the picture starts at %v, want the nearest device pixel %v", scale, covered.X, wantX)
+		}
+		if covered.Width*scale < 1749.99 || covered.Width*scale > 1750.01 || covered.Height*scale < 902.99 || covered.Height*scale > 903.01 {
+			t.Fatalf("scale %g: the picture covers %vx%v logical pixels, not 1750x903 device pixels", scale, covered.Width, covered.Height)
+		}
+		whole := func(value float32) bool {
+			device := float64(value * scale)
+			return device-float64(int(device+0.5)) < 1e-3 && float64(int(device+0.5))-device < 1e-3
+		}
+		for _, image := range canvas.Images() {
+			bounds := image.Bounds
+			if !image.DevicePixels || !whole(bounds.X) || !whole(bounds.Y) {
+				t.Fatalf("scale %g: tile %v is not on device pixels", scale, bounds)
+			}
+			if got := int(bounds.Width*scale + 0.5); got != image.Bitmap.Width {
+				t.Fatalf("scale %g: a %d pixel wide tile is drawn %d device pixels wide", scale, image.Bitmap.Width, got)
+			}
+			if got := int(bounds.Height*scale + 0.5); got != image.Bitmap.Height {
+				t.Fatalf("scale %g: a %d pixel high tile is drawn %d device pixels high", scale, image.Bitmap.Height, got)
+			}
+		}
+	}
+}
+
+func BenchmarkSurfaceDrawPixels(b *testing.B) {
+	var surface Surface
+	surface.Resize(1920, 1080)
+	var canvas Canvas
+	canvas.SetPixelScale(1.25)
+	surface.DrawPixels(&canvas, Point{})
+	b.ReportAllocs()
+	for b.Loop() {
+		canvas.Reset()
+		canvas.SetPixelScale(1.25)
+		surface.DrawPixels(&canvas, Point{X: 10, Y: 20})
+	}
+}

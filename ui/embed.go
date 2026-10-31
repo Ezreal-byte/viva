@@ -23,7 +23,7 @@ package ui
 // BeginEmbedded prepares a canvas that is reused every frame to paint a view
 // that parent will embed at mount. It discards the previous frame, hands the
 // view the hover, press and focus of parent as its own identities, shares
-// parent's identity tree, text measurer, clock and reduced-motion setting, and
+// parent's identity tree, text measurer, display scale, clock and reduced-motion setting, and
 // opens an animated paint pass (end it with EndFrame before Embed).
 func (canvas *Canvas) BeginEmbedded(parent *Canvas, mount Scope) {
 	canvas.Reset()
@@ -42,6 +42,7 @@ func (canvas *Canvas) BeginEmbedded(parent *Canvas, mount Scope) {
 	}
 	canvas.measurer = parent.measurer
 	canvas.engine = parent.engine
+	canvas.pixelScale = parent.pixelScale
 	canvas.motion.clock = parent.motion.clock
 	canvas.motion.reduce = parent.motion.reduce
 	canvas.BeginFrame()
@@ -88,8 +89,18 @@ func (canvas *Canvas) Embed(child *Canvas, origin Point, mount Scope) {
 		triangle.ClipOf, triangle.HasClip = embedClip(triangle.ClipOf, triangle.HasClip, origin, outer, hasOuter)
 		canvas.triangles = append(canvas.triangles, triangle)
 	}
+	// An image laid out in device pixels stays on them when it moves: the page
+	// puts the view at a logical position that need not be one.
+	deviceOrigin := origin
+	if canvas.pixelScale > 0 {
+		deviceOrigin = Point{X: canvas.roundToDevice(origin.X), Y: canvas.roundToDevice(origin.Y)}
+	}
 	for _, image := range child.images {
-		image.Bounds = translateRect(image.Bounds, origin)
+		if image.DevicePixels {
+			image.Bounds = translateRect(image.Bounds, deviceOrigin)
+		} else {
+			image.Bounds = translateRect(image.Bounds, origin)
+		}
 		image.Layer += layer
 		image.ClipOf, image.HasClip = embedClip(image.ClipOf, image.HasClip, origin, outer, hasOuter)
 		canvas.images = append(canvas.images, image)

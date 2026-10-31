@@ -64,3 +64,65 @@ func readPNG(t *testing.T, path string) image.Image {
 	}
 	return picture
 }
+
+// A picture drawn pixel for pixel reaches the screen without being resampled:
+// stripes one pixel wide stay black and white at 125% and 150%, where drawing
+// the same picture scaled to the same size smears them into greys.
+func TestSurfaceDrawPixelsIsNotResampledAtFractionalScales(t *testing.T) {
+	var surface ui.Surface
+	const width, height = 600, 40
+	surface.Resize(width, height)
+	stripes := make([]byte, width*height*4)
+	for y := range height {
+		for x := range width {
+			value := byte(0)
+			if x%2 == 0 {
+				value = 255
+			}
+			offset := (y*width + x) * 4
+			stripes[offset], stripes[offset+1], stripes[offset+2] = value, value, value
+		}
+	}
+	surface.Update(0, 0, width, height, stripes, width*4)
+
+	// greys counts the pixels of the picture's row that are neither black nor
+	// white, and whites those that are white.
+	greys := func(scale float64, pixels bool) (greys, whites int) {
+		session, err := Open(app.Config{Title: "pixels", Width: 500, Height: 60, Paint: func(canvas *ui.Canvas, size ui.Size) {
+			canvas.Fill(ui.Rect{Width: size.Width, Height: size.Height}, ui.Color{Alpha: 1})
+			if pixels {
+				surface.DrawPixels(canvas, ui.Point{X: 10, Y: 10})
+				return
+			}
+			surface.Draw(canvas, ui.Rect{X: 10, Y: 10, Width: width / float32(scale), Height: height / float32(scale)})
+		}}, nil, Options{Scale: scale})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer session.Close()
+		path := filepath.Join(t.TempDir(), "pixels.png")
+		if err := session.Screenshot(path); err != nil {
+			t.Fatal(err)
+		}
+		picture := readPNG(t, path)
+		row := int(25 * scale)
+		for x := int(12 * scale); x < int(float64(10)*scale)+width-4; x++ {
+			r, _, _, _ := picture.At(x, row).RGBA()
+			switch {
+			case r > 0xf000:
+				whites++
+			case r > 0x0fff:
+				greys++
+			}
+		}
+		return greys, whites
+	}
+	for _, scale := range []float64{1.25, 1.5} {
+		grey, white := greys(scale, true)
+		if grey != 0 || white < 100 {
+			t.Errorf("scale %g: DrawPixels drew %d grey and %d white pixels from stripes of black and white", scale, grey, white)
+		}
+		grey, white = greys(scale, false)
+		t.Logf("scale %g: Draw scaled to the same size drew %d grey and %d white pixels", scale, grey, white)
+	}
+}

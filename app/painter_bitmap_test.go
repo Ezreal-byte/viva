@@ -260,3 +260,55 @@ func TestOnlyChangedBitmapsCrossTheNativeBoundary(t *testing.T) {
 		t.Fatalf("a text-only frame uploads %d bitmaps", got)
 	}
 }
+
+// A picture laid out in device pixels reaches the platform unrounded: at a
+// fractional display scale a tile that logical-pixel rounding moved by a
+// device pixel would be resampled and blurred.
+func TestDevicePixelBitmapsKeepTheirDevicePixelsAtFractionalScales(t *testing.T) {
+	var surface ui.Surface
+	surface.Resize(1000, 300)
+	for _, scale := range []float32{1.25, 1.5, 1.75} {
+		clipped := false
+		config := Config{Width: 900, Height: 300, Paint: func(canvas *ui.Canvas, _ ui.Size) {
+			if clipped {
+				canvas.Clip(ui.Rect{X: 0, Y: 0, Width: 333.3, Height: 111.1})
+			}
+			surface.DrawPixels(canvas, ui.Point{X: 7.7, Y: 5.5})
+			if clipped {
+				canvas.Unclip()
+			}
+		}}
+		painter, err := newPainter(&ui.Canvas{}, &config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, clipped = range []bool{false, true} {
+			if _, err := painter.resize(platform.Size{Width: 900, Height: 300, Scale: scale}); err != nil {
+				t.Fatal(err)
+			}
+			covered := 0
+			for _, label := range painter.labels {
+				if len(label.Bitmap) == 0 {
+					continue
+				}
+				x, y := float64(label.X*scale), float64(label.Y*scale)
+				width, height := float64(label.Width*scale), float64(label.Height*scale)
+				for _, device := range []float64{x, y, width, height} {
+					if math.Abs(device-math.Round(device)) > 1e-3 {
+						t.Fatalf("scale %g clipped %v: label %+v is not on device pixels", scale, clipped, label)
+					}
+				}
+				if int(math.Round(width)) != label.BitmapWidth || int(math.Round(height)) != label.BitmapHeight {
+					t.Fatalf("scale %g clipped %v: a %dx%d bitmap region is drawn %vx%v device pixels", scale, clipped, label.BitmapWidth, label.BitmapHeight, width, height)
+				}
+				covered += label.BitmapWidth * label.BitmapHeight
+			}
+			if !clipped && covered != 1000*300 {
+				t.Fatalf("scale %g: %d of %d picture pixels are drawn", scale, covered, 1000*300)
+			}
+			if clipped && (covered == 0 || covered >= 1000*300) {
+				t.Fatalf("scale %g: the clip leaves %d picture pixels", scale, covered)
+			}
+		}
+	}
+}

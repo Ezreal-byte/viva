@@ -1287,6 +1287,13 @@ func (painter *painter) applyClipping() {
 		if !ok {
 			continue
 		}
+		if image.DevicePixels {
+			// The clip may end between device pixels; the picture is cut at one.
+			scale := painter.canvas.PixelScale()
+			if visible = deviceBounds(visible, scale); visible.Width <= 0 || visible.Height <= 0 {
+				continue
+			}
+		}
 		if visible != image.Bounds {
 			sx := image.Source.Width / image.Bounds.Width
 			sy := image.Source.Height / image.Bounds.Height
@@ -1295,6 +1302,9 @@ func (painter *painter) applyClipping() {
 			image.Source.Width = visible.Width * sx
 			image.Source.Height = visible.Height * sy
 			image.Bounds = visible
+			if image.DevicePixels {
+				image.Source = wholePixels(image.Source)
+			}
 		}
 		painter.clippedImages = append(painter.clippedImages, image)
 	}
@@ -1924,8 +1934,8 @@ func (painter *painter) syncLabels() {
 		bitmap := image.Bitmap
 		left := max(int(image.Source.X), 0)
 		top := max(int(image.Source.Y), 0)
-		right := min(int(image.Source.X+image.Source.Width+0.999999), bitmap.Width)
-		bottom := min(int(image.Source.Y+image.Source.Height+0.999999), bitmap.Height)
+		right := min(int(math.Ceil(float64(image.Source.X+image.Source.Width))), bitmap.Width)
+		bottom := min(int(math.Ceil(float64(image.Source.Y+image.Source.Height))), bitmap.Height)
 		if left >= right || top >= bottom {
 			continue
 		}
@@ -1943,9 +1953,14 @@ func (painter *painter) syncLabels() {
 		if image.Backdrop {
 			layer = 0
 		}
+		// Rounded to logical pixels, unless the image is laid out in device pixels.
+		x, y, w, h := float32(roundPixel(image.Bounds.X)), float32(roundPixel(image.Bounds.Y)), float32(width), float32(height)
+		if image.DevicePixels {
+			x, y, w, h = image.Bounds.X, image.Bounds.Y, image.Bounds.Width, image.Bounds.Height
+		}
 		painter.labels = append(painter.labels, platform.TextLabel{
-			X: float32(roundPixel(image.Bounds.X)), Y: float32(roundPixel(image.Bounds.Y)),
-			Width: float32(width), Height: float32(height),
+			X: x, Y: y,
+			Width: w, Height: h,
 			Layer:  layer,
 			Bitmap: bitmap.Pix[offset : offset+length], BitmapWidth: right - left, BitmapHeight: bottom - top,
 			BitmapStride: bitmap.Stride, BitmapID: bitmap.ID, BitmapVersion: bitmap.Version,
@@ -1983,6 +1998,21 @@ func (painter *painter) syncLabels() {
 		}
 		painter.labels = append(painter.labels, entry)
 	}
+}
+
+// deviceBounds rounds the edges of bounds to whole device pixels of scale.
+func deviceBounds(bounds ui.Rect, scale float32) ui.Rect {
+	edge := func(value float32) float32 { return float32(math.Floor(float64(value)*float64(scale) + 0.5)) }
+	left, top := edge(bounds.X), edge(bounds.Y)
+	right, bottom := edge(bounds.X+bounds.Width), edge(bounds.Y+bounds.Height)
+	return ui.Rect{X: left / scale, Y: top / scale, Width: (right - left) / scale, Height: (bottom - top) / scale}
+}
+
+// wholePixels rounds the edges of a bitmap region to whole bitmap pixels.
+func wholePixels(region ui.Rect) ui.Rect {
+	left, top := math.Floor(float64(region.X)+0.5), math.Floor(float64(region.Y)+0.5)
+	right, bottom := math.Floor(float64(region.X+region.Width)+0.5), math.Floor(float64(region.Y+region.Height)+0.5)
+	return ui.Rect{X: float32(left), Y: float32(top), Width: float32(right - left), Height: float32(bottom - top)}
 }
 
 // containsRect reports whether inner lies wholly inside outer.

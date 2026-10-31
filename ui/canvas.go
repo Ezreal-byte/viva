@@ -268,6 +268,11 @@ type Image struct {
 	// Backdrop marks an image drawn beneath every other primitive of the frame,
 	// whatever layer they are on. See Canvas.DrawBackdrop.
 	Backdrop bool
+	// DevicePixels marks an image whose Bounds and Source are whole device pixels
+	// and whole bitmap pixels, drawn one bitmap pixel to one device pixel. The
+	// painter keeps it so, at a fractional display scale too, instead of rounding
+	// it to logical pixels. See Surface.DrawPixels.
+	DevicePixels bool
 }
 
 // Role describes the platform-neutral semantic purpose of an interactive hit.

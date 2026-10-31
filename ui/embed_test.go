@@ -269,3 +269,33 @@ func BenchmarkEmbed(b *testing.B) {
 		page.Unclip()
 	}
 }
+
+func TestEmbeddedViewPaintsForTheDisplayScaleOfItsPage(t *testing.T) {
+	var page, view Canvas
+	page.SetPixelScale(1.25)
+	view.BeginEmbedded(&page, 0)
+	if got := view.PixelScale(); got != 1.25 {
+		t.Fatalf("an embedded view paints for scale %v, its page for 1.25", got)
+	}
+}
+
+func TestEmbeddedDevicePixelImagesStayOnDevicePixelsWhereverTheViewSits(t *testing.T) {
+	var surface Surface
+	surface.Resize(300, 100)
+	for _, scale := range []float32{1.25, 1.5, 1.75} {
+		var page, view Canvas
+		page.SetPixelScale(scale)
+		view.BeginEmbedded(&page, 0)
+		surface.DrawPixels(&view, Point{X: 4, Y: 8})
+		view.EndFrame()
+		page.Embed(&view, Point{X: 265.7, Y: 31.3}, 0)
+		for _, image := range page.Images() {
+			for _, edge := range []float32{image.Bounds.X, image.Bounds.Y, image.Bounds.Width, image.Bounds.Height} {
+				device := float64(edge * scale)
+				if d := device - float64(int(device+0.5)); d > 1e-3 || d < -1e-3 {
+					t.Fatalf("scale %g: embedded tile %+v is off the device pixels", scale, image.Bounds)
+				}
+			}
+		}
+	}
+}
