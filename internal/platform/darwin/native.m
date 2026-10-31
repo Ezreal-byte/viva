@@ -1262,6 +1262,399 @@ static NSFont *viva_mono_font(CGFloat size, CGFloat weight, int face) {
     return stacked != nil ? stacked : base;
 }
 
+/* ---- fallback to the installed fonts for glyphs no family of the face has ---
+ *
+ * CoreText draws .LastResort for a character neither the face's families nor its
+ * own fallback have: private-use icon code points (Powerline, Nerd Fonts) above
+ * all. It never looks at the fonts the user installed, while the Linux
+ * (fontconfig) and the Windows (DirectWrite) text stacks do -- so a terminal
+ * loses the icons of the very font its user installed, and a prompt made of
+ * Powerline separators reads as boxes.
+ *
+ * A cluster that CoreText would draw with the last-resort glyph is handed to the
+ * installed family that has it, ranked so that a terminal icon font wins over a
+ * CJK font that maps the same code point to one of its own characters: fixed
+ * pitch first, then one that draws no Han, then the one covering the most
+ * private-use code points, then the family name. The choice is remembered per
+ * cluster (a terminal draws the same icons again and again) and per family (what
+ * a family covers cannot change while the process runs), so a family installed
+ * after a character was first drawn is only picked up by a new process.
+ */
+
+// VIVA_MONO_FALLBACK_CACHE bounds the clusters remembered; past it a cluster is
+// looked up again each time instead of growing the table without end.
+#define VIVA_MONO_FALLBACK_CACHE 4096
+// VIVA_MONO_CLUSTER_LENGTH bounds a cluster; the longest real ones are emoji
+// sequences of a few code points.
+#define VIVA_MONO_CLUSTER_LENGTH 64
+
+typedef struct {
+    BOOL fixedPitch;
+    BOOL includesHan;
+    int privateUse;
+} viva_mono_family_traits;
+
+static NSMutableDictionary<NSString *, NSValue *> *viva_mono_trait_cache;
+static NSMutableDictionary<NSString *, id> *viva_mono_cluster_cache;
+
+static NSObject *viva_mono_fallback_lock(void) {
+    static NSObject *lock;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ lock = [[NSObject alloc] init]; });
+    return lock;
+}
+
+// viva_mono_family_font resolves an installed family at a size and weight, or nil.
+static NSFont *viva_mono_family_font(NSString *family, CGFloat size, CGFloat weight) {
+    return [[NSFontManager sharedFontManager] fontWithFamily:family
+                                                      traits:(weight >= 0.34 ? NSBoldFontMask : 0)
+                                                      weight:5
+                                                        size:size];
+}
+
+// viva_mono_replacement_font is viva_mono_family_font for a replacement glyph, remembering
+// the families asked for: the font manager lookup is most of what a replacement costs, and
+// a terminal draws the same icon clusters line after line at the same size. The font is
+// returned retained and autoreleased, so it outlives an eviction.
+#define VIVA_MONO_REPLACEMENT_CACHE 8
+
+typedef struct {
+    NSString *family;
+    CGFloat size;
+    BOOL bold;
+    NSFont *font;
+} viva_mono_replacement;
+
+static viva_mono_replacement viva_mono_replacements[VIVA_MONO_REPLACEMENT_CACHE];
+static int viva_mono_replacement_count;
+static int viva_mono_replacement_next;
+
+static NSFont *viva_mono_replacement_font(NSString *family, CGFloat size, BOOL bold) {
+    @synchronized(viva_mono_fallback_lock()) {
+        for (int index = 0; index < viva_mono_replacement_count; index++) {
+            viva_mono_replacement *entry = &viva_mono_replacements[index];
+            if (entry->size == size && entry->bold == bold && [entry->family isEqualToString:family]) {
+                return [[entry->font retain] autorelease];
+            }
+        }
+    }
+    NSFont *font = viva_mono_family_font(family, size, bold ? 1 : 0);
+    if (font == nil) {
+        return nil;
+    }
+    @synchronized(viva_mono_fallback_lock()) {
+        viva_mono_replacement *entry;
+        if (viva_mono_replacement_count < VIVA_MONO_REPLACEMENT_CACHE) {
+            entry = &viva_mono_replacements[viva_mono_replacement_count++];
+        } else {
+            entry = &viva_mono_replacements[viva_mono_replacement_next++ % VIVA_MONO_REPLACEMENT_CACHE];
+            [entry->family release];
+            [entry->font release];
+        }
+        entry->family = [family copy];
+        entry->size = size;
+        entry->bold = bold;
+        entry->font = [font retain];
+    }
+    return [[font retain] autorelease];
+}
+
+// viva_mono_font_covers reports whether font draws every code unit of value.
+static BOOL viva_mono_font_covers(CTFontRef font, NSString *value) {
+    NSUInteger length = value.length;
+    if (font == NULL || length == 0 || length > VIVA_MONO_CLUSTER_LENGTH) {
+        return NO;
+    }
+    UniChar characters[VIVA_MONO_CLUSTER_LENGTH];
+    CGGlyph glyphs[VIVA_MONO_CLUSTER_LENGTH];
+    [value getCharacters:characters range:NSMakeRange(0, length)];
+    if (!CTFontGetGlyphsForCharacters(font, characters, glyphs, (CFIndex)length)) {
+        return NO;
+    }
+    for (NSUInteger index = 0; index < length; index++) {
+        if (glyphs[index] == 0) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
+// viva_mono_draws_han reports whether a font draws Chinese text at all. A family
+// that does is a text face, and the glyph it maps a private-use code point to is
+// one of its own characters rather than the icon the line asks for.
+static BOOL viva_mono_draws_han(CTFontRef font) {
+    static const UniChar probes[] = {0x4E2D, 0x5B57, 0x8A9E}; /* 中 字 語 */
+    CGGlyph glyphs[3] = {0};
+    CTFontGetGlyphsForCharacters(font, probes, glyphs, 3);
+    return glyphs[0] != 0 || glyphs[1] != 0 || glyphs[2] != 0;
+}
+
+// viva_mono_private_use counts the private-use code points a font covers, from
+// the plane's bitmap: a Nerd Font covers thousands, a CJK font a handful.
+static int viva_mono_private_use(CTFontRef font) {
+    CFCharacterSetRef characters = CTFontCopyCharacterSet(font);
+    if (characters == NULL) {
+        return 0;
+    }
+    CFDataRef bitmap = CFCharacterSetCreateBitmapRepresentation(kCFAllocatorDefault, characters);
+    CFRelease(characters);
+    if (bitmap == NULL) {
+        return 0;
+    }
+    const UInt8 *bytes = CFDataGetBytePtr(bitmap);
+    CFIndex length = CFDataGetLength(bitmap);
+    int count = 0;
+    for (int code = 0xE000; code <= 0xF8FF; code++) {
+        CFIndex index = code >> 3;
+        if (index >= length) {
+            break;
+        }
+        if ((bytes[index] & (1 << (code & 7))) != 0) {
+            count++;
+        }
+    }
+    CFRelease(bitmap);
+    return count;
+}
+
+// viva_mono_family_traits_of is what ranks a family: its pitch, whether it draws
+// Han, and how much private-use it covers. Read once per family.
+static viva_mono_family_traits viva_mono_family_traits_of(NSString *family) {
+    viva_mono_family_traits traits = {NO, YES, 0};
+    @synchronized(viva_mono_fallback_lock()) {
+        NSValue *known = [viva_mono_trait_cache objectForKey:family];
+        if (known != nil) {
+            [known getValue:&traits size:sizeof(traits)];
+            return traits;
+        }
+    }
+    NSFont *font = viva_mono_family_font(family, 12, 0);
+    if (font != nil) {
+        traits.fixedPitch = font.isFixedPitch;
+        traits.includesHan = viva_mono_draws_han((CTFontRef)font);
+        traits.privateUse = viva_mono_private_use((CTFontRef)font);
+    }
+    NSValue *value = [NSValue valueWithBytes:&traits objCType:@encode(viva_mono_family_traits)];
+    @synchronized(viva_mono_fallback_lock()) {
+        if (viva_mono_trait_cache == nil) {
+            viva_mono_trait_cache = [[NSMutableDictionary alloc] init];
+        }
+        [viva_mono_trait_cache setObject:value forKey:family];
+    }
+    return traits;
+}
+
+// viva_mono_family_better reports whether candidate ranks before best for a cluster.
+static BOOL viva_mono_family_better(viva_mono_family_traits candidate, NSString *family,
+                                   viva_mono_family_traits best, NSString *bestFamily) {
+    if (bestFamily == nil) {
+        return YES;
+    }
+    if (candidate.fixedPitch != best.fixedPitch) {
+        return candidate.fixedPitch;
+    }
+    if (candidate.includesHan != best.includesHan) {
+        return !candidate.includesHan;
+    }
+    if (candidate.privateUse != best.privateUse) {
+        return candidate.privateUse > best.privateUse;
+    }
+    return [family localizedCaseInsensitiveCompare:bestFamily] == NSOrderedAscending;
+}
+
+// viva_mono_find_family is the installed family that draws cluster, or nil. It
+// asks the system for the fonts covering the cluster's code points, leaves out
+// the ones that do not draw every code point of it, and ranks the rest.
+static NSString *viva_mono_find_family(NSString *cluster) {
+    CFCharacterSetRef characters = CFCharacterSetCreateWithCharactersInString(kCFAllocatorDefault, (CFStringRef)cluster);
+    if (characters == NULL) {
+        return nil;
+    }
+    const void *keys[] = {kCTFontCharacterSetAttribute};
+    const void *values[] = {characters};
+    CFDictionaryRef query = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1,
+                                               &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFRelease(characters);
+    if (query == NULL) {
+        return nil;
+    }
+    CTFontDescriptorRef descriptor = CTFontDescriptorCreateWithAttributes(query);
+    CFRelease(query);
+    if (descriptor == NULL) {
+        return nil;
+    }
+    CFArrayRef matches = CTFontDescriptorCreateMatchingFontDescriptors(descriptor, NULL);
+    CFRelease(descriptor);
+    if (matches == NULL) {
+        return nil;
+    }
+    NSString *best = nil;
+    viva_mono_family_traits bestTraits = {NO, YES, 0};
+    CFIndex count = CFArrayGetCount(matches);
+    for (CFIndex index = 0; index < count; index++) {
+        CTFontDescriptorRef match = (CTFontDescriptorRef)CFArrayGetValueAtIndex(matches, index);
+        NSString *family = (NSString *)CTFontDescriptorCopyAttribute(match, kCTFontFamilyNameAttribute);
+        if (family == nil || family.length == 0) {
+            if (family != NULL) {
+                CFRelease(family);
+            }
+            continue;
+        }
+        NSFont *font = viva_mono_family_font(family, 12, 0);
+        if (font == nil || !viva_mono_font_covers((CTFontRef)font, cluster)) {
+            CFRelease(family);
+            continue;
+        }
+        viva_mono_family_traits traits = viva_mono_family_traits_of(family);
+        if (viva_mono_family_better(traits, family, bestTraits, best)) {
+            best = [family autorelease];
+            bestTraits = traits;
+        } else {
+            CFRelease(family);
+        }
+    }
+    CFRelease(matches);
+    return best;
+}
+
+// viva_mono_face_fallback is the family the face itself puts behind its primary
+// that draws cluster, or nil. CoreText ignores a cascade list for private-use code
+// points as well, so the application's own fallbacks -- the ones the settings page
+// offers -- have to be tried here, before the ranking.
+static NSString *viva_mono_face_fallback(NSString *cluster, int face) {
+    NSString *family = nil;
+    BOOL classic = NO;
+    NSArray<NSString *> *fallbacks = nil;
+    viva_mono_face_traits(face, &family, &classic, &fallbacks);
+    for (NSString *candidate in fallbacks) {
+        NSFont *font = viva_mono_family_font(candidate, 12, 0);
+        if (font != nil && viva_mono_font_covers((CTFontRef)font, cluster)) {
+            return candidate;
+        }
+    }
+    return nil;
+}
+
+// viva_mono_fallback_family is the installed family that draws a cluster CoreText
+// cannot, or nil when no installed family has it.
+static NSString *viva_mono_fallback_family(NSString *cluster) {
+    if (cluster.length == 0 || cluster.length > VIVA_MONO_CLUSTER_LENGTH) {
+        return nil;
+    }
+    @synchronized(viva_mono_fallback_lock()) {
+        id known = [viva_mono_cluster_cache objectForKey:cluster];
+        if (known != nil) {
+            return known == [NSNull null] ? nil : known;
+        }
+    }
+    NSString *family = viva_mono_find_family(cluster);
+    @synchronized(viva_mono_fallback_lock()) {
+        if (viva_mono_cluster_cache == nil) {
+            viva_mono_cluster_cache = [[NSMutableDictionary alloc] init];
+        }
+        if (viva_mono_cluster_cache.count < VIVA_MONO_FALLBACK_CACHE) {
+            [viva_mono_cluster_cache setObject:(family != nil ? family : (id)[NSNull null]) forKey:cluster];
+        }
+    }
+    return family;
+}
+
+// viva_mono_font_is_last_resort reports whether font is the face CoreText draws a
+// character no installed family has with. The face calls itself LastResort, with a
+// leading dot in its family name and without it in its PostScript name.
+static BOOL viva_mono_is_last_resort_name(CFStringRef name) {
+    if (name == NULL) {
+        return NO;
+    }
+    return CFStringCompare(name, CFSTR("LastResort"), kCFCompareCaseInsensitive) == kCFCompareEqualTo ||
+           CFStringCompare(name, CFSTR(".LastResort"), kCFCompareCaseInsensitive) == kCFCompareEqualTo;
+}
+
+static BOOL viva_mono_font_is_last_resort(CTFontRef font) {
+    if (font == NULL) {
+        return NO;
+    }
+    CFStringRef postscript = CTFontCopyPostScriptName(font);
+    CFStringRef family = CTFontCopyFamilyName(font);
+    BOOL last = viva_mono_is_last_resort_name(postscript) || viva_mono_is_last_resort_name(family);
+    if (postscript != NULL) {
+        CFRelease(postscript);
+    }
+    if (family != NULL) {
+        CFRelease(family);
+    }
+    return last;
+}
+
+// viva_mono_fallback_line shapes a fixed-pitch line in base (the face's font at the
+// weight, and with the slant, the caller already resolved): for the clusters CoreText
+// would draw with its last-resort glyph, the installed family that has them, at base's
+// size and boldness. A line with nothing to replace is shaped once, as before; one with
+// a replacement is shaped again with the fallback fonts in place, so every glyph sits
+// where the grid says. The line is +1: the caller releases it.
+static CTLineRef viva_mono_fallback_line(NSString *value, NSFont *base, int face, CGColorRef color) {
+    if (base == nil || value.length == 0) {
+        return NULL;
+    }
+    CGFloat size = base.pointSize;
+    BOOL bold = (base.fontDescriptor.symbolicTraits & NSFontBoldTrait) != 0;
+    CFIndex length = (CFIndex)value.length;
+    CFMutableAttributedStringRef attributed = CFAttributedStringCreateMutable(kCFAllocatorDefault, 0);
+    if (attributed == NULL) {
+        return NULL;
+    }
+    CFAttributedStringReplaceString(attributed, CFRangeMake(0, 0), (CFStringRef)value);
+    CFAttributedStringSetAttribute(attributed, CFRangeMake(0, length), kCTFontAttributeName, (CTFontRef)base);
+    if (color != NULL) {
+        CFAttributedStringSetAttribute(attributed, CFRangeMake(0, length), kCTForegroundColorAttributeName, color);
+    }
+    CTLineRef line = CTLineCreateWithAttributedString(attributed);
+    if (line == NULL) {
+        CFRelease(attributed);
+        return NULL;
+    }
+    BOOL replaced = NO;
+    CFArrayRef runs = CTLineGetGlyphRuns(line);
+    CFIndex runCount = runs != NULL ? CFArrayGetCount(runs) : 0;
+    for (CFIndex index = 0; index < runCount; index++) {
+        CTRunRef run = (CTRunRef)CFArrayGetValueAtIndex(runs, index);
+        CFDictionaryRef runAttributes = CTRunGetAttributes(run);
+        CTFontRef runFont = runAttributes != NULL ? (CTFontRef)CFDictionaryGetValue(runAttributes, kCTFontAttributeName) : NULL;
+        if (!viva_mono_font_is_last_resort(runFont)) {
+            continue;
+        }
+        CFRange runRange = CTRunGetStringRange(run);
+        CFIndex end = runRange.location + runRange.length;
+        for (CFIndex at = runRange.location; at < end;) {
+            NSRange cluster = [value rangeOfComposedCharacterSequenceAtIndex:(NSUInteger)at];
+            if (cluster.length == 0) {
+                break;
+            }
+            NSString *text = [value substringWithRange:cluster];
+            NSString *family = viva_mono_face_fallback(text, face);
+            if (family == nil) {
+                family = viva_mono_fallback_family(text);
+            }
+            NSFont *fallback = family != nil ? viva_mono_replacement_font(family, size, bold) : nil;
+            if (fallback != nil) {
+                CFAttributedStringSetAttribute(attributed,
+                                               CFRangeMake((CFIndex)cluster.location, (CFIndex)cluster.length),
+                                               kCTFontAttributeName, (CTFontRef)fallback);
+                replaced = YES;
+            }
+            at = (CFIndex)NSMaxRange(cluster);
+        }
+    }
+    if (!replaced) {
+        CFRelease(attributed);
+        return line;
+    }
+    CFRelease(line);
+    line = CTLineCreateWithAttributedString(attributed);
+    CFRelease(attributed);
+    return line;
+}
+
 // viva_font_smoothing_enabled is whether the user leaves font smoothing on. AppKit turns it
 // off for its own text when AppleFontSmoothing is 0 (or not a number); a Core Graphics
 // bitmap context does not look at the setting, so the text Viva rasterizes into one has to
@@ -1287,31 +1680,8 @@ static void viva_prepare_text_context(CGContextRef context, CGFloat scale) {
 // The native editor and the headless renderer both build it here, so they can only ever
 // look the same.
 static CTLineRef viva_new_mono_line(NSString *shown, CGFloat fontSize, NSColor *color, int monoFace) {
-    // The NSFont itself, not its name looked up again: the name loses the fallback families.
-    CTFontRef font = (CTFontRef)CFRetain(viva_mono_font(fontSize, 0, monoFace));
-    if (font == NULL) {
-        return NULL;
-    }
-    const void *keys[] = {kCTFontAttributeName, kCTForegroundColorAttributeName};
-    const void *values[] = {font, color.CGColor};
-    CFDictionaryRef attributes = CFDictionaryCreate(
-        kCFAllocatorDefault,
-        keys,
-        values,
-        2,
-        &kCFTypeDictionaryKeyCallBacks,
-        &kCFTypeDictionaryValueCallBacks
-    );
-    CFAttributedStringRef attributed = CFAttributedStringCreate(
-        kCFAllocatorDefault,
-        (CFStringRef)shown,
-        attributes
-    );
-    CTLineRef line = CTLineCreateWithAttributedString(attributed);
-    CFRelease(attributed);
-    CFRelease(attributes);
-    CFRelease(font);
-    return line;
+    // The face's font, with the installed fallback for what no family of it draws.
+    return viva_mono_fallback_line(shown, viva_mono_font(fontSize, 0, monoFace), monoFace, color.CGColor);
 }
 
 // viva_new_editor_line is the geometry of the text the editor shows: one shaped line
@@ -1969,23 +2339,16 @@ static uint64_t viva_label_content_hash(viva_text_label config) {
     baseline -= ceil(_originY * pixelScale - 1e-4) / pixelScale;
     if (_mono) {
         // A fixed-pitch label is not proportional text: it keeps its own advances.
-        // The NSFont is a CTFont already. Looking it up again by name fails for the
-        // monospaced system font at a weight (its name is private to that instance) and
-        // CoreText answers with Times New Roman.
-        CTFontRef font = (CTFontRef)CFRetain(viva_mono_font(_fontSize, _fontWeight, _monoFace));
-        const void *keys[] = {kCTFontAttributeName, kCTForegroundColorAttributeName};
-        const void *values[] = {font, foreground};
-        CFDictionaryRef attributes = CFDictionaryCreate(
-            kCFAllocatorDefault, keys, values, 2,
-            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-        CFAttributedStringRef attributed = CFAttributedStringCreate(kCFAllocatorDefault, (CFStringRef)_value, attributes);
-        CTLineRef line = CTLineCreateWithAttributedString(attributed);
-        CGContextSetTextPosition(context, _originX, baseline);
-        CTLineDraw(line, context);
-        CFRelease(line);
-        CFRelease(attributed);
-        CFRelease(attributes);
-        CFRelease(font);
+        // The line carries the face's font (the NSFont itself: looking it up again by
+        // name fails for the monospaced system font at a weight, whose name is private
+        // to that instance, and CoreText answers with Times New Roman) and, for the
+        // clusters no family of it draws, the installed fallback.
+        CTLineRef line = viva_mono_fallback_line(_value, viva_mono_font(_fontSize, _fontWeight, _monoFace), _monoFace, foreground);
+        if (line != NULL) {
+            CGContextSetTextPosition(context, _originX, baseline);
+            CTLineDraw(line, context);
+            CFRelease(line);
+        }
     } else {
         viva_text_line *shaped = viva_shared_text_line(_value, _fontSize, _fontWeight);
         if (shaped != NULL) {
@@ -2064,14 +2427,7 @@ static uint64_t viva_label_content_hash(viva_text_label config) {
                                                        length:count
                                                      encoding:NSUTF8StringEncoding];
             if (shown != nil) {
-                const void *keys[] = {kCTFontAttributeName, kCTForegroundColorAttributeName};
-                const void *values[] = {font, foreground};
-                CFDictionaryRef attributes = CFDictionaryCreate(
-                    kCFAllocatorDefault, keys, values, 2,
-                    &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-                CFAttributedStringRef attributed = CFAttributedStringCreate(
-                    kCFAllocatorDefault, (CFStringRef)shown, attributes);
-                CTLineRef line = CTLineCreateWithAttributedString(attributed);
+                CTLineRef line = viva_mono_fallback_line(shown, (NSFont *)font, _monoFace, foreground);
                 if (line != NULL) {
                     CGFloat width = CTLineGetTypographicBounds(line, NULL, NULL, NULL);
                     if (width > 0 && span > 0) {
@@ -2084,8 +2440,6 @@ static uint64_t viva_label_content_hash(viva_text_label config) {
                     }
                     CFRelease(line);
                 }
-                CFRelease(attributed);
-                CFRelease(attributes);
                 [shown release];
             }
         } else if (ascii) {
@@ -2111,14 +2465,12 @@ static uint64_t viva_label_content_hash(viva_text_label config) {
                 CFRelease(foreground);
                 continue;
             }
-            const void *keys[] = {kCTFontAttributeName, kCTForegroundColorAttributeName};
-            const void *values[] = {font, foreground};
-            CFDictionaryRef attributes = CFDictionaryCreate(
-                kCFAllocatorDefault, keys, values, 2,
-                &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-            CFAttributedStringRef attributed = CFAttributedStringCreate(
-                kCFAllocatorDefault, (CFStringRef)shown, attributes);
-            CTLineRef line = CTLineCreateWithAttributedString(attributed);
+            CTLineRef line = viva_mono_fallback_line(shown, (NSFont *)font, _monoFace, foreground);
+            if (line == NULL) {
+                [shown release];
+                CFRelease(foreground);
+                continue;
+            }
             CGFloat x = cellLeft;
             if (run->cells > 0) {
                 CFRange cluster = CFStringGetRangeOfComposedCharactersAtIndex((CFStringRef)shown, 0);
@@ -2132,8 +2484,6 @@ static uint64_t viva_label_content_hash(viva_text_label config) {
             CGContextSetTextPosition(context, x, baseline);
             CTLineDraw(line, context);
             CFRelease(line);
-            CFRelease(attributed);
-            CFRelease(attributes);
             [shown release];
         }
 
@@ -5848,6 +6198,42 @@ int viva_measure_mono(double font_size, int mono_face, double *advance, double *
 }
 
 #ifdef VIVA_OFFSCREEN  /* defined by offscreen.go, which builds only with -tags vivahead */
+
+/* ---- Fonts a headless run carries along --------------------------------
+ * A headless run or a test can hand the text stack a font file without
+ * installing it in the user's font library: process registration makes the
+ * family visible to CoreText, and so to the fallback that picks a family for a
+ * character no installed one draws. */
+
+int viva_register_font_file(const char *path) {
+    @autoreleasepool {
+        if (path == NULL || path[0] == '\0') {
+            return 1;
+        }
+        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+        CFErrorRef error = NULL;
+        BOOL registered = CTFontManagerRegisterFontsForURL((CFURLRef)url, kCTFontManagerScopeProcess, &error);
+        if (error != NULL) {
+            CFRelease(error);
+        }
+        return registered ? 0 : 2;
+    }
+}
+
+int viva_unregister_font_file(const char *path) {
+    @autoreleasepool {
+        if (path == NULL || path[0] == '\0') {
+            return 1;
+        }
+        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+        CFErrorRef error = NULL;
+        BOOL removed = CTFontManagerUnregisterFontsForURL((CFURLRef)url, kCTFontManagerScopeProcess, &error);
+        if (error != NULL) {
+            CFRelease(error);
+        }
+        return removed ? 0 : 2;
+    }
+}
 
 /* ---- Offscreen rendering ------------------------------------------------
  * VivaOffscreen draws a scene with the window's own pipelines, label rasterizer
