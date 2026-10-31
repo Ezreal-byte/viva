@@ -40,6 +40,9 @@ import (
 //	                           sees the presses and releases; elsewhere keydown acts as key
 //	blur                       the window loses the keyboard: held keys are released
 //	type TEXT                  insert the rest of the line into the focused field
+//	compose [TEXT]             set the input-method composition of the focused field to the
+//	                           rest of the line, as an input method does while a syllable is
+//	                           typed; without TEXT the composition ends. type commits text
 //	select START END           select a rune range of the focused field
 //	resize W H
 //	frame                     ok x=.. y=.. w=.. h=.. (the content area on screen)
@@ -112,10 +115,12 @@ func execute(session *Session, line string) (reply string, quit bool) {
 		}
 		return data.String() + "ok" + summary + "\n", false
 	}
-	// "type" and "clip" take the rest of the line verbatim.
+	// "type", "compose" and "clip" take the rest of the line verbatim.
 	switch command {
 	case "type":
 		return finish(session.Type(rest), "")
+	case "compose":
+		return finish(session.Compose(rest), "")
 	case "clip":
 		if rest != "" {
 			session.driver.SetClipboard(rest)

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/vivaui/viva/internal/input"
 	"github.com/vivaui/viva/internal/platform"
@@ -705,6 +706,24 @@ func (driver *Driver) Type(value string) error {
 		return ErrNoTextInput
 	}
 	return driver.textEvent(platform.TextEvent{Kind: platform.TextInsert, Text: value})
+}
+
+// Compose sets the input-method composition of the focused text field to value,
+// as an input method does while the user types a pinyin syllable before choosing
+// a candidate; an empty value ends the composition without committing anything.
+// The caret sits at the end of the composition. Type commits text.
+func (driver *Driver) Compose(value string) error {
+	if err := driver.Pump(); err != nil {
+		return err
+	}
+	if !driver.editing() {
+		return ErrNoTextInput
+	}
+	if value == "" {
+		return driver.textEvent(platform.TextEvent{Kind: platform.TextUnmark})
+	}
+	end := utf8.RuneCountInString(value)
+	return driver.textEvent(platform.TextEvent{Kind: platform.TextSetMarked, Text: value, MarkedSelection: text.Range{Start: end, End: end}})
 }
 
 // SelectText selects a rune range of the focused text field.
