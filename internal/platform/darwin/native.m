@@ -398,6 +398,9 @@ extern void vivaRawKeyEvent(
     size_t typedLength
 );
 
+// vivaTerminalCells is how many terminal cells a character occupies, answered by the
+// terminal's own table in Go.
+extern int vivaTerminalCells(uint32_t character);
 extern void vivaFocusLost(
     uintptr_t callbackHandle,
     void *view
@@ -1087,24 +1090,62 @@ static void viva_draw_text_line(CGContextRef context, const viva_text_line *line
 }
 
 // The geometry of the text a native editor shows: the shaped line of proportional text, or
-// the fixed-pitch line of a terminal's preedit, whose cells are the grid's own.
+// a terminal's preedit, which is laid on the terminal's cells and not on the advances of
+// its font: the text, and the width of one cell.
 typedef struct {
     viva_text_line *shaped;
-    CTLineRef mono;
+    NSString *grid;
+    CGFloat cell;
 } viva_editor_line;
 
 static void viva_editor_line_free(viva_editor_line line) {
     viva_text_line_release(line.shaped);
-    if (line.mono != NULL) {
-        CFRelease(line.mono);
+    [line.grid release];
+}
+
+// viva_editor_line_made says whether the line could be made.
+static BOOL viva_editor_line_made(viva_editor_line line) {
+    return line.shaped != NULL || line.grid != nil;
+}
+
+// viva_terminal_step reads the character of shown at UTF-16 index `at`: how many units it
+// takes, and how many cells (see vivaTerminalCells; a combining mark has none).
+static NSUInteger viva_terminal_step(NSString *shown, NSUInteger at, int *cells) {
+    unichar first = [shown characterAtIndex:at];
+    uint32_t point = first;
+    NSUInteger length = 1;
+    if (CFStringIsSurrogateHighCharacter(first) && at + 1 < shown.length) {
+        unichar second = [shown characterAtIndex:at + 1];
+        if (CFStringIsSurrogateLowCharacter(second)) {
+            point = CFStringGetLongCharacterForSurrogatePair(first, second);
+            length = 2;
+        }
     }
+    *cells = vivaTerminalCells(point);
+    return length;
+}
+
+// viva_terminal_column is the cell column of the boundary before the UTF-16 unit `index`
+// of shown, counted from the first cell of the text.
+static NSUInteger viva_terminal_column(NSString *shown, NSUInteger index) {
+    NSUInteger column = 0;
+    for (NSUInteger at = 0; at < index && at < shown.length;) {
+        int cells = 0;
+        NSUInteger length = viva_terminal_step(shown, at, &cells);
+        if (at + length > index) {
+            break;
+        }
+        column += (NSUInteger)cells;
+        at += length;
+    }
+    return column;
 }
 
 // viva_text_offset is where the editor draws the boundary before the UTF-16 unit `index`
 // of shown, from the left of the text.
 static CGFloat viva_text_offset(viva_editor_line line, NSUInteger index, BOOL terminal) {
     if (terminal) {
-        return CTLineGetOffsetForStringIndex(line.mono, index, NULL);
+        return (CGFloat)viva_terminal_column(line.grid, index) * line.cell;
     }
     return viva_text_line_caret(line.shaped, index);
 }
@@ -1126,17 +1167,22 @@ static NSUInteger viva_text_index_at(viva_editor_line line, NSString *shown, CGF
     if (!terminal) {
         return viva_text_line_index_at(line.shaped, x);
     }
-    CFIndex index = CTLineGetStringIndexForPosition(line.mono, CGPointMake(x, 0));
-    if (index == kCFNotFound) {
-        return x <= 0 ? 0 : shown.length;
-    }
-    NSUInteger position = MIN((NSUInteger)index, shown.length);
-    if (position < shown.length) {
-        NSRange cluster = [shown rangeOfComposedCharacterSequenceAtIndex:position];
-        if (position != cluster.location) {
-            CGFloat start = CTLineGetOffsetForStringIndex(line.mono, cluster.location, NULL);
-            CGFloat end = CTLineGetOffsetForStringIndex(line.mono, NSMaxRange(cluster), NULL);
-            position = fabs(x - start) <= fabs(x - end) ? cluster.location : NSMaxRange(cluster);
+    // The boundary between characters whose cell edge is nearest x; a boundary inside a
+    // character with its combining marks is none, and of two on one edge the later wins.
+    NSUInteger position = 0;
+    CGFloat nearest = fabs(x);
+    NSUInteger column = 0;
+    for (NSUInteger at = 0; at < shown.length;) {
+        int cells = 0;
+        at += viva_terminal_step(shown, at, &cells);
+        column += (NSUInteger)cells;
+        if (at < shown.length && [shown rangeOfComposedCharacterSequenceAtIndex:at].location != at) {
+            continue;
+        }
+        CGFloat distance = fabs(x - (CGFloat)column * line.cell);
+        if (distance <= nearest) {
+            nearest = distance;
+            position = at;
         }
     }
     return position;
@@ -1676,21 +1722,54 @@ static void viva_prepare_text_context(CGContextRef context, CGFloat scale) {
     CGContextSetShouldSmoothFonts(context, viva_font_smoothing_enabled());
 }
 
-// viva_new_mono_line shapes a terminal's preedit text in the fixed-pitch font at fontSize.
-// The native editor and the headless renderer both build it here, so they can only ever
-// look the same.
-static CTLineRef viva_new_mono_line(NSString *shown, CGFloat fontSize, NSColor *color, int monoFace) {
+// viva_draw_terminal_preedit draws a terminal's preedit text the way the terminal draws its
+// own line: every character on the cells of the grid, a plain ASCII one at the left of its
+// cell and any other centered in the cells it takes (two for a wide one), with its combining
+// marks. The native editor and the headless renderer both draw it here, so they can only ever
+// look the same, and the text does not move when it is committed to the grid.
+static void viva_draw_terminal_preedit(
+    CGContextRef context, NSString *shown, CGFloat fontSize, int monoFace,
+    NSColor *color, CGFloat cellWidth, CGFloat baseline
+) {
     // The face's font, with the installed fallback for what no family of it draws.
-    return viva_mono_fallback_line(shown, viva_mono_font(fontSize, 0, monoFace), monoFace, color.CGColor);
+    NSFont *font = viva_mono_font(fontSize, 0, monoFace);
+    NSUInteger column = 0;
+    for (NSUInteger at = 0; at < shown.length;) {
+        int cells = 0;
+        NSUInteger end = at + viva_terminal_step(shown, at, &cells);
+        for (int marks = 0; end < shown.length;) {
+            NSUInteger next = viva_terminal_step(shown, end, &marks);
+            if (marks != 0) {
+                break;
+            }
+            end += next;
+        }
+        NSString *cluster = [shown substringWithRange:NSMakeRange(at, end - at)];
+        CTLineRef line = viva_mono_fallback_line(cluster, font, monoFace, color.CGColor);
+        if (line != NULL) {
+            CGFloat x = (CGFloat)column * cellWidth;
+            unichar only = cluster.length == 1 ? [cluster characterAtIndex:0] : 0;
+            if (cells > 0 && !(only >= 0x20 && only < 0x7F)) {
+                CGFloat width = CTLineGetTypographicBounds(line, NULL, NULL, NULL);
+                x += ((CGFloat)cells * cellWidth - width) / 2;
+            }
+            CGContextSetTextPosition(context, x, baseline);
+            CTLineDraw(line, context);
+            CFRelease(line);
+        }
+        column += (NSUInteger)cells;
+        at = end;
+    }
 }
 
 // viva_new_editor_line is the geometry of the text the editor shows: one shaped line
-// shared with layout for proportional text, the fixed-pitch line for a terminal. A line
-// whose members are both NULL could not be made.
-static viva_editor_line viva_new_editor_line(NSString *shown, CGFloat fontSize, NSColor *color, BOOL terminal, int monoFace) {
-    viva_editor_line line = {NULL, NULL};
+// shared with layout for proportional text, the terminal's cells for a terminal. A line
+// that was not made could not be shaped.
+static viva_editor_line viva_new_editor_line(NSString *shown, CGFloat fontSize, BOOL terminal, CGFloat cellWidth) {
+    viva_editor_line line = {NULL, nil, 0};
     if (terminal) {
-        line.mono = viva_new_mono_line(shown, fontSize, color, monoFace);
+        line.grid = [shown copy];
+        line.cell = cellWidth;
     } else {
         line.shaped = viva_shared_text_line(shown, fontSize, 0);
     }
@@ -1723,7 +1802,8 @@ static id<MTLTexture> viva_text_input_texture(
     NSRange markedRange,
     BOOL caretVisible,
     BOOL terminal,
-    int monoFace
+    int monoFace,
+    CGFloat cellWidth
 ) {
     size_t pixelWidth = (size_t)MAX(1.0, ceil(frameSize.width * scale));
     size_t pixelHeight = (size_t)MAX(1.0, ceil(frameSize.height * scale));
@@ -1756,8 +1836,8 @@ static id<MTLTexture> viva_text_input_texture(
     }
 
     viva_prepare_text_context(context, scale);
-    viva_editor_line line = viva_new_editor_line(shown, fontSize, color, terminal, monoFace);
-    if (line.shaped == NULL && line.mono == NULL) {
+    viva_editor_line line = viva_new_editor_line(shown, fontSize, terminal, cellWidth);
+    if (!viva_editor_line_made(line)) {
         CGContextRelease(context);
         free(pixels);
         return nil;
@@ -1804,8 +1884,7 @@ static id<MTLTexture> viva_text_input_texture(
     }
 
     if (terminal) {
-        CGContextSetTextPosition(context, 0, baseline);
-        CTLineDraw(line.mono, context);
+        viva_draw_terminal_preedit(context, shown, fontSize, monoFace, color, cellWidth, baseline);
     } else {
         // The text is drawn as the one line the offsets above and below are read from, so
         // selection, caret and glyphs agree.
@@ -1819,7 +1898,9 @@ static id<MTLTexture> viva_text_input_texture(
         size_t count = viva_text_spans(line, marked, terminal, spans, VIVA_SELECTION_PIECES);
         CGContextSetRGBFillColor(context, 0.55, 0.72, 1.0, 1.0);
         for (size_t piece = 0; piece < count; piece++) {
-            CGContextFillRect(context, CGRectMake(spans[2 * piece], baseline - descent - 2.0, MAX(1.0, spans[2 * piece + 1]), 1.0));
+            // A terminal's row is only as tall as its text, so below the descenders is the
+            // edge of the row, not two points further down, where nothing would be drawn.
+            CGContextFillRect(context, CGRectMake(spans[2 * piece], MAX(baseline - descent - 2.0, 0.0), MAX(1.0, spans[2 * piece + 1]), 1.0));
         }
     } else if (selected.length == 0 && caretVisible && !terminal) {
         CGFloat caret = viva_text_offset(line, selected.location, terminal);
@@ -2886,6 +2967,7 @@ static void viva_encode_scene(
     BOOL _textSecure;
     BOOL _textTerminal;
     int _textMonoFace;
+    CGFloat _textCellWidth; // a terminal's cell, which its preedit is laid on
     BOOL _textAltSendsEscape;
     BOOL _textKeyReleases;
     BOOL _interpretingKey;
@@ -3082,6 +3164,7 @@ static int viva_navigation_command(SEL selector) {
         _textSecure = textInput.secure != 0;
         _textTerminal = textInput.terminal != 0;
         _textMonoFace = textInput.mono_face;
+        _textCellWidth = textInput.cell_width;
         _textAltSendsEscape = textInput.alt_sends_escape != 0;
         _textKeyReleases = textInput.key_releases != 0;
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyWindowChanged:) name:NSWindowDidBecomeKeyNotification object:nil];
@@ -3850,7 +3933,7 @@ static void viva_set_secure_event_input(BOOL on) {
 }
 
 - (viva_editor_line)newTextLine {
-    return viva_new_editor_line([self displayedText], _textFontSize, _textColor, _textTerminal, _textMonoFace);
+    return viva_new_editor_line([self displayedText], _textFontSize, _textTerminal, _textCellWidth);
 }
 
 - (BOOL)rebuildTextTexture {
@@ -3860,7 +3943,7 @@ static void viva_set_secure_event_input(BOOL on) {
     id<MTLTexture> texture = viva_text_input_texture(
         _metalLayer.device, MAX(_metalLayer.contentsScale, 1.0), [self displayedText],
         _textFontSize, _textColor, _textFrame.size, _selectedRange, _hasMarkedText,
-        _markedRange, _caretVisible, _textTerminal, _textMonoFace);
+        _markedRange, _caretVisible, _textTerminal, _textMonoFace, _textCellWidth);
     if (texture == nil) {
         return NO;
     }
@@ -4326,6 +4409,7 @@ static void viva_set_secure_event_input(BOOL on) {
         _textSecure = NO;
         _textTerminal = NO;
         _textMonoFace = 0;
+        _textCellWidth = 0;
         _textAltSendsEscape = NO;
         _textKeyReleases = NO;
         [_text release];
@@ -4370,6 +4454,7 @@ static void viva_set_secure_event_input(BOOL on) {
     _textSecure = textInput.secure != 0;
     _textTerminal = textInput.terminal != 0;
     _textMonoFace = textInput.mono_face;
+    _textCellWidth = textInput.cell_width;
     _textAltSendsEscape = textInput.alt_sends_escape != 0;
     _textKeyReleases = textInput.key_releases != 0;
     _textInputEnabled = YES;
@@ -4538,7 +4623,7 @@ static void viva_set_secure_event_input(BOOL on) {
 - (NSUInteger)textIndexForLocalPoint:(NSPoint)point {
     CGFloat x = point.x - _textFrame.origin.x;
     viva_editor_line line = [self newTextLine];
-    if (line.shaped == NULL && line.mono == NULL) {
+    if (!viva_editor_line_made(line)) {
         return _selectedRange.location;
     }
     NSUInteger position = viva_text_index_at(line, [self displayedText], x, _textTerminal);
@@ -4591,7 +4676,7 @@ static void viva_set_secure_event_input(BOOL on) {
     }
     CGFloat offset = 0;
     viva_editor_line line = [self newTextLine];
-    if (line.shaped != NULL || line.mono != NULL) {
+    if (viva_editor_line_made(line)) {
         offset = [self textOffsetForIndex:safe.location line:line];
         viva_editor_line_free(line);
     }
@@ -6429,7 +6514,8 @@ int viva_unregister_font_file(const char *path) {
         _device, _scale, shown, config.font_size, color, _inputFrame.size,
         NSMakeRange(config.selected_start, config.selected_length),
         config.has_marked_text != 0,
-        NSMakeRange(config.marked_start, config.marked_length), YES, config.terminal != 0, config.mono_face);
+        NSMakeRange(config.marked_start, config.marked_length), YES, config.terminal != 0, config.mono_face,
+        config.cell_width);
     return _inputTexture != nil;
 }
 

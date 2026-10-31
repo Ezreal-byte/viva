@@ -785,6 +785,7 @@ func makeNativeTextInput(input TextInput, value unsafe.Pointer) C.viva_text_inpu
 		secure:           C.int(boolInt(input.Secure)),
 		terminal:         C.int(boolInt(input.Terminal)),
 		mono_face:        C.int(input.MonoFace),
+		cell_width:       C.float(terminalCellWidth(input)),
 		alt_sends_escape: C.int(boolInt(input.AltSendsEscape)),
 		key_releases:     C.int(boolInt(input.KeyReleases)),
 		navigation_keys:  C.int(boolInt(input.NavigationKeys)),
@@ -814,6 +815,15 @@ func nativeTextInputShouldInterpretKey(enabled, multiline bool, key int) bool {
 	return C.viva_text_input_should_interpret_key(
 		C.int(boolInt(enabled)), C.int(boolInt(multiline)), C.int(key),
 	) != 0
+}
+
+// terminalCellWidth is the cell a terminal input's preedit is laid on, or 0 for any other
+// input, which has no cells.
+func terminalCellWidth(input TextInput) float32 {
+	if !input.Terminal {
+		return 0
+	}
+	return platform.TerminalPreeditCellWidth(input.FontSize)
 }
 
 func textBytes(value string) unsafe.Pointer {

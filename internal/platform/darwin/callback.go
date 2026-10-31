@@ -211,6 +211,15 @@ func runStateFor(handle C.uintptr_t) (state *runState, ok bool) {
 	return state, true
 }
 
+// vivaTerminalCells answers how many terminal cells a character occupies, for the native
+// editor that lays a terminal's preedit on the grid. The table is the terminal's own, the
+// one every backend uses (platform.TerminalPreeditCells).
+//
+//export vivaTerminalCells
+func vivaTerminalCells(character C.uint32_t) C.int {
+	return C.int(platform.TerminalPreeditCells(rune(character)))
+}
+
 // vivaFocusLost reports that the window stopped being the keyboard window.
 //
 //export vivaFocusLost
