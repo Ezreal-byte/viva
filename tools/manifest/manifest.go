@@ -123,7 +123,8 @@ type Mac struct {
 type DMG struct {
 	// Background is a PNG shown behind the icons, relative to viva.toml. Its
 	// size in points is the window's content size: the pixel size over the scale
-	// its resolution is tagged with, 144 dpi being 2x.
+	// its resolution is tagged with, 144 dpi being 2x. Without one the window
+	// has a plain light ground and an arrow between the icons.
 	Background string
 	// IconSize is the size of the icons in points.
 	IconSize int

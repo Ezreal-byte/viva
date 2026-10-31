@@ -41,7 +41,8 @@ type Point struct{ X, Y int }
 type Config struct {
 	// Background is a PNG shown behind the icons. Its size in points, its pixel
 	// size over the scale its resolution says (144 dpi is 2x), is the window's
-	// content size.
+	// content size. Without one the image shows a plain ground with an arrow
+	// from the application to the Applications shortcut.
 	Background string
 	// IconSize is the icons' size in points.
 	IconSize int
@@ -62,7 +63,11 @@ type Layout struct {
 func Resolve(config Config) (Layout, error) {
 	layout := Layout{Background: config.Background, Width: DefaultWidth, Height: DefaultHeight, IconSize: config.IconSize}
 	if config.Background != "" {
-		width, height, err := pictureSize(config.Background)
+		data, err := os.ReadFile(config.Background)
+		if err != nil {
+			return Layout{}, err
+		}
+		width, height, err := pictureSize(config.Background, data)
 		if err != nil {
 			return Layout{}, err
 		}
@@ -84,11 +89,7 @@ func Resolve(config Config) (Layout, error) {
 
 // pictureSize is the size in points of a PNG, from its pixels and the
 // resolution it is tagged with. An untagged picture is 1x.
-func pictureSize(path string) (int, int, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, 0, err
-	}
+func pictureSize(path string, data []byte) (int, int, error) {
 	config, err := png.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return 0, 0, fmt.Errorf("dmg: background %s is not a PNG: %w", path, err)
@@ -120,7 +121,7 @@ func pictureSize(path string) (int, int, error) {
 }
 
 // settings is the .DS_Store of the volume's root folder. alias is the
-// background picture's alias record, or nil without a background.
+// background picture's alias record.
 func (l Layout) settings(app string, alias []byte) ([]byte, error) {
 	bounds := fmt.Sprintf("{{%d, %d}, {%d, %d}}", windowX, windowBottom, l.Width, l.Height+titleBarHeight)
 	window, err := encodeBinaryPlist([]plistEntry{
@@ -155,10 +156,8 @@ func (l Layout) settings(app string, alias []byte) ([]byte, error) {
 		plistPair("scrollPositionX", plistFloat(0)),
 		plistPair("scrollPositionY", plistFloat(0)),
 	}
-	if alias != nil {
-		view[1] = plistPair("backgroundType", plistInteger(2))
-		view = append(view, plistPair("backgroundImageAlias", plistBytes(alias)))
-	}
+	view[1] = plistPair("backgroundType", plistInteger(2))
+	view = append(view, plistPair("backgroundImageAlias", plistBytes(alias)))
 	icons, err := encodeBinaryPlist(view)
 	if err != nil {
 		return nil, err

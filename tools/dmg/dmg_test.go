@@ -117,7 +117,7 @@ func TestBuiltImageHoldsTheLayoutTheFinderReads(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bundle, "Contents", "Info.plist"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	layout, err := Resolve(Config{Background: writePNG(t, 1200, 800, 5669)})
+	layout, err := Resolve(Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,5 +154,55 @@ func TestBuiltImageHoldsTheLayoutTheFinderReads(t *testing.T) {
 		if !bytes.Contains(store, append(units, "Iloc"...)) {
 			t.Errorf(".DS_Store has no position for %s", name)
 		}
+	}
+}
+
+func TestDefaultBackgroundIsTheWindowsSizeAndHasAnArrowBetweenTheIcons(t *testing.T) {
+	layout, err := Resolve(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := layout.defaultBackground()
+	if err != nil {
+		t.Fatal(err)
+	}
+	width, height, err := pictureSize("default", data)
+	if err != nil || width != layout.Width || height != layout.Height {
+		t.Fatalf("size = %dx%d, %v; want %dx%d points", width, height, err, layout.Width, layout.Height)
+	}
+	picture, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	luminance := func(x, y int) uint32 {
+		r, _, _, _ := picture.At(x*defaultScale, y*defaultScale).RGBA()
+		return r >> 8
+	}
+	middle := (layout.App.X + layout.Applications.X) / 2
+	if arrow, ground := luminance(middle, layout.App.Y), luminance(middle, layout.App.Y-60); arrow+60 > ground {
+		t.Errorf("the middle of the arrow is %d bright against a ground of %d", arrow, ground)
+	}
+}
+
+func TestNoArrowIsDrawnWhereTheIconsLeaveNoRoom(t *testing.T) {
+	near := &Point{240, 185}
+	layout, err := Resolve(Config{App: &Point{200, 185}, Applications: near})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := layout.defaultBackground()
+	if err != nil {
+		t.Fatal(err)
+	}
+	picture, _ := png.Decode(bytes.NewReader(data))
+	first, last := picture.At(0, 2*185), picture.At(0, 2*185)
+	for x := 0; x < picture.Bounds().Dx(); x++ {
+		if picture.At(x, 2*185) != first {
+			last = picture.At(x, 2*185)
+			break
+		}
+	}
+	if last != first {
+		t.Fatal("an arrow was drawn between icons with no room for it")
 	}
 }

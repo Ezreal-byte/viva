@@ -48,14 +48,12 @@ func Build(options Options) error {
 	if err := os.Symlink("/Applications", filepath.Join(staging, "Applications")); err != nil {
 		return err
 	}
-	if options.Layout.Background != "" {
-		picture, err := os.ReadFile(options.Layout.Background)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(staging, backgroundFile), picture, 0o644); err != nil {
-			return err
-		}
+	picture, err := options.Layout.picture()
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(staging, backgroundFile), picture, 0o644); err != nil {
+		return err
 	}
 
 	// The Finder's record of the background names the picture by the volume's
@@ -80,6 +78,14 @@ func Build(options Options) error {
 	return os.Rename(temporary, options.Image)
 }
 
+// picture is the background's PNG: the project's, or the default.
+func (l Layout) picture() ([]byte, error) {
+	if l.Background != "" {
+		return os.ReadFile(l.Background)
+	}
+	return l.defaultBackground()
+}
+
 // settle mounts the writable image and writes the Finder's settings into it.
 func settle(writable string, options Options, app string) (err error) {
 	mount := filepath.Join(filepath.Dir(writable), "mount")
@@ -95,15 +101,13 @@ func settle(writable string, options Options, app string) (err error) {
 		}
 	}()
 
-	var alias []byte
-	if options.Layout.Background != "" {
-		file, err := Describe(mount, options.Volume, backgroundFile)
-		if err != nil {
-			return err
-		}
-		if alias, err = file.Alias(); err != nil {
-			return err
-		}
+	file, err := Describe(mount, options.Volume, backgroundFile)
+	if err != nil {
+		return err
+	}
+	alias, err := file.Alias()
+	if err != nil {
+		return err
 	}
 	store, err := options.Layout.settings(app, alias)
 	if err != nil {
