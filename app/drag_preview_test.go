@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vivaui/viva/gfx"
+	"github.com/vivaui/viva/internal/platform"
 )
 
 // movableWindow is a fake window that can be moved, as a preview's is.
@@ -99,6 +100,19 @@ func TestADragPreviewIsRefusedWhereTheHostCannotShowOne(t *testing.T) {
 	}
 	if len(host.windows) != 1 {
 		t.Fatalf("a refused preview still opened %d windows", len(host.windows))
+	}
+}
+
+func TestANativeWindowResultStillMovesAPreview(t *testing.T) {
+	moving := &movableWindow{fakeWindow: &fakeWindow{}}
+	control := resultWindow{WindowControl: moving}
+	mover, ok := any(control).(platform.WindowMover)
+	if !ok {
+		t.Fatal("a native window result hid the platform's MoveTo")
+	}
+	mover.MoveTo(gfx.Point{X: 30, Y: 40})
+	if len(moving.moves) != 1 || moving.moves[0] != (gfx.Point{X: 30, Y: 40}) {
+		t.Fatalf("moves = %v", moving.moves)
 	}
 }
 
