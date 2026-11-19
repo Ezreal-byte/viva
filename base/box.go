@@ -311,7 +311,7 @@ func (b Box) Clip() Box { b.N().Flags |= flagClip; return b }
 // place of the theme's body size.
 func (b Box) FontSize(v float32) Box {
 	n := b.N()
-	n.FontSize = v
+	n.FontSize = v * b.f.Palette.Metrics.EffectiveTextScale()
 	if n.Kind == kindSelect {
 		b.f.sizeSelectList(n)
 	}
@@ -321,8 +321,11 @@ func (b Box) Weight(v float32) Box { b.N().Weight = v; return b }
 
 // LineHeight sets the height of each line of a Text or Paragraph, in pixels: the
 // default is the font size plus seven, as in the components.
-func (b Box) LineHeight(v float32) Box { b.N().LineH = v; return b }
-func (b Box) Bold() Box                { return b.Weight(gfx.WeightSemibold) }
+func (b Box) LineHeight(v float32) Box {
+	b.N().LineH = v * b.f.Palette.Metrics.EffectiveTextScale()
+	return b
+}
+func (b Box) Bold() Box { return b.Weight(gfx.WeightSemibold) }
 func (b Box) Color(c Color) Box {
 	n := b.N()
 	n.Color = c

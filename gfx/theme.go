@@ -25,9 +25,17 @@ type Metrics struct {
 	FontSizeS     float32 // captions, badges
 	FontSizeM     float32 // body and controls
 	FontSizeL     float32 // page titles
+	TextScale     float32
 	PadControlX   float32 // horizontal control padding
 	PadSurface    float32 // card interior padding
 	GapItem       float32 // row-to-row spacing inside lists
+}
+
+func (metrics Metrics) EffectiveTextScale() float32 {
+	if metrics.TextScale <= 0 {
+		return 1
+	}
+	return metrics.TextScale
 }
 
 // RadiusItem is the corner radius of a row inside a menu, list or popup: two
@@ -157,6 +165,21 @@ func (theme Theme) WithFontSize(size float32) Theme {
 	metrics.FontSizeS *= scale
 	metrics.FontSizeL *= scale
 	metrics.FontSizeM = size
+	return theme
+}
+
+func (theme Theme) WithTextScale(scale float32) Theme {
+	if scale <= 0 {
+		return theme
+	}
+	previous := theme.Metrics.TextScale
+	if previous <= 0 {
+		previous = 1
+	}
+	theme.Metrics.FontSizeS *= scale / previous
+	theme.Metrics.FontSizeM *= scale / previous
+	theme.Metrics.FontSizeL *= scale / previous
+	theme.Metrics.TextScale = scale
 	return theme
 }
 
