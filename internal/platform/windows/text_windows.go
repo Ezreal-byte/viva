@@ -256,6 +256,9 @@ func (label *labelTexture) pixelOrigin(scale float32) (x, y int) {
 // phase it has when the whole texture is drawn. Labels that are not clipped, and
 // images and grid lines, keep their whole texture.
 func (label *labelTexture) window(scale float32) (skip, width int, ok bool) {
+	if label.label.Color.Alpha <= 0 && len(label.label.Bitmap) == 0 && len(label.label.Runs) == 0 {
+		return 0, 0, false
+	}
 	full := int(math.Ceil(float64(label.label.Width * scale)))
 	if label.label.Mono && len(label.label.Runs) > 0 {
 		full = min(full, gridInkWidth(label.label.Runs, label.label.CellWidth, scale))
