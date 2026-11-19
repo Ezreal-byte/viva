@@ -165,6 +165,7 @@ type xcbPropertyReply struct {
 	ValueLength  uint32
 	Pad          [12]byte
 }
+
 type xcbGenericEvent struct {
 	ResponseType uint8
 	Padding      uint8
@@ -444,4 +445,17 @@ func (api *xcbAPI) atom(connection uintptr, name string) (uint32, error) {
 	}
 	defer api.free(unsafe.Pointer(reply))
 	return reply.Atom, nil
+}
+
+func (api *xcbAPI) property(connection uintptr, window, kind uint32) ([]byte, bool, error) {
+	reply := api.getPropertyReply(connection, api.getProperty(connection, 0, window, kind, 0, 1<<20, 0), nil)
+	if reply == nil {
+		return nil, false, nil
+	}
+	defer api.free(unsafe.Pointer(reply))
+	length := int(api.getPropertyLength(reply))
+	if reply.Format != 8 || length <= 0 {
+		return nil, false, nil
+	}
+	return unsafe.Slice((*byte)(api.getPropertyValue(reply)), length), true, nil
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/vivaui/viva/internal/ibus"
 	"github.com/vivaui/viva/internal/input"
 	"github.com/vivaui/viva/internal/platform"
+	textpkg "github.com/vivaui/viva/text"
 )
 
 type window struct {
@@ -181,6 +182,11 @@ type linuxApplication struct {
 	// that take text; ibusTried says it has been looked for.
 	ibus      *ibus.Bus
 	ibusTried bool
+	// xim is the fallback transport for engines that expose XIM but not IBus,
+	// such as Sogou through Fcitx4 on older domestic Linux distributions.
+	xim       *ximTransport
+	ximTried  bool
+	ximRouter eventRouter
 
 	// live is every window that can still be posted to, for requests that come
 	// from another goroutine (see post); the loop's own slice is not safe to read
@@ -272,6 +278,9 @@ func RunApplication(start platform.ApplicationStart) error {
 				continue
 			}
 			state := states[index]
+			if application.xim != nil && application.serveXIM(state) {
+				continue
+			}
 			if state == nil {
 				switch {
 				case application.ibus != nil && int(descriptor.FD) == application.ibus.FD():
@@ -403,6 +412,11 @@ func (application *linuxApplication) OpenWindow(config platform.Config) (platfor
 	if config.DynamicTextInput || config.TextInput != nil {
 		if ime = application.newIME(win, textInput, state.router); ime != nil {
 			state.router.ime = ime
+		} else if application.openXIM(win, state.router) {
+			state.router.xim = application.xim
+			if application.xim.imid != 0 {
+				_ = application.xim.createContext()
+			}
 		}
 	}
 	if config.Waker != nil && config.OnRedraw != nil {
@@ -438,6 +452,9 @@ func (application *linuxApplication) rebuildPoll() {
 	}
 	if application.ibus != nil {
 		count++
+	}
+	if application.xim != nil {
+		// XIM uses this window's own XCB connection; no descriptor is added.
 	}
 	if application.desktop != nil {
 		count++
@@ -489,6 +506,49 @@ func (application *linuxApplication) pollTimeout() int32 {
 		}
 	}
 	return timeout
+}
+
+func (application *linuxApplication) openXIM(win *window, router eventRouter) bool {
+	if application.ibus != nil || application.ximTried {
+		return application.xim != nil
+	}
+	application.ximTried = true
+	transport, err := openXIMTransport(win.api, win.connection, win.screen.Root)
+	if err != nil || transport == nil {
+		if err != nil {
+			transport = nil
+		}
+		application.xim = transport
+		return application.xim != nil
+	}
+	application.xim = transport
+	application.ximRouter = router
+	return true
+}
+
+func (application *linuxApplication) serveXIM(state *linuxWindowState) bool {
+	if application.xim == nil || application.ximRouter.text != state.text {
+		return false
+	}
+	router := application.ximRouter
+	for _, value := range application.xim.commitValues {
+		if err := router.deliverKey(platform.KeyEvent{Text: value}); err != nil {
+			application.fail(err)
+			return true
+		}
+	}
+	application.xim.commitValues = application.xim.commitValues[:0]
+	for _, value := range application.xim.preeditStrings {
+		length := len([]rune(value))
+		frame, _, err := state.text.dispatchTextEvent(platform.TextEvent{Kind: platform.TextSetMarked, Text: value, MarkedSelection: textpkg.Range{Start: length, End: length}})
+		if err != nil {
+			application.fail(err)
+			return true
+		}
+		_ = router.presentFrame(frame, nil)
+	}
+	application.xim.preeditStrings = application.xim.preeditStrings[:0]
+	return true
 }
 
 // takeHeld returns the event read ahead, once.
@@ -880,6 +940,11 @@ func (state *linuxWindowState) handleEvent(event unsafe.Pointer) (bool, error) {
 		}
 	case xcbClientMessage:
 		message := (*xcbClientEvent)(event)
+		if router.xim != nil {
+			if err := router.xim.handleClientMessage(message); err != nil {
+				return false, err
+			}
+		}
 		switch {
 		case message.Window == win.id && win.isDragMessage(message.Type):
 			return false, state.handleDragMessage(message)
@@ -1117,6 +1182,9 @@ func (state *linuxWindowState) handleEvent(event unsafe.Pointer) (bool, error) {
 		if router.ime != nil && realFocus {
 			router.ime.setFocused(true)
 		}
+		if router.xim != nil && realFocus {
+			_ = router.xim.focus(true)
+		}
 	case xcbFocusOut:
 		state.application.atspiActive(state, false)
 		focus := (*xcbFocusEvent)(event)
@@ -1132,6 +1200,9 @@ func (state *linuxWindowState) handleEvent(event unsafe.Pointer) (bool, error) {
 		}
 		if router.ime != nil && realFocusLoss {
 			router.ime.setFocused(false)
+		}
+		if router.xim != nil && realFocusLoss {
+			_ = router.xim.focus(false)
 		}
 		if realFocusLoss {
 			if err := state.releaseHeldKeys(); err != nil {

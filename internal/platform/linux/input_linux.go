@@ -23,6 +23,9 @@ type eventRouter struct {
 	// ime, when there is an input method daemon to talk to, sees the keys of a
 	// focused text field before the field does.
 	ime *linuxIME
+	// xim is the fallback X11 input-method transport, used when no
+	// IBus-compatible daemon answered.
+	xim *ximTransport
 	// scale is the window's device pixels per logical pixel; X reports device
 	// pixels and the application works in logical ones. Nil means 1.
 	scale func() float32
@@ -266,6 +269,12 @@ func (router eventRouter) key(keymap *xcbKeymap, event *xcbInputEvent, repeat bo
 		shortcutEvent = platform.KeyEvent{}
 	}
 	if router.ime != nil && router.ime.processKeyWithShortcut(keysym, event, keyEvent, shortcutEvent) {
+		return nil
+	}
+	if router.xim != nil && router.xim.icid != 0 {
+		if err := router.xim.forward(event); err != nil {
+			return err
+		}
 		return nil
 	}
 	return router.deliverTypedWithShortcut(keyEvent, keysym, shortcutEvent)
