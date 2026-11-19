@@ -188,10 +188,10 @@ func (ime *linuxIME) reset() error {
 	return nil
 }
 
-func (ime *linuxIME) sendKey(symbol, code, state uint32) error {
+func (ime *linuxIME) sendKey(symbol, code, state, timestamp uint32) error {
 	epoch := ime.epoch
 	ime.pendingKeys++
-	err := ime.context.ProcessKey(symbol, code, state, func(bool) {
+	err := ime.context.ProcessKeyAt(symbol, code, state, timestamp, func(bool) {
 		if ime.answerKey(epoch) {
 			ime.finishKey(epoch)
 		}

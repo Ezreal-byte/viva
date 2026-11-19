@@ -37,7 +37,7 @@ func (f *fakeIMEContext) record(name string) error {
 	return f.err
 }
 
-func (f *fakeIMEContext) ProcessKey(keysym, keycode, state uint32, done func(bool)) error {
+func (f *fakeIMEContext) ProcessKeyAt(keysym, keycode, state, _ uint32, done func(bool)) error {
 	if f.err != nil {
 		return f.err
 	}

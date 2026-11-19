@@ -11,7 +11,7 @@ import (
 )
 
 // linuxIME connects one window's focused text field to an input method running
-// in the IBus daemon (or in Fcitx5, which speaks the same protocol): the keys the
+// in IBus or Fcitx: the keys the
 // field would receive go to the engine first, and what the engine composes comes
 // back as the same text events a native editor produces, so the field shows the
 // marked text and commits the choice exactly as it does on the other platforms.
@@ -60,7 +60,7 @@ type linuxIME struct {
 // inputMethodContext is the input context as the window uses it. *ibus.Context
 // is the real one; the interface is the seam tests replace it at.
 type inputMethodContext interface {
-	ProcessKey(keysym, keycode, state uint32, done func(handled bool)) error
+	ProcessKeyAt(keysym, keycode, state, timestamp uint32, done func(handled bool)) error
 	FocusIn() error
 	FocusOut() error
 	Reset() error
@@ -88,7 +88,7 @@ func (application *linuxApplication) newIME(win *window, textInput *linuxTextInp
 func (application *linuxApplication) inputMethodBus() *ibus.Bus {
 	if !application.ibusTried {
 		application.ibusTried = true
-		if bus, err := ibus.Dial(); err == nil {
+		if bus, err := ibus.DialDesktop(); err == nil {
 			application.ibus = bus
 		}
 	}
@@ -322,7 +322,7 @@ func (ime *linuxIME) processKeyWithShortcut(keysym uint32, event *xcbInputEvent,
 	}
 	epoch := ime.epoch
 	ime.pendingKeys++
-	err := ime.context.ProcessKey(keysym, uint32(event.Detail)-8, uint32(event.State), func(handled bool) {
+	err := ime.context.ProcessKeyAt(keysym, uint32(event.Detail)-8, uint32(event.State), event.Time, func(handled bool) {
 		if !ime.answerKey(epoch) {
 			return
 		}
@@ -361,7 +361,7 @@ func (ime *linuxIME) pressModifier(keysym uint32, event *xcbInputEvent) {
 	if !ime.current() || !ime.active || !ime.focused || event.Detail < 8 || keysym == 0 {
 		return
 	}
-	if err := ime.sendKey(keysym, uint32(event.Detail)-8, uint32(event.State)); err != nil {
+	if err := ime.sendKey(keysym, uint32(event.Detail)-8, uint32(event.State), event.Time); err != nil {
 		ime.app.checkInputMethod()
 	}
 }
@@ -376,7 +376,7 @@ func (ime *linuxIME) release(keymap *xcbKeymap, event *xcbInputEvent) {
 	if keysym == 0 {
 		return
 	}
-	if err := ime.sendKey(keysym, uint32(event.Detail)-8, uint32(event.State)|ibus.ReleaseMask); err != nil {
+	if err := ime.sendKey(keysym, uint32(event.Detail)-8, uint32(event.State)|ibus.ReleaseMask, event.Time); err != nil {
 		ime.app.checkInputMethod()
 	}
 }

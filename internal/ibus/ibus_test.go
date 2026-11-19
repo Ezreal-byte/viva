@@ -43,6 +43,14 @@ func (f *fakeTransport) Call(destination, path, iface, member, signature string,
 		var reply dbus.Encoder
 		reply.String(f.createPath)
 		return &dbus.Message{Type: dbus.TypeReturn, Signature: "o", Body: reply.Bytes()}, nil
+	case "CreateICv3":
+		var reply dbus.Encoder
+		reply.Int32(3)
+		reply.Bool(true)
+		for range 4 {
+			reply.Uint32(0)
+		}
+		return &dbus.Message{Type: dbus.TypeReturn, Sender: destination, Signature: "ibuuuu", Body: reply.Bytes()}, nil
 	case "AddMatch":
 		return &dbus.Message{Type: dbus.TypeReturn}, nil
 	case "SetEngine":
@@ -885,23 +893,29 @@ func TestContextCalls(t *testing.T) {
 }
 
 func BenchmarkHandledContextKey(b *testing.B) {
-	transport := &fakeTransport{createPath: testContext}
-	bus := newBus(transport)
-	context, err := bus.NewContext("benchmark", Handler{})
-	if err != nil {
-		b.Fatal(err)
-	}
-	answer := dbus.Message{Type: dbus.TypeReturn, Signature: "b", Body: []byte{1, 0, 0, 0}}
-	transport.sent = transport.sent[:0]
-	b.ReportAllocs()
-	b.ResetTimer()
-	for b.Loop() {
-		if err := context.ProcessKey('a', 30, 0, nil); err != nil {
-			b.Fatal(err)
-		}
-		answer.ReplySerial = transport.serial
-		bus.answer(&answer)
-		transport.sent = transport.sent[:0]
+	for _, engine := range []struct{ name, destination, api, reply string }{
+		{"IBus", service, contextInterface, "b"},
+		{"Fcitx4", ":1.8", fcitx4Context, "i"},
+	} {
+		b.Run(engine.name, func(b *testing.B) {
+			transport := &fakeTransport{createPath: testContext}
+			bus := newInputBus(transport, engine.destination, engine.api)
+			context, err := bus.NewContext("benchmark", Handler{})
+			if err != nil {
+				b.Fatal(err)
+			}
+			answer := dbus.Message{Type: dbus.TypeReturn, Sender: engine.destination, Signature: engine.reply, Body: []byte{1, 0, 0, 0}}
+			transport.sent = transport.sent[:0]
+			b.ReportAllocs()
+			for b.Loop() {
+				if err := context.ProcessKeyAt('a', 30, 0, 42, nil); err != nil {
+					b.Fatal(err)
+				}
+				answer.ReplySerial = transport.serial
+				bus.answer(&answer)
+				transport.sent = transport.sent[:0]
+			}
+		})
 	}
 }
 

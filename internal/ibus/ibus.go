@@ -18,8 +18,8 @@
 // released as "not handled" and the bus is closed, and the caller carries on
 // without an input method. Nothing here starts a goroutine or a timer.
 //
-// Fcitx5 speaks this protocol through its IBus frontend, so one client serves
-// both frameworks.
+// Fcitx5 can use its IBus frontend. The X11 desktop client also supports the
+// legacy Fcitx 4 protocol over the session bus.
 package ibus
 
 import (
@@ -124,9 +124,11 @@ type Attribute struct {
 	Start, End  int
 }
 
-// Bus is a connection to the IBus daemon.
+// Bus is a connection to the input method daemon.
 type Bus struct {
 	conn        transport
+	destination string
+	contextAPI  string
 	contexts    map[string]*Context
 	pending     []*pendingKey
 	err         error
@@ -228,11 +230,15 @@ func Dial() (*Bus, error) {
 }
 
 func newBus(conn transport) *Bus {
-	bus := &Bus{conn: conn, contexts: map[string]*Context{}, now: time.Now}
+	return newInputBus(conn, service, contextInterface)
+}
+
+func newInputBus(conn transport, destination, contextAPI string) *Bus {
+	bus := &Bus{conn: conn, destination: destination, contextAPI: contextAPI, contexts: map[string]*Context{}, now: time.Now}
 	// The daemon addresses its signals to the client, but a bus that routes by
 	// match rule needs the request; a daemon that refuses it still delivers.
 	var rule dbus.Encoder
-	rule.String("type='signal',interface='" + contextInterface + "'")
+	rule.String("type='signal',interface='" + contextAPI + "'")
 	_, _ = conn.Call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "AddMatch", "s", rule.Bytes())
 	return bus
 }
@@ -271,6 +277,9 @@ func (bus *Bus) NewContext(name string, handler Handler) (*Context, error) {
 	if bus.err != nil {
 		return nil, ErrClosed
 	}
+	if bus.contextAPI == fcitx4Context {
+		return bus.newFcitx4Context(name, handler)
+	}
 	var body dbus.Encoder
 	body.String(name)
 	reply, err := bus.conn.Call(service, busPath, service, "CreateInputContext", "s", body.Bytes())
@@ -282,11 +291,15 @@ func (bus *Bus) NewContext(name string, handler Handler) (*Context, error) {
 	if path == "" {
 		return nil, errors.New("ibus: the daemon returned no input context")
 	}
+	return bus.registerContext(path, handler, "SetCapabilities", CapPreeditText|CapFocus|CapSurroundingText)
+}
+
+func (bus *Bus) registerContext(path string, handler Handler, capabilityMethod string, caps uint32) (*Context, error) {
 	context := &Context{bus: bus, path: path, handler: handler}
 	bus.contexts[path] = context
 	var capabilities dbus.Encoder
-	capabilities.Uint32(CapPreeditText | CapFocus | CapSurroundingText)
-	if err := context.send("SetCapabilities", "u", capabilities.Bytes()); err != nil {
+	capabilities.Uint32(caps)
+	if err := context.send(capabilityMethod, "u", capabilities.Bytes()); err != nil {
 		return nil, err
 	}
 	return context, nil
@@ -313,8 +326,12 @@ func (bus *Bus) Dispatch() error {
 		for _, message := range messages {
 			switch message.Type {
 			case dbus.TypeSignal:
-				if context := bus.contexts[message.Path]; context != nil && message.Interface == contextInterface {
-					context.signal(message)
+				if context := bus.contexts[message.Path]; context != nil && message.Interface == bus.contextAPI {
+					if bus.contextAPI != fcitx4Context {
+						context.signal(message)
+					} else if message.Sender == bus.destination {
+						context.fcitx4Signal(message)
+					}
 				}
 			case dbus.TypeReturn, dbus.TypeError:
 				bus.answer(message)
@@ -339,8 +356,12 @@ func (bus *Bus) answer(message *dbus.Message) {
 			continue
 		}
 		key.answered = true
-		if message.Type == dbus.TypeReturn && message.Signature == "b" {
-			key.handled = message.Args().Bool()
+		if message.Type == dbus.TypeReturn {
+			if bus.contextAPI == fcitx4Context {
+				key.handled = message.Sender == bus.destination && message.Signature == "i" && message.Args().Int32() > 0
+			} else if message.Signature == "b" {
+				key.handled = message.Args().Bool()
+			}
 		}
 		break
 	}
@@ -374,7 +395,7 @@ func (context *Context) send(member, signature string, body []byte) error {
 	if context.bus.err != nil || context.bus.contexts[context.path] != context {
 		return ErrClosed
 	}
-	if _, err := context.bus.conn.Send(service, context.path, contextInterface, member, signature, body); err != nil {
+	if _, err := context.bus.conn.Send(context.bus.destination, context.path, context.bus.contextAPI, member, signature, body); err != nil {
 		context.bus.fail(err)
 		return err
 	}
@@ -387,14 +408,32 @@ func (context *Context) send(member, signature string, body []byte) error {
 // (keycode less 8, as IBus counts), state as the X modifier mask, plus
 // ReleaseMask for a release. done may be nil for a release.
 func (context *Context) ProcessKey(keysym, keycode, state uint32, done func(handled bool)) error {
+	return context.ProcessKeyAt(keysym, keycode, state, 0, done)
+}
+
+// ProcessKeyAt also takes the X server timestamp in milliseconds, used by Fcitx.
+func (context *Context) ProcessKeyAt(keysym, keycode, state, timestamp uint32, done func(handled bool)) error {
 	if context.bus.err != nil || context.bus.contexts[context.path] != context {
 		return ErrClosed
 	}
 	var body dbus.Encoder
 	body.Uint32(keysym)
-	body.Uint32(keycode)
-	body.Uint32(state)
-	serial, err := context.bus.conn.Send(service, context.path, contextInterface, "ProcessKeyEvent", "uuu", body.Bytes())
+	signature := "uuu"
+	if context.bus.contextAPI == fcitx4Context {
+		signature = "uuuiu"
+		var kind int32 // Fcitx uses 0 for a press and 1 for a release.
+		if state&ReleaseMask != 0 {
+			kind = 1
+		}
+		body.Uint32(keycode + 8) // Fcitx uses the original X keycode.
+		body.Uint32(state &^ ReleaseMask)
+		body.Int32(kind)
+		body.Uint32(timestamp)
+	} else {
+		body.Uint32(keycode)
+		body.Uint32(state)
+	}
+	serial, err := context.bus.conn.Send(context.bus.destination, context.path, context.bus.contextAPI, "ProcessKeyEvent", signature, body.Bytes())
 	if err != nil {
 		context.bus.fail(err)
 		return err
@@ -422,6 +461,9 @@ func (context *Context) SetEngine(name string) error {
 // responsible for settling preedit on Reset and FocusOut. Use only when the
 // caller implements those modes; a daemon may refuse this optional property.
 func (context *Context) SetClientCommitPreedit(enabled bool) error {
+	if context.bus.contextAPI == fcitx4Context {
+		return errFcitx4PreeditMode
+	}
 	var body dbus.Encoder
 	body.String(contextInterface)
 	body.String("ClientCommitPreedit")
@@ -435,7 +477,7 @@ func (context *Context) call(iface, member, signature string, body []byte) error
 	if context.bus.err != nil || context.bus.contexts[context.path] != context {
 		return ErrClosed
 	}
-	_, err := context.bus.conn.Call(service, context.path, iface, member, signature, body)
+	_, err := context.bus.conn.Call(context.bus.destination, context.path, iface, member, signature, body)
 	var refusal *dbus.Error
 	if err != nil && !errors.As(err, &refusal) {
 		context.bus.fail(err)
@@ -455,10 +497,16 @@ func (context *Context) Reset() error { return context.send("Reset", "", nil) }
 // selection (the same as cursor when nothing is selected).
 func (context *Context) SetSurroundingText(text string, cursor, anchor uint32) error {
 	var body dbus.Encoder
-	writeText(&body, text)
+	signature := "vuu"
+	if context.bus.contextAPI == fcitx4Context {
+		signature = "suu"
+		body.String(text)
+	} else {
+		writeText(&body, text)
+	}
 	body.Uint32(cursor)
 	body.Uint32(anchor)
-	return context.send("SetSurroundingText", "vuu", body.Bytes())
+	return context.send("SetSurroundingText", signature, body.Bytes())
 }
 
 // SetCursorLocation tells the panel where the caret is, in root window
@@ -469,6 +517,9 @@ func (context *Context) SetCursorLocation(x, y, width, height int32) error {
 	body.Int32(y)
 	body.Int32(width)
 	body.Int32(height)
+	if context.bus.contextAPI == fcitx4Context {
+		return context.send("SetCursorRect", "iiii", body.Bytes())
+	}
 	return context.send("SetCursorLocation", "iiii", body.Bytes())
 }
 
@@ -479,7 +530,11 @@ func (context *Context) Close() {
 	}
 	delete(context.bus.contexts, context.path)
 	if context.bus.err == nil {
-		if _, err := context.bus.conn.Send(service, context.path, "org.freedesktop.IBus.Service", "Destroy", "", nil); err != nil {
+		iface, method := "org.freedesktop.IBus.Service", "Destroy"
+		if context.bus.contextAPI == fcitx4Context {
+			iface, method = fcitx4Context, "DestroyIC"
+		}
+		if _, err := context.bus.conn.Send(context.bus.destination, context.path, iface, method, "", nil); err != nil {
 			context.bus.fail(err)
 		}
 	}
