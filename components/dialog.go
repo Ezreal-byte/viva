@@ -195,7 +195,6 @@ func (dialog Dialog) Begin(title, description string) DialogLayout {
 		return DialogLayout{}
 	}
 	dialog.canvas.PushLayer(dialog.options.Layer)
-	dialog.canvas.PushOverlayClip(dialog.viewport)
 	if !dialog.options.Scope.IsZero() {
 		dialog.canvas.PushFocusScope(dialog.options.Scope)
 	}
@@ -260,7 +259,6 @@ func (dialog Dialog) End() {
 		dialog.canvas.PopFocusScope()
 	}
 	dialog.canvas.PopLayer()
-	dialog.canvas.PopOverlayClip()
 }
 
 // contentWidth is the dialog's width: ContentSize.Width, or Vega's `sm:max-w-md`
