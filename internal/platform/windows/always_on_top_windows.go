@@ -12,7 +12,7 @@ func (window *nativeWindow) SetAlwaysOnTop(enabled bool) error {
 	if window == nil || window.closed.Load() {
 		return fmt.Errorf("windows: window is closed")
 	}
-	if window.state.config.WindowMode == platform.WindowPanel || window.state.config.WindowMode == platform.WindowPreview {
+	if window.state.config.WindowMode >= platform.WindowPanel {
 		return platform.ErrAlwaysOnTopUnsupported
 	}
 	value := uintptr(0)

@@ -21,14 +21,15 @@ type applicationWindow struct {
 	fullscreen        atomic.Bool
 	fullscreenRequest atomic.Int32
 	// sizeRequest is the content size SetSize queued for the loop, or nil.
-	sizeRequest atomic.Pointer[[2]int32]
-	invalidator *app.Invalidator
-	id          uint64
-	title       string
-	panel       bool
-	hidden      bool
-	session     *Session
-	closed      func()
+	sizeRequest  atomic.Pointer[[2]int32]
+	invalidator  *app.Invalidator
+	id           uint64
+	title        string
+	panel        bool
+	notification bool
+	hidden       bool
+	session      *Session
+	closed       func()
 	// closeRequest is the application's OnCloseRequest, if it set one.
 	closeRequest func(allow func())
 }
@@ -120,8 +121,11 @@ func (application *applicationSession) OpenWindow(config app.Config, canvas *gfx
 	id := application.nextID
 	application.nextID++
 	entry.id, entry.title, entry.panel, entry.session, entry.closed, entry.closeRequest = id, config.Title, config.WindowMode == app.WindowPanel, session, closed, config.OnCloseRequest
+	entry.notification = config.WindowMode == app.WindowNotification
 	application.windows[id] = entry
-	application.active = id
+	if !entry.notification || application.active == 0 {
+		application.active = id
+	}
 	application.mu.Unlock()
 	return &headlessWindow{application: application, id: id}, nil
 }
@@ -203,7 +207,7 @@ func (application *applicationSession) setHidden(id uint64, hidden bool) {
 	defer application.mu.Unlock()
 	if window := application.windows[id]; window != nil {
 		window.hidden = hidden
-		if !hidden {
+		if !hidden && !window.notification {
 			application.active = id
 		}
 	}
