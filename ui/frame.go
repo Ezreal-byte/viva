@@ -187,35 +187,37 @@ const (
 // hit options of an interactive container, an icon, the border's color, the
 // shadow's level, the ring, and the indexes of its gradient and state looks.
 type extra struct {
-	hit           gfx.HitOptions
-	icon          gfx.Icon
-	iconTransform gfx.IconTransform                                                          // moves the icon inside its box without moving the box
-	buttonRecipe  func(gfx.Theme, components.ButtonVariant, gfx.State) components.ButtonLook // ButtonRecipe: this button's own look
-	border        Color
-	shadow        gfx.ShadowLevel
-	ring          Color   // Ring: a line around the outside of the element
-	ringWidth     float32 // its width; zero is none
-	borderDashed  bool
-	fade          float32          // 1 less the opacity, so that the zero value is opaque
-	gradient      int32            // 1 + the index of the element's gradient in frame.gradients, or 0 for none
-	states        int32            // 1 + the index of the element's Hover, Pressed and Focus looks in frame.states, or 0 for none
-	scrollState   *ScrollState     // the state a ScrollArea reports its extent to
-	maxPct        [2]float32       // MaxWidthPercent and MaxHeightPercent; zero is none
-	hitOut        [4]float32       // how far the hit region reaches beyond the rectangle: top, right, bottom, left
-	edges         [4]float32       // an absolute element's distance from its container's top, right, bottom, left
-	within        Rect             // what a Popup is kept inside, when not the frame; empty for the frame
-	moves         bool             // the element's rectangle moves a custom-titlebar window (MovesWindow)
-	scrollManual  bool             // ScrollAt: the application owns the offset and wheel input
-	nativeView    gfx.NativeViewID // the native view that fills the element (NativeView)
-	bind          int32            // 1 + the index of the element's binding in frame.binds, or 0 (see bind.go)
-	memo          int32            // 1 + the index the element's cache has with whoever declared it (memoFn), or 0
-	draws         int32            // 1 + the index of the element's Draw and DrawOver callbacks in frame.draws, or 0 for none
-	tooltip       string           // what Tooltip says over the element; empty for none
-	tooltipSide   uint8            // 1 + the TooltipSide TooltipOn opens the element's tip on; 0 is below
-	addons        int32            // 1 + the index of the field's icon and button in frame.addons, or 0
-	focusGroup    FocusAxis        // FocusGroup: the arrow keys that move the focus between the controls inside; zero is none
-	focusOrder    FocusOrder       // FocusOrder: how the group chooses the next member; nil is its axis
-	layout        Layout           // CustomLayout: who measures and places the children
+	highlightQuery string
+	highlightColor Color
+	hit            gfx.HitOptions
+	icon           gfx.Icon
+	iconTransform  gfx.IconTransform                                                          // moves the icon inside its box without moving the box
+	buttonRecipe   func(gfx.Theme, components.ButtonVariant, gfx.State) components.ButtonLook // ButtonRecipe: this button's own look
+	border         Color
+	shadow         gfx.ShadowLevel
+	ring           Color   // Ring: a line around the outside of the element
+	ringWidth      float32 // its width; zero is none
+	borderDashed   bool
+	fade           float32          // 1 less the opacity, so that the zero value is opaque
+	gradient       int32            // 1 + the index of the element's gradient in frame.gradients, or 0 for none
+	states         int32            // 1 + the index of the element's Hover, Pressed and Focus looks in frame.states, or 0 for none
+	scrollState    *ScrollState     // the state a ScrollArea reports its extent to
+	maxPct         [2]float32       // MaxWidthPercent and MaxHeightPercent; zero is none
+	hitOut         [4]float32       // how far the hit region reaches beyond the rectangle: top, right, bottom, left
+	edges          [4]float32       // an absolute element's distance from its container's top, right, bottom, left
+	within         Rect             // what a Popup is kept inside, when not the frame; empty for the frame
+	moves          bool             // the element's rectangle moves a custom-titlebar window (MovesWindow)
+	scrollManual   bool             // ScrollAt: the application owns the offset and wheel input
+	nativeView     gfx.NativeViewID // the native view that fills the element (NativeView)
+	bind           int32            // 1 + the index of the element's binding in frame.binds, or 0 (see bind.go)
+	memo           int32            // 1 + the index the element's cache has with whoever declared it (memoFn), or 0
+	draws          int32            // 1 + the index of the element's Draw and DrawOver callbacks in frame.draws, or 0 for none
+	tooltip        string           // what Tooltip says over the element; empty for none
+	tooltipSide    uint8            // 1 + the TooltipSide TooltipOn opens the element's tip on; 0 is below
+	addons         int32            // 1 + the index of the field's icon and button in frame.addons, or 0
+	focusGroup     FocusAxis        // FocusGroup: the arrow keys that move the focus between the controls inside; zero is none
+	focusOrder     FocusOrder       // FocusOrder: how the group chooses the next member; nil is its axis
+	layout         Layout           // CustomLayout: who measures and places the children
 }
 
 // frame is one page being declared. It is handed to the function given to

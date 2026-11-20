@@ -265,7 +265,7 @@ func (f *frame) paintText(n *node) {
 		lh := n.leading()
 		for k := int32(0); k < n.lineCount; k++ {
 			bounds := Rect{X: r.X, Y: r.Y + float32(k)*lh, Width: r.Width, Height: lh}
-			f.canvas.LabelAligned(f.lines[n.lineFirst+k], bounds, style, alignment)
+			f.highlightedLabel(n, f.lines[n.lineFirst+k], bounds, style, alignment)
 		}
 		return
 	}
@@ -275,7 +275,7 @@ func (f *frame) paintText(n *node) {
 	if clipped {
 		f.canvas.Clip(r)
 	}
-	f.canvas.LabelAligned(n.text, bounds, style, alignment)
+	f.highlightedLabel(n, n.text, bounds, style, alignment)
 	if clipped {
 		f.canvas.Unclip()
 	}
