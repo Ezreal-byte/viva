@@ -59,6 +59,14 @@ static void check(int condition, const char *msg) {
     }
 }
 
+static NSUInteger trackingAreasOwnedBy(NSStatusBarButton *button, id owner) {
+    NSUInteger count = 0;
+    for (NSTrackingArea *area in button.trackingAreas) {
+        if (area.owner == owner) count++;
+    }
+    return count;
+}
+
 int main(void) {
     @autoreleasepool {
         [NSApplication sharedApplication];
@@ -108,21 +116,22 @@ int main(void) {
 
         NSStatusItem *statusItem = [(id)item valueForKey:@"_item"];
         check(statusItem != nil, "NSStatusItem exists");
-        NSUInteger oldAreas = statusItem.button.trackingAreas.count;
+        // AppKit may add or remove its own tracking area when its tooltip
+        // changes. Count the areas attached by Viva to this item.
         viva_status_item_set_hover(item, 1);
-        check(statusItem.button.trackingAreas.count == oldAreas + 1, "hover tracking enabled");
+        check(trackingAreasOwnedBy(statusItem.button, (id)item) == 1, "hover tracking enabled");
         viva_status_item_set_hover(item, 1);
-        check(statusItem.button.trackingAreas.count == oldAreas + 1, "hover registration idempotent");
+        check(trackingAreasOwnedBy(statusItem.button, (id)item) == 1, "hover registration idempotent");
         viva_status_item_set_hover(item, 0);
-        check(statusItem.button.trackingAreas.count == oldAreas, "hover disabled");
+        check(trackingAreasOwnedBy(statusItem.button, (id)item) == 0, "hover disabled");
         check([statusItem.button.toolTip isEqualToString:@"Test Tooltip"], "tooltip set");
         viva_status_item_set_hover_panel(item, 1);
         viva_status_item_set_hover_panel(item, 1);
-        check(statusItem.button.trackingAreas.count == oldAreas + 1, "custom panel registers one tracking area");
+        check(trackingAreasOwnedBy(statusItem.button, (id)item) == 1, "custom panel registers one tracking area");
         check(statusItem.button.toolTip == nil, "custom panel owns hover presentation");
         viva_status_item_set_tooltip(item, "Updated Tooltip");
         viva_status_item_set_hover_panel(item, 0);
-        check(statusItem.button.trackingAreas.count == oldAreas, "custom panel removes its tracking area");
+        check(trackingAreasOwnedBy(statusItem.button, (id)item) == 0, "custom panel removes its tracking area");
         check([statusItem.button.toolTip isEqualToString:@"Updated Tooltip"], "disabling the panel restores the latest tooltip");
 
         icon.template_image = 1;
