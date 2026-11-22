@@ -4410,17 +4410,6 @@ static VivaAppDelegate *viva_find_window(void *token) {
 }
 @end
 
-int viva_application_status_panel_frame(void *token, double *out) {
-    NSWindow *window = [viva_find_window(token) webHostView].window;
-    if (!window.isVisible) return 0;
-    NSRect frame = window.frame;
-    out[0] = frame.origin.x;
-    out[1] = frame.origin.y;
-    out[2] = frame.size.width;
-    out[3] = frame.size.height;
-    return 1;
-}
-
 void *viva_application_window_view(void *token) {
     return [viva_find_window(token) webHostView];
 }

@@ -7,6 +7,7 @@
 
 #include "native.h"
 #include "status_item_darwin.h"
+#include "web_darwin.h"
 
 /* The side of a menu bar icon in points. The bar is 22 points tall on every
  * Mac; AppKit draws a status image at its own size, so the icon is described
@@ -33,6 +34,7 @@ extern void vivaStatusItemClicked(
 extern void vivaStatusItemUpdateMenu(uintptr_t callbackHandle);
 extern void vivaStatusItemMenuChosen(uintptr_t callbackHandle, int id);
 extern void *vivaStatusItemHover(uintptr_t callbackHandle, float x, float y, float width, float height);
+extern void vivaStatusItemEndHover(uintptr_t callbackHandle, int closeWindow);
 
 enum {
     VIVA_STATUS_BUTTON_PRIMARY = 1,
@@ -78,9 +80,9 @@ static NSImage *viva_status_image(viva_status_icon icon) {
     NSString *_tooltip;
     BOOL _menuOnHover;
     BOOL _panelOnHover;
-    void *_hoverPanel;
-    NSTimer *_panelTimer;
-    NSRect _panelAnchor;
+    NSView *_panelView;
+    NSTrackingArea *_panelArea;
+    BOOL _openedOnHover;
     uintptr_t _callbackHandle;
     NSMenu *_menu;
 }
@@ -92,7 +94,11 @@ static NSImage *viva_status_image(viva_status_icon icon) {
 - (void)updateHoverTracking;
 - (void)showHover;
 - (void)closeHoverPanel;
-- (void)checkHoverPanel:(NSTimer *)timer;
+- (void)trackHoverPanel:(NSView *)view;
+- (void)untrackHoverPanel;
+- (void)scheduleHoverPanelClose;
+- (void)closeHoverAfterGap;
+- (void)panelWillClose:(NSNotification *)notification;
 - (void)remove;
 - (void)setMenuEntries:(const viva_menu_entry *)entries count:(int)count;
 - (void)menuChosen:(NSMenuItem *)sender;
@@ -174,53 +180,98 @@ static NSImage *viva_status_image(viva_status_icon icon) {
         [_item.button removeTrackingArea:_hoverArea];
         [_hoverArea release];
         _hoverArea = nil;
+        _openedOnHover = NO;
     }
 }
 
 - (void)mouseEntered:(NSEvent *)event {
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(showHover) object:nil];
-    [self performSelector:@selector(showHover) withObject:nil afterDelay:0.4];
+    if (event.trackingArea == nil || (event.trackingArea != _hoverArea && event.trackingArea != _panelArea)) return;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(closeHoverAfterGap) object:nil];
+    if (event.trackingArea == _hoverArea && !_openedOnHover && _panelView == nil) {
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(showHover) object:nil];
+        [self performSelector:@selector(showHover) withObject:nil afterDelay:0.4];
+    }
 }
 
 - (void)mouseExited:(NSEvent *)event {
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(showHover) object:nil];
+    if (event.trackingArea == nil || (event.trackingArea != _hoverArea && event.trackingArea != _panelArea)) return;
+    if (event.trackingArea == _hoverArea) {
+        _openedOnHover = NO;
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(showHover) object:nil];
+    }
+    [self scheduleHoverPanelClose];
 }
 
 - (void)showHover {
     NSStatusBarButton *button = _item.button;
-    if (_hoverArea == nil || button.window == nil || _hoverPanel != NULL) return;
+    if (_hoverArea == nil || button.window == nil || _panelView != nil || _openedOnHover) return;
     NSRect anchor = [button.window convertRectToScreen:[button convertRect:button.bounds toView:nil]];
     if (!NSPointInRect(NSEvent.mouseLocation, anchor)) return;
+    _openedOnHover = YES;
     if (_panelOnHover && _callbackHandle != 0) {
-        _hoverPanel = vivaStatusItemHover(_callbackHandle, anchor.origin.x, anchor.origin.y, anchor.size.width, anchor.size.height);
-        if (_hoverPanel != NULL) {
-            _panelAnchor = anchor;
-            _panelTimer = [NSTimer scheduledTimerWithTimeInterval:0.09 target:self selector:@selector(checkHoverPanel:) userInfo:nil repeats:YES];
+        void *token = vivaStatusItemHover(_callbackHandle, anchor.origin.x, anchor.origin.y, anchor.size.width, anchor.size.height);
+        if (token == NULL) return;
+        NSView *view = (NSView *)viva_application_window_view(token);
+        if (_panelOnHover && view.window.isVisible) {
+            [self trackHoverPanel:view];
+        } else {
+            vivaStatusItemEndHover(_callbackHandle, 1);
         }
     } else if (_menuOnHover) {
         [button performClick:nil];
+        // Menu tracking can consume exit and re-entry events. Dwell again
+        // only after the cursor leaves the icon where the menu was dismissed.
+        _openedOnHover = NSPointInRect(NSEvent.mouseLocation, anchor);
     }
 }
 
-- (void)checkHoverPanel:(NSTimer *)timer {
-    (void)timer;
-    double frame[4];
-    if (!viva_application_status_panel_frame(_hoverPanel, frame)) {
-        _hoverPanel = NULL;
-        [self closeHoverPanel];
-        return;
+- (void)trackHoverPanel:(NSView *)view {
+    _panelView = [view retain];
+    _panelArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+        options:NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect
+        owner:self userInfo:nil];
+    [_panelView addTrackingArea:_panelArea];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(panelWillClose:)
+                                                 name:NSWindowWillCloseNotification object:view.window];
+}
+
+- (void)untrackHoverPanel {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(closeHoverAfterGap) object:nil];
+    if (_panelView == nil) return;
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:NSWindowWillCloseNotification object:_panelView.window];
+    [_panelView removeTrackingArea:_panelArea];
+    [_panelArea release];
+    [_panelView release];
+    _panelArea = nil;
+    _panelView = nil;
+}
+
+- (void)panelWillClose:(NSNotification *)notification {
+    (void)notification;
+    [self untrackHoverPanel];
+    vivaStatusItemEndHover(_callbackHandle, 0);
+}
+
+- (void)scheduleHoverPanelClose {
+    if (_panelView != nil) {
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(closeHoverAfterGap) object:nil];
+        [self performSelector:@selector(closeHoverAfterGap) withObject:nil afterDelay:0.15];
     }
-    // Keep the gap inside the hover region, so the pointer can cross it.
-    NSRect region = NSUnionRect(_panelAnchor, NSMakeRect(frame[0], frame[1], frame[2], frame[3]));
-    if (!NSPointInRect(NSEvent.mouseLocation, region)) [self closeHoverPanel];
+}
+
+- (void)closeHoverAfterGap {
+    NSPoint cursor = NSEvent.mouseLocation;
+    NSStatusBarButton *button = _item.button;
+    NSRect anchor = [button.window convertRectToScreen:[button convertRect:button.bounds toView:nil]];
+    if (NSPointInRect(cursor, anchor)) return;
+    if (_panelView.window.isVisible && NSPointInRect(cursor, _panelView.window.frame)) return;
+    [self closeHoverPanel];
 }
 
 - (void)closeHoverPanel {
-    [_panelTimer invalidate];
-    _panelTimer = nil;
-    if (_hoverPanel != NULL) {
-        viva_application_close_window(_hoverPanel);
-        _hoverPanel = NULL;
+    if (_panelView != nil) {
+        [self untrackHoverPanel];
+        vivaStatusItemEndHover(_callbackHandle, 1);
     }
 }
 

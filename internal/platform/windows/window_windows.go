@@ -103,6 +103,7 @@ type windowState struct {
 	maximized                              bool
 	lastFrame                              gfx.Rect
 	scale                                  float32
+	hoverStatus                            *statusState
 	scaleFixed                             bool // VIVA_SCALE set it: the display's own scale is ignored
 	err                                    error
 	pointerEvents, resizeEvents, keyEvents uint64
@@ -908,6 +909,9 @@ func windowProc(window, kind, first, second uintptr) (result uintptr) {
 			track := trackMouse{Size: uint32(unsafe.Sizeof(trackMouse{})), Flags: 2, Window: window}
 			trackMouseEvent.Call(uintptr(unsafe.Pointer(&track)))
 			state.tracking = true
+			if status := state.hoverStatus; status != nil {
+				status.cancelHoverGap()
+			}
 		}
 		eventKind := platform.PointerMove
 		button := gfx.PointerButtonNone
@@ -967,6 +971,9 @@ func windowProc(window, kind, first, second uintptr) (result uintptr) {
 		}
 	case wmMouseLeave, wmKillFocus:
 		state.tracking = false
+		if kind == wmMouseLeave && state.hoverStatus != nil {
+			state.hoverStatus.startHoverGap()
+		}
 		if kind == wmMouseLeave && state.web != nil && state.web.pointerOverCover() {
 			return 0 // the pointer went onto a window that hands it back, not out of this one
 		}
