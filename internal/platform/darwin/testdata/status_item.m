@@ -66,7 +66,7 @@ static void check(int condition, const char *msg) {
     }
 }
 
-static NSUInteger trackingAreasOwnedBy(NSStatusBarButton *button, id owner) {
+static NSUInteger trackingAreasOwnedBy(NSView *button, id owner) {
     NSUInteger count = 0;
     for (NSTrackingArea *area in button.trackingAreas) {
         if (area.owner == owner) count++;
