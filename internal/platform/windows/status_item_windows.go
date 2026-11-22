@@ -142,6 +142,8 @@ type statusState struct {
 }
 
 type statusItem struct {
+	hoverMenu   bool
+	menuOpen    bool
 	application *windowsApplication
 	id          uint32
 	icon        uintptr
@@ -241,6 +243,9 @@ func (item *statusItem) data() notifyIconData {
 		CallbackMessage: wmStatusNotify,
 		Icon:            item.icon,
 	}
+	if item.hoverMenu {
+		data.Flags &^= notifyShowTip
+	}
 	copyUTF16(data.Tip[:], item.tooltip)
 	return data
 }
@@ -260,6 +265,20 @@ func (item *statusItem) delete() {
 		destroyIcon.Call(item.icon)
 		item.icon = 0
 	}
+}
+
+func (item *statusItem) SetMenuOnHover(enabled bool) bool {
+	if item.menu == nil || item.removed.Load() {
+		return false
+	}
+	if item.hoverMenu != enabled {
+		item.hoverMenu = enabled
+		if err := item.notify(notifyModify); err != nil {
+			item.hoverMenu = !enabled
+			return false
+		}
+	}
+	return true
 }
 
 // SetIcon replaces the icon. It must run on the event-loop thread.
@@ -392,6 +411,13 @@ func (status *statusState) notified(window, anchor, packed uintptr) {
 	id := uint32(packed>>16) & 0xffff
 	item := status.items[id]
 	if item == nil || item.removed.Load() || item.onClick == nil && item.menu == nil {
+		return
+	}
+	const ninPopupOpen = 0x0406
+	if event == ninPopupOpen {
+		if item.hoverMenu && !item.menuOpen {
+			item.popMenu(window, item.anchor(window, anchor))
+		}
 		return
 	}
 	button, ok := statusButton(event)

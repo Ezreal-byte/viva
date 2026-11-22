@@ -134,6 +134,17 @@ func (item *StatusItem) SetTooltip(tooltip string) {
 	}
 }
 
+// SetMenuOnHover asks the desktop to open the item's existing menu when the
+// pointer rests on its icon. Call on the event-loop thread. It returns false
+// on hosts such as Linux StatusNotifier that own hover presentation.
+func (item *StatusItem) SetMenuOnHover(enabled bool) bool {
+	if item == nil || item.removed.Load() {
+		return false
+	}
+	host, ok := item.control.(interface{ SetMenuOnHover(bool) bool })
+	return ok && host.SetMenuOnHover(enabled)
+}
+
 // Remove takes the icon away. It is idempotent and, unlike the setters, may be
 // called from any goroutine.
 func (item *StatusItem) Remove() {

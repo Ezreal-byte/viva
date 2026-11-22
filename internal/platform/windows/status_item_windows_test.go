@@ -253,3 +253,14 @@ func TestNotificationCarrierRecoversAfterAModifyAndAddFailure(t *testing.T) {
 		t.Fatalf("the carrier did not recover: added=%v window=%#x", notificationAdded, notificationWindow)
 	}
 }
+
+func TestHoverMenuUsesShellPopupNotifications(t *testing.T) {
+	item := &statusItem{application: &windowsApplication{status: &statusState{}}}
+	if item.data().Flags&notifyShowTip == 0 {
+		t.Fatal("regular tooltip disabled")
+	}
+	item.hoverMenu = true
+	if item.data().Flags&notifyShowTip != 0 {
+		t.Fatal("shell tooltip suppresses rich hover")
+	}
+}

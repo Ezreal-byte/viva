@@ -261,5 +261,9 @@ type nativeStatusItem struct{ item platform.StatusItem }
 func (item nativeStatusItem) SetIcon(icon StatusIcon) error {
 	return item.item.SetIcon(icon.platform())
 }
+func (item nativeStatusItem) SetMenuOnHover(enabled bool) bool {
+	host, ok := item.item.(interface{ SetMenuOnHover(bool) bool })
+	return ok && host.SetMenuOnHover(enabled)
+}
 func (item nativeStatusItem) SetTooltip(tooltip string) { item.item.SetTooltip(tooltip) }
 func (item nativeStatusItem) Remove()                   { item.item.Remove() }

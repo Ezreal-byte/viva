@@ -69,6 +69,13 @@ func (item *nativeStatusItem) SetIcon(icon platform.StatusIcon) error {
 	return nil
 }
 
+func (item *nativeStatusItem) SetMenuOnHover(enabled bool) bool {
+	if item.removed.Load() || item.menu == nil {
+		return false
+	}
+	C.viva_status_item_set_hover(item.token, C.int(boolInt(enabled)))
+	return true
+}
 func (item *nativeStatusItem) SetTooltip(tooltip string) {
 	if item.removed.Load() {
 		return

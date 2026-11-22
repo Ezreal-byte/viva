@@ -94,6 +94,13 @@ int main(void) {
 
         NSStatusItem *statusItem = [(id)item valueForKey:@"_item"];
         check(statusItem != nil, "NSStatusItem exists");
+        NSUInteger oldAreas = statusItem.button.trackingAreas.count;
+        viva_status_item_set_hover(item, 1);
+        check(statusItem.button.trackingAreas.count == oldAreas + 1, "hover tracking enabled");
+        viva_status_item_set_hover(item, 1);
+        check(statusItem.button.trackingAreas.count == oldAreas + 1, "hover registration idempotent");
+        viva_status_item_set_hover(item, 0);
+        check(statusItem.button.trackingAreas.count == oldAreas, "hover disabled");
         check([statusItem.button.toolTip isEqualToString:@"Test Tooltip"], "tooltip set");
 
         icon.template_image = 1;
