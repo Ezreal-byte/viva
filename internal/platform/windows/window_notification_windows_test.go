@@ -76,6 +76,33 @@ func TestNotificationNativeWindows(t *testing.T) {
 		if after, _, _ := focus.Call(); after != handle {
 			t.Fatal("interacting with notification stole focus")
 		}
+		var info monitorInfo
+		info.Size = uint32(unsafe.Sizeof(info))
+		if ok, _, err := getMonitorInfo.Call(cursorMonitor(), uintptr(unsafe.Pointer(&info))); ok == 0 {
+			t.Fatal(err)
+		}
+		work := info.Work
+		anchor := platform.ScreenRect{
+			X: float32(work.Left + (work.Right-work.Left)/2),
+			Y: float32(work.Bottom), Width: 24, Height: 24,
+		}
+		hover, err := app.OpenWindow(platform.Config{
+			Title: "Hover panel", Width: 300, Height: 120,
+			WindowMode: platform.WindowNotification, HasAnchor: true, Anchor: anchor,
+		})
+		if err != nil {
+			return err
+		}
+		defer hover.Close()
+		var frame rect
+		getWindowRect.Call(hover.(*nativeWindow).state.window, uintptr(unsafe.Pointer(&frame)))
+		if frame.Left < work.Left || frame.Right > work.Right || frame.Top < work.Top ||
+			frame.Bottom > work.Bottom || float32(frame.Left) >= anchor.X || float32(frame.Right) <= anchor.X {
+			t.Fatalf("hover panel %+v did not anchor to %+v in %+v", frame, anchor, work)
+		}
+		if after, _, _ := focus.Call(); after != handle {
+			t.Fatal("opening an anchored hover panel stole focus")
+		}
 		return nil
 	})
 	if err != nil {
