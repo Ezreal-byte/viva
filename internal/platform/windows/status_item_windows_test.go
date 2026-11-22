@@ -88,8 +88,17 @@ func TestStatusHoverCallsPanelWithoutOpeningContextMenu(t *testing.T) {
 	}
 	status := &statusState{items: map[uint32]*statusItem{2: item}}
 	status.notified(0, 250|720<<16, 2<<16|ninPopupOpen)
-	if anchor.X != 250 || anchor.Y != 720 {
+	if anchor.Width == 0 || !hoverContains(anchor, point{250, 720}) {
 		t.Fatalf("unexpected shell anchor: %+v", anchor)
+	}
+}
+
+func TestStatusHoverUsesThePointerWhenTheShellReportsTheChevron(t *testing.T) {
+	chevron := platform.ScreenRect{X: 100, Y: 750, Width: 20, Height: 20}
+	pointer := point{250, 720}
+	anchor := hoverAnchor(chevron, pointer)
+	if !hoverContains(anchor, pointer) || hoverContains(anchor, point{110, 760}) {
+		t.Fatalf("overflow icon anchored to the chevron instead of the pointer: %+v", anchor)
 	}
 }
 

@@ -160,8 +160,8 @@ func (item *StatusItem) SetMenuOnHover(enabled bool) bool {
 // status item. The callback runs on the event-loop thread. Open a
 // WindowNotification with the supplied Anchor and return it so the host can
 // close it when the pointer leaves both the icon and the panel. A nil callback
-// disables the panel. It takes precedence over SetMenuOnHover and is currently
-// supported on Windows. Other hosts return false.
+// disables the panel. It takes precedence over SetMenuOnHover. Hosts such as
+// Linux StatusNotifier that own hover presentation return false.
 func (item *StatusItem) SetHoverPanel(open func(StatusAnchor) *Window) bool {
 	if item == nil || item.removed.Load() {
 		return false

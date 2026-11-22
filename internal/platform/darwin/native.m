@@ -4127,7 +4127,7 @@ static void viva_set_secure_event_input(BOOL on) {
  * the menu bar at the top of the screen, and kept inside the visible part of the
  * screen the anchor is on. Without an anchor it is centered on the screen. */
 - (void)placePanel {
-    if (_windowMode == VIVA_WINDOW_NOTIFICATION) {
+    if (_windowMode == VIVA_WINDOW_NOTIFICATION && !_hasAnchor) {
         NSPoint point = NSEvent.mouseLocation;
         NSScreen *screen = NSScreen.mainScreen ?: NSScreen.screens.firstObject;
         for (NSScreen *candidate in NSScreen.screens) {
@@ -4409,6 +4409,17 @@ static VivaAppDelegate *viva_find_window(void *token) {
     return _window.contentView;
 }
 @end
+
+int viva_application_status_panel_frame(void *token, double *out) {
+    NSWindow *window = [viva_find_window(token) webHostView].window;
+    if (!window.isVisible) return 0;
+    NSRect frame = window.frame;
+    out[0] = frame.origin.x;
+    out[1] = frame.origin.y;
+    out[2] = frame.size.width;
+    out[3] = frame.size.height;
+    return 1;
+}
 
 void *viva_application_window_view(void *token) {
     return [viva_find_window(token) webHostView];

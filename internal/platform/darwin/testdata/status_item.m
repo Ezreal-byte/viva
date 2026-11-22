@@ -15,6 +15,20 @@ static int last_chosen_id = 0;
 static int update_menu_called = 0;
 static void *update_menu_item = NULL;
 
+void *vivaStatusItemHover(uintptr_t handle, float x, float y, float width, float height) {
+    (void)handle; (void)x; (void)y; (void)width; (void)height;
+    return NULL;
+}
+
+int viva_application_status_panel_frame(void *window, double *out) {
+    (void)window; (void)out;
+    return 0;
+}
+
+void viva_application_close_window(void *window) {
+    (void)window;
+}
+
 void vivaStatusItemClicked(uintptr_t callbackHandle, int button, float x, float y, float width, float height, int panelDismissed) {
     (void)callbackHandle; (void)button; (void)x; (void)y; (void)width; (void)height; (void)panelDismissed;
 }
@@ -102,6 +116,14 @@ int main(void) {
         viva_status_item_set_hover(item, 0);
         check(statusItem.button.trackingAreas.count == oldAreas, "hover disabled");
         check([statusItem.button.toolTip isEqualToString:@"Test Tooltip"], "tooltip set");
+        viva_status_item_set_hover_panel(item, 1);
+        viva_status_item_set_hover_panel(item, 1);
+        check(statusItem.button.trackingAreas.count == oldAreas + 1, "custom panel registers one tracking area");
+        check(statusItem.button.toolTip == nil, "custom panel owns hover presentation");
+        viva_status_item_set_tooltip(item, "Updated Tooltip");
+        viva_status_item_set_hover_panel(item, 0);
+        check(statusItem.button.trackingAreas.count == oldAreas, "custom panel removes its tracking area");
+        check([statusItem.button.toolTip isEqualToString:@"Updated Tooltip"], "disabling the panel restores the latest tooltip");
 
         icon.template_image = 1;
         check(viva_status_item_set_icon(item, icon) == 1, "menu bar template update accepted");

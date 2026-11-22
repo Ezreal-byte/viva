@@ -433,10 +433,14 @@ func (status *statusState) notified(window, anchor, packed uintptr) {
 		if !item.canHover() {
 			return
 		}
-		bounds := item.anchor(window, anchor)
+		cursor := point{X: int32(int16(anchor)), Y: int32(int16(anchor >> 16))}
 		if status.hover.pendingID == item.id {
-			bounds = hoverAnchor(bounds, status.hover.pointer)
+			cursor = status.hover.pointer
 		}
+		// A hidden icon's registered rectangle can be the chevron instead
+		// of the button in the open overflow. NIN_POPUPOPEN can also be the
+		// very first notification for a dwell, with no pending mouse move.
+		bounds := hoverAnchor(item.anchor(window, anchor), cursor)
 		status.cancelHover()
 		status.openHover(item, bounds)
 		return

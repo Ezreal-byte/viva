@@ -267,16 +267,15 @@ func (item nativeStatusItem) SetMenuOnHover(enabled bool) bool {
 }
 func (item nativeStatusItem) SetHoverPanel(open func(StatusAnchor) *Window) bool {
 	host, ok := item.item.(interface {
-		SetHoverPanel(func(platform.ScreenRect) platform.Window)
+		SetHoverPanel(func(platform.ScreenRect) platform.Window) bool
 	})
 	if !ok {
 		return false
 	}
 	if open == nil {
-		host.SetHoverPanel(nil)
-		return true
+		return host.SetHoverPanel(nil)
 	}
-	host.SetHoverPanel(func(rect platform.ScreenRect) platform.Window {
+	return host.SetHoverPanel(func(rect platform.ScreenRect) platform.Window {
 		if window := open(StatusAnchor{rect: rect, set: true}); window != nil {
 			if control, ok := window.control.(resultWindow); ok {
 				return control.WindowControl
@@ -284,7 +283,6 @@ func (item nativeStatusItem) SetHoverPanel(open func(StatusAnchor) *Window) bool
 		}
 		return nil
 	})
-	return true
 }
 func (item nativeStatusItem) SetTooltip(tooltip string) { item.item.SetTooltip(tooltip) }
 func (item nativeStatusItem) RefreshMenu() {

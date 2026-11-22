@@ -32,6 +32,7 @@ extern void vivaStatusItemClicked(
 );
 extern void vivaStatusItemUpdateMenu(uintptr_t callbackHandle);
 extern void vivaStatusItemMenuChosen(uintptr_t callbackHandle, int id);
+extern void *vivaStatusItemHover(uintptr_t callbackHandle, float x, float y, float width, float height);
 
 enum {
     VIVA_STATUS_BUTTON_PRIMARY = 1,
@@ -74,6 +75,12 @@ static NSImage *viva_status_image(viva_status_icon icon) {
 @interface VivaStatusItem : NSObject <NSMenuDelegate> {
     NSStatusItem *_item;
     NSTrackingArea *_hoverArea;
+    NSString *_tooltip;
+    BOOL _menuOnHover;
+    BOOL _panelOnHover;
+    void *_hoverPanel;
+    NSTimer *_panelTimer;
+    NSRect _panelAnchor;
     uintptr_t _callbackHandle;
     NSMenu *_menu;
 }
@@ -81,6 +88,11 @@ static NSImage *viva_status_image(viva_status_icon icon) {
 - (BOOL)setIcon:(viva_status_icon)icon;
 - (void)setTooltip:(NSString *)tooltip;
 - (void)setMenuOnHover:(BOOL)enabled;
+- (void)setPanelOnHover:(BOOL)enabled;
+- (void)updateHoverTracking;
+- (void)showHover;
+- (void)closeHoverPanel;
+- (void)checkHoverPanel:(NSTimer *)timer;
 - (void)remove;
 - (void)setMenuEntries:(const viva_menu_entry *)entries count:(int)count;
 - (void)menuChosen:(NSMenuItem *)sender;
@@ -101,7 +113,7 @@ static NSImage *viva_status_image(viva_status_icon icon) {
     _callbackHandle = callbackHandle;
     _item = [[[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength] retain];
     _item.button.image = image;
-    _item.button.toolTip = tooltip;
+    [self setTooltip:tooltip];
     if (hasMenu) {
         _menu = [[NSMenu alloc] initWithTitle:@""];
         _menu.autoenablesItems = NO;
@@ -130,18 +142,35 @@ static NSImage *viva_status_image(viva_status_icon icon) {
 }
 
 - (void)setTooltip:(NSString *)tooltip {
-    _item.button.toolTip = tooltip;
+    NSString *replacement = [tooltip copy];
+    [_tooltip release];
+    _tooltip = replacement;
+    _item.button.toolTip = _panelOnHover ? nil : _tooltip;
 }
 
 - (void)setMenuOnHover:(BOOL)enabled {
+    _menuOnHover = enabled;
+    [self updateHoverTracking];
+}
+
+- (void)setPanelOnHover:(BOOL)enabled {
+    if (enabled == _panelOnHover) return;
+    _panelOnHover = enabled;
+    _item.button.toolTip = enabled ? nil : _tooltip;
+    if (!enabled) [self closeHoverPanel];
+    [self updateHoverTracking];
+}
+
+- (void)updateHoverTracking {
+    BOOL enabled = _item != nil && (_panelOnHover || (_menuOnHover && _menu != nil));
     if (enabled == (_hoverArea != nil)) return;
-    if (enabled && _item != nil && _menu != nil) {
+    if (enabled) {
         _hoverArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
             options:NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect
             owner:self userInfo:nil];
         [_item.button addTrackingArea:_hoverArea];
     } else if (_hoverArea != nil) {
-        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(showHoverMenu) object:nil];
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(showHover) object:nil];
         [_item.button removeTrackingArea:_hoverArea];
         [_hoverArea release];
         _hoverArea = nil;
@@ -149,23 +178,57 @@ static NSImage *viva_status_image(viva_status_icon icon) {
 }
 
 - (void)mouseEntered:(NSEvent *)event {
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(showHoverMenu) object:nil];
-    [self performSelector:@selector(showHoverMenu) withObject:nil afterDelay:0.4];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(showHover) object:nil];
+    [self performSelector:@selector(showHover) withObject:nil afterDelay:0.4];
 }
 
 - (void)mouseExited:(NSEvent *)event {
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(showHoverMenu) object:nil];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(showHover) object:nil];
 }
 
-- (void)showHoverMenu {
-    if (_hoverArea != nil && _item.button.window != nil) {
-        NSPoint point = [_item.button convertPoint:_item.button.window.mouseLocationOutsideOfEventStream fromView:nil];
-        if (NSPointInRect(point, _item.button.bounds)) [_item.button performClick:nil];
+- (void)showHover {
+    NSStatusBarButton *button = _item.button;
+    if (_hoverArea == nil || button.window == nil || _hoverPanel != NULL) return;
+    NSRect anchor = [button.window convertRectToScreen:[button convertRect:button.bounds toView:nil]];
+    if (!NSPointInRect(NSEvent.mouseLocation, anchor)) return;
+    if (_panelOnHover && _callbackHandle != 0) {
+        _hoverPanel = vivaStatusItemHover(_callbackHandle, anchor.origin.x, anchor.origin.y, anchor.size.width, anchor.size.height);
+        if (_hoverPanel != NULL) {
+            _panelAnchor = anchor;
+            _panelTimer = [NSTimer scheduledTimerWithTimeInterval:0.09 target:self selector:@selector(checkHoverPanel:) userInfo:nil repeats:YES];
+        }
+    } else if (_menuOnHover) {
+        [button performClick:nil];
+    }
+}
+
+- (void)checkHoverPanel:(NSTimer *)timer {
+    (void)timer;
+    double frame[4];
+    if (!viva_application_status_panel_frame(_hoverPanel, frame)) {
+        _hoverPanel = NULL;
+        [self closeHoverPanel];
+        return;
+    }
+    // Keep the gap inside the hover region, so the pointer can cross it.
+    NSRect region = NSUnionRect(_panelAnchor, NSMakeRect(frame[0], frame[1], frame[2], frame[3]));
+    if (!NSPointInRect(NSEvent.mouseLocation, region)) [self closeHoverPanel];
+}
+
+- (void)closeHoverPanel {
+    [_panelTimer invalidate];
+    _panelTimer = nil;
+    if (_hoverPanel != NULL) {
+        viva_application_close_window(_hoverPanel);
+        _hoverPanel = NULL;
     }
 }
 
 - (void)remove {
+    [self setPanelOnHover:NO];
     [self setMenuOnHover:NO];
+    [_tooltip release];
+    _tooltip = nil;
     if (_item != nil) {
         _item.menu = nil;
         if (_menu != nil) {
@@ -221,6 +284,13 @@ static NSImage *viva_status_image(viva_status_icon icon) {
 - (void)menuNeedsUpdate:(NSMenu *)menu {
     if (menu == _menu && _callbackHandle != 0) {
         vivaStatusItemUpdateMenu(_callbackHandle);
+    }
+}
+
+- (void)menuWillOpen:(NSMenu *)menu {
+    if (menu == _menu) {
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(showHover) object:nil];
+        [self closeHoverPanel];
     }
 }
 
@@ -318,6 +388,10 @@ void viva_status_item_set_menu_entries(void *item, const viva_menu_entry *entrie
 
 void viva_status_item_set_hover(void *item, int enabled) {
     [(VivaStatusItem *)item setMenuOnHover:enabled != 0];
+}
+
+void viva_status_item_set_hover_panel(void *item, int enabled) {
+    [(VivaStatusItem *)item setPanelOnHover:enabled != 0];
 }
 
 void viva_status_item_set_tooltip(void *item, const char *tooltip) {

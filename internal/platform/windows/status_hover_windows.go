@@ -22,17 +22,26 @@ type statusHover struct {
 	anchor    platform.ScreenRect
 }
 
-func (item *statusItem) SetHoverPanel(open func(platform.ScreenRect) platform.Window) {
-	hadPanel := item.hoverPanel != nil
+func (item *statusItem) SetHoverPanel(open func(platform.ScreenRect) platform.Window) bool {
+	if item.removed.Load() {
+		return false
+	}
+	previous := item.hoverPanel
 	item.hoverPanel = open
-	if hadPanel == (open != nil) {
-		return
+	if (previous == nil) == (open == nil) {
+		return true
 	}
 	if open == nil {
 		item.application.status.stopItemHover(item.id)
 	}
+	if err := item.notify(notifyModify); err != nil && open != nil {
+		// Let the caller keep its tooltip or click fallback when the shell
+		// has not accepted the panel's notification flags.
+		item.hoverPanel = previous
+		return false
+	}
 	// TaskbarCreated reapplies the desired flags if Explorer is restarting.
-	_ = item.notify(notifyModify)
+	return true
 }
 
 func (item *statusItem) canHover() bool {
