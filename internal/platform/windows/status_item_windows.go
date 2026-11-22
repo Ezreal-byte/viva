@@ -130,7 +130,6 @@ var processStart = time.Now()
 func monotonicNow() int64 { return int64(time.Since(processStart)) }
 
 const panelDismissWindow = 350 * time.Millisecond
-const statusHoverTimer = 1
 
 // statusState is what the application keeps for its status items: one hidden
 // window that receives their messages.
@@ -140,11 +139,12 @@ type statusState struct {
 	taskbarCreated uint32
 	nextID         uint32
 	items          map[uint32]*statusItem
-	hovered        uint32
+	hover          statusHover
 }
 
 type statusItem struct {
 	hoverMenu   bool
+	hoverPanel  func(platform.ScreenRect) platform.Window
 	menuOpen    bool
 	application *windowsApplication
 	id          uint32
@@ -226,6 +226,8 @@ func (application *windowsApplication) closeStatus() {
 	if status == nil {
 		return
 	}
+	status.cancelHover()
+	status.closeHoverPanel()
 	for _, item := range status.items {
 		item.delete()
 	}
@@ -245,7 +247,7 @@ func (item *statusItem) data() notifyIconData {
 		CallbackMessage: wmStatusNotify,
 		Icon:            item.icon,
 	}
-	if item.hoverMenu {
+	if item.hoverMenu || item.hoverPanel != nil {
 		data.Flags &^= notifyShowTip
 	}
 	copyUTF16(data.Tip[:], item.tooltip)
@@ -297,10 +299,13 @@ func (item *statusItem) SetIcon(icon platform.StatusIcon) error {
 	}
 	previous := item.icon
 	item.icon = handle
-	if err := item.notify(notifyModify); err != nil {
+	// Flashing the icon must not also replace Explorer's hover tooltip.
+	data := item.data()
+	data.Flags = notifyIcon
+	if ok, _, err := shellNotifyIcon.Call(notifyModify, uintptr(unsafe.Pointer(&data))); ok == 0 {
 		item.icon = previous
 		destroyIcon.Call(handle)
-		return err
+		return windowsCallError("update the status item icon", err)
 	}
 	destroyIcon.Call(previous)
 	return nil
@@ -385,16 +390,22 @@ func statusProc(window, kind, first, second uintptr) (result uintptr) {
 		status.notified(window, first, second)
 		return 0
 	case kind == wmTimer && first == statusHoverTimer:
-		status.openHoveredMenu()
+		status.finishHover()
+		return 0
+	case kind == wmTimer && first == statusHoverPanelTimer:
+		status.checkHoverPanel()
 		return 0
 	case kind == wmStatusRemove:
 		if item := status.items[uint32(first)]; item != nil {
+			status.stopItemHover(item.id)
 			item.delete()
 			delete(status.items, item.id)
 		}
 		return 0
 	case status.taskbarCreated != 0 && uint32(kind) == status.taskbarCreated:
 		// The shell started again: its notification area is empty.
+		status.cancelHover()
+		status.closeHoverPanel()
 		invalidateNotificationIcon()
 		for _, item := range status.items {
 			if !item.removed.Load() {
@@ -415,29 +426,33 @@ func (status *statusState) notified(window, anchor, packed uintptr) {
 	event := uint32(packed) & 0xffff
 	id := uint32(packed>>16) & 0xffff
 	item := status.items[id]
-	if item == nil || item.removed.Load() || item.onClick == nil && item.menu == nil {
+	if item == nil || item.removed.Load() {
 		return
 	}
-	const ninPopupOpen = 0x0406
 	if event == ninPopupOpen {
-		if item.hoverMenu && !item.menuOpen {
-			killTimer.Call(window, statusHoverTimer)
-			item.popMenu(window, item.anchor(window, anchor))
+		if !item.canHover() {
+			return
 		}
+		bounds := item.anchor(window, anchor)
+		if status.hover.pendingID == item.id {
+			bounds = hoverAnchor(bounds, status.hover.pointer)
+		}
+		status.cancelHover()
+		status.openHover(item, bounds)
 		return
 	}
 	// Explorer can keep tooltips in charge of a hidden overflow icon. It
 	// still reports pointer motion there, so do not rely on NIN_POPUPOPEN.
-	if event == wmMouseMove && item.hoverMenu && !item.menuOpen {
-		status.hovered = item.id
-		setTimer.Call(window, statusHoverTimer, 500, 0)
+	if event == wmMouseMove {
+		status.beginHover(item)
 		return
 	}
 	button, ok := statusButton(event)
 	if !ok {
 		return
 	}
-	killTimer.Call(window, statusHoverTimer)
+	status.cancelHover()
+	status.closeHoverPanel()
 	// A primary activation belongs to the application when it supplied a
 	// callback (for example, to restore its window). Keep menu-only icons
 	// clickable, and reserve secondary activation for the context menu.
@@ -446,21 +461,8 @@ func (status *statusState) notified(window, anchor, packed uintptr) {
 		return
 	}
 	dismissed := time.Duration(monotonicNow()-panelDismissedAt.Load()) < panelDismissWindow
-	item.onClick(platform.StatusClick{Button: button, Anchor: item.anchor(window, anchor), PanelDismissed: dismissed})
-}
-
-func (status *statusState) openHoveredMenu() {
-	killTimer.Call(status.window, statusHoverTimer)
-	item := status.items[status.hovered]
-	if item == nil || item.removed.Load() || !item.hoverMenu || item.menuOpen {
-		return
-	}
-	bounds := item.anchor(status.window, 0)
-	var cursor point
-	ok, _, _ := getCursorPos.Call(uintptr(unsafe.Pointer(&cursor)))
-	x, y := float32(cursor.X), float32(cursor.Y)
-	if ok != 0 && x >= bounds.X && x < bounds.X+bounds.Width && y >= bounds.Y && y < bounds.Y+bounds.Height {
-		item.popMenu(status.window, bounds)
+	if item.onClick != nil {
+		item.onClick(platform.StatusClick{Button: button, Anchor: item.anchor(window, anchor), PanelDismissed: dismissed})
 	}
 }
 
@@ -536,7 +538,7 @@ func (state *windowState) placePanel() {
 	getWindowRect.Call(state.window, uintptr(unsafe.Pointer(&bounds)))
 	width, height := float32(bounds.Right-bounds.Left), float32(bounds.Bottom-bounds.Top)
 	config := state.config
-	if !config.HasAnchor || config.WindowMode == platform.WindowNotification {
+	if !config.HasAnchor {
 		// Centered on the monitor the cursor is on.
 		var info monitorInfo
 		info.Size = uint32(unsafe.Sizeof(info))
@@ -566,6 +568,13 @@ func (state *windowState) placePanel() {
 		area = platform.ScreenRect{X: float32(info.Work.Left), Y: float32(info.Work.Top), Width: float32(info.Work.Right - info.Work.Left), Height: float32(info.Work.Bottom - info.Work.Top)}
 	}
 	x, y := platform.PlacePanel(anchor, width, height, area)
+	if config.WindowMode == platform.WindowNotification {
+		if info.Work.Right > info.Work.Left && info.Work.Bottom > info.Work.Top {
+			left, top, fittedWidth, fittedHeight := placedFrame(info.Work, int32(x), int32(y), int32(width), int32(height))
+			setWindowPosition.Call(state.window, hwndTopmost, uintptr(left), uintptr(top), uintptr(fittedWidth), uintptr(fittedHeight), 0x10) // NOACTIVATE
+		}
+		return
+	}
 	// SWP_NOSIZE: only the position changes.
 	setWindowPosition.Call(state.window, hwndTopmost, uintptr(int32(x)), uintptr(int32(y)), 0, 0, 0x1)
 }

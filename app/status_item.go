@@ -156,6 +156,22 @@ func (item *StatusItem) SetMenuOnHover(enabled bool) bool {
 	return ok && host.SetMenuOnHover(enabled)
 }
 
+// SetHoverPanel opens a non-activating panel when the pointer rests on this
+// status item. The callback runs on the event-loop thread. Open a
+// WindowNotification with the supplied Anchor and return it so the host can
+// close it when the pointer leaves both the icon and the panel. A nil callback
+// disables the panel. It takes precedence over SetMenuOnHover and is currently
+// supported on Windows. Other hosts return false.
+func (item *StatusItem) SetHoverPanel(open func(StatusAnchor) *Window) bool {
+	if item == nil || item.removed.Load() {
+		return false
+	}
+	host, ok := item.control.(interface {
+		SetHoverPanel(func(StatusAnchor) *Window) bool
+	})
+	return ok && host.SetHoverPanel(open)
+}
+
 // Remove takes the icon away. It is idempotent and, unlike the setters, may be
 // called from any goroutine.
 func (item *StatusItem) Remove() {
