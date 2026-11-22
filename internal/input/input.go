@@ -1,8 +1,6 @@
 package input
 
 import (
-	"slices"
-
 	"github.com/vivaui/viva/gfx"
 )
 
@@ -145,26 +143,36 @@ type Router struct {
 	returnFocus   Target
 }
 
-// SetRegions replaces paint-order hit regions while preserving a still-valid
-// focused target. Destination storage is reused across calls.
+// RegionBuffer is the router's region list emptied, to build the next list in
+// and hand back with SetRegions, so the regions are kept once and never copied.
+// The router routes nothing until it has them back.
+func (router *Router) RegionBuffer() []Region { return router.regions[:0] }
+
+// SetRegions replaces the paint-order hit regions, preserving a still-valid
+// focused target. The router keeps regions as given, without a copy: the caller
+// must not change the slice afterwards.
 func (router *Router) SetRegions(regions []Region) {
-	// A repaint that declares the same regions (the common steady state) needs
-	// no copy and no focus rescan: the retained list already routes input and
-	// the focused slot is still valid.
-	if len(router.regions) == len(regions) && slices.Equal(router.regions, regions) {
+	router.regions = regions
+	if router.focused.IsZero() {
+		router.focusedSlot = 0
 		return
 	}
-	router.regions = append(router.regions[:0], regions...)
-	router.focusedSlot = 0
-	if !router.focused.IsZero() {
-		for index, region := range router.regions {
-			if region.Target == router.focused && router.focusAvailableRegion(region) {
-				router.focusedSlot = uint32(index + 1)
-				break
-			}
+	// A target can have several regions; the focus stays on the one it was on
+	// while that one still holds it, so Tab goes on from there instead of
+	// starting over from the target's first region.
+	if slot := router.focusedSlot; slot > 0 && int(slot) <= len(regions) {
+		if region := regions[slot-1]; region.Target == router.focused && router.focusAvailableRegion(region) {
+			return
 		}
 	}
-	if !router.focused.IsZero() && router.focusedSlot == 0 {
+	router.focusedSlot = 0
+	for index, region := range router.regions {
+		if region.Target == router.focused && router.focusAvailableRegion(region) {
+			router.focusedSlot = uint32(index + 1)
+			break
+		}
+	}
+	if router.focusedSlot == 0 {
 		router.focused = gfx.ID{}
 	}
 }

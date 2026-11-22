@@ -1,3 +1,5 @@
+//go:build !android
+
 package linux
 
 import "sync"
@@ -28,7 +30,6 @@ func readFontSettings() fontSettings {
 	}
 	defer func() {
 		api.disconnect(connection)
-		api.close()
 	}()
 	tracker := &scaleTracker{api: api, connection: connection, screen: screen}
 	tracker.managerAtom, _ = api.atom(connection, "_XSETTINGS_S0")

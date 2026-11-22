@@ -23,9 +23,14 @@ import (
 // native label list, so an unchanged repaint performs no renderer work.
 type painter struct {
 	fullscreen bool
-	paint      func(canvas *gfx.Canvas, size gfx.Size)
-	onPointer  func(gfx.PointerEvent) gfx.EventResult
-	onKey      func(gfx.KeyEvent) gfx.EventResult
+	// touch reads a finger's presses, pans and flings (touch.go).
+	touch touchState
+	// customTitlebar says the page draws the window's titlebar strip itself
+	// (WindowCustomTitlebar), so the window buttons cover part of it.
+	customTitlebar bool
+	paint          func(canvas *gfx.Canvas, size gfx.Size)
+	onPointer      func(gfx.PointerEvent) gfx.EventResult
+	onKey          func(gfx.KeyEvent) gfx.EventResult
 	// onDeactivate is the application's, called after a window loses the
 	// activation and the keys that were down are released.
 	onDeactivate func() gfx.EventResult
@@ -57,23 +62,23 @@ type painter struct {
 	nativeText     platform.TextInput
 	// keys follows the keys of a terminal that asked for releases (see
 	// TextInput.KeyReleases).
-	keys            interaction.Keys
-	textEnabled     bool
-	canvas          *gfx.Canvas
-	size            gfx.Size
-	focus           interaction.Focus
-	pointer         interaction.Pointer
-	frame           *framebuild.Builder
-	semantics       *semantic.Tree
-	semanticIDs     []semantic.ID
-	accessibility   []platform.AccessibilityNode
-	lastAccess      []platform.AccessibilityNode
-	semanticChanges []semantic.Change
-	reusedHits      int                   // publishes that kept the previous regions and semantics
-	views           []platform.NativeView // the native views of this publish
-	lastViews       []platform.NativeView // the ones last sent
-	covers          []gfx.Rect            // backing of the views' Covers
-	hitScratch      []gfx.Hit
+	keys        interaction.Keys
+	textEnabled bool
+	canvas      *gfx.Canvas
+	size        gfx.Size
+	focus       interaction.Focus
+	pointer     interaction.Pointer
+	frame       *framebuild.Builder
+	// accessibility is the payload the platform last received: each sync
+	// rewrites only the entries that changed, and publishes it when one did.
+	accessibility []platform.AccessibilityNode
+	// tails are the lengths of the hit lists at the last trim; see ReleaseTail.
+	tails      struct{ hitScratch, publishedHits, accessibility int }
+	reusedHits int                   // publishes that kept the previous regions and semantics
+	views      []platform.NativeView // the native views of this publish
+	lastViews  []platform.NativeView // the ones last sent
+	covers     []gfx.Rect            // backing of the views' Covers
+	hitScratch []gfx.Hit
 	// publishedHits is the hit list the regions and the semantic tree were last
 	// built from. Comparing it byte for byte (the strings keep the previous
 	// allocations alive, so equal pointers mean equal bytes) lets a repaint that
@@ -92,9 +97,15 @@ type painter struct {
 	publishedComposing bool
 	publishedTextField bool
 	hitsPublished      bool
-	semanticsDirty     bool
-	labelNames         map[gfx.ID]string
-	labelNamePeak      int
+	// hitsSame remembers, for the canvas as painted, whether its hits equal
+	// publishedHits (0 unknown, 1 equal, 2 different), so the focus settling
+	// and the publish of one paint compare the list once.
+	hitsSame uint8
+	// focusSynced says the focus was synced with the canvas as painted, so the
+	// publish need not sync it again.
+	focusSynced   bool
+	labelNames    map[gfx.ID]string
+	labelNamePeak int
 	// controls draws the window buttons of a custom titlebar, on platforms where
 	// Viva does; it is nil otherwise.
 	controls *windowControls
@@ -155,10 +166,7 @@ func newPainterWithClock(canvas *gfx.Canvas, config *Config, clock func() time.D
 		canvas:        canvas,
 		size:          gfx.Size{Width: float32(config.Width), Height: float32(config.Height)},
 		frame:         framebuild.New(canvas),
-		semantics:     semantic.NewWithCapacity("Viva", len(canvas.Hits())+1),
-		semanticIDs:   make([]semantic.ID, 0, len(canvas.Hits())+1),
 		accessibility: make([]platform.AccessibilityNode, 0, len(canvas.Hits())+1),
-		lastAccess:    make([]platform.AccessibilityNode, 0, len(canvas.Hits())+1),
 	}
 	painter.onTextEvent = painter.applyTextEvent
 	painter.clipboardText = func() string {
@@ -176,7 +184,8 @@ func newPainterWithClock(canvas *gfx.Canvas, config *Config, clock func() time.D
 		}
 		return value
 	}
-	if config.WindowMode == WindowCustomTitlebar && controlsDrawnByViva {
+	painter.customTitlebar = config.WindowMode == WindowCustomTitlebar
+	if painter.customTitlebar && controlsDrawnByViva {
 		painter.controls = newWindowControls(config)
 	}
 	if _, err := painter.publish(); err != nil {
@@ -191,7 +200,6 @@ func newPainterWithClock(canvas *gfx.Canvas, config *Config, clock func() time.D
 		}
 	}
 	painter.frame.MarkInitialBitmapUploads()
-	painter.lastAccess = append(painter.lastAccess[:0], painter.accessibility...)
 	return painter, nil
 }
 
@@ -224,6 +232,15 @@ func (painter *painter) pressAt(x, y float32) platform.PressKind {
 // backdrop would, and the second is the same press aimed at what the overlay
 // was covering, once the paint has taken it away.
 func (painter *painter) pointerEvent(event platform.PointerEvent) (platform.Frame, error) {
+	if event.Device == gfx.PointerTouch && touchRuntime.event != nil {
+		return touchRuntime.event(painter, event)
+	}
+	return painter.pointerInput(event)
+}
+
+// pointerInput is pointerEvent for a press the runtime reads as it comes: a
+// mouse's or a pen's, or a finger's once touchEvent decided it is a press.
+func (painter *painter) pointerInput(event platform.PointerEvent) (platform.Frame, error) {
 	if event.Kind == platform.PointerDown {
 		painter.tap.Cancel()
 		painter.pointerOutside = false
@@ -340,14 +357,14 @@ func (painter *painter) pointerStep(event platform.PointerEvent) (result gfx.Eve
 		result = painter.onPointer(gfx.PointerEvent{
 			Kind: gfx.PointerEventKind(event.Kind), Button: event.Button, Modifiers: gfx.Modifiers(event.Modifiers),
 			X: event.X, Y: event.Y, ScreenX: event.ScreenX, ScreenY: event.ScreenY, Viewport: painter.size, Target: target, Captured: captured,
-			ClickCount: event.ClickCount,
+			ClickCount: event.ClickCount, Device: event.Device, PointerID: event.PointerID,
 		})
 	}
 	if !result.Handled && pointerIsDelivered(event.Kind, target, captured) {
 		if painter.deliverPointer(gfx.PointerEvent{
 			Kind: gfx.PointerEventKind(event.Kind), Button: event.Button, Modifiers: gfx.Modifiers(event.Modifiers),
 			X: event.X, Y: event.Y, ScreenX: event.ScreenX, ScreenY: event.ScreenY, Viewport: painter.size, Target: target, Captured: captured,
-			ClickCount: event.ClickCount,
+			ClickCount: event.ClickCount, Device: event.Device, PointerID: event.PointerID,
 		}) {
 			result.Handled, result.Repaint = true, true
 		}
@@ -774,8 +791,19 @@ func (painter *painter) fileDrop(event platform.FileDropEvent) (platform.Frame, 
 
 func (painter *painter) scroll(event platform.ScrollEvent) (platform.Frame, error) {
 	painter.tap.Cancel()
-	if event.DeltaY == 0 && event.DeltaX == 0 {
+	painter.touch.StopFling() // a wheel or a touchpad takes over from a fling
+	if !painter.applyScroll(event) {
 		return platform.Frame{}, nil
+	}
+	return painter.repaintAfterInput()
+}
+
+// applyScroll gives a scroll to the application, or scrolls the page itself when
+// the application leaves it, and reports whether anything changed that needs a
+// repaint.
+func (painter *painter) applyScroll(event platform.ScrollEvent) bool {
+	if event.DeltaY == 0 && event.DeltaX == 0 {
+		return false
 	}
 	target := gfx.ID{}
 	if hit, ok := painter.focus.Router().HitTest(event.X, event.Y); ok {
@@ -794,10 +822,7 @@ func (painter *painter) scroll(event platform.ScrollEvent) (platform.Frame, erro
 		painter.scrollX = max(0, painter.scrollX+event.DeltaX)
 		painter.scrollY = max(0, painter.scrollY+event.DeltaY)
 	}
-	if painter.scrollX == beforeX && painter.scrollY == beforeY && !focusChanged && !response.Repaint {
-		return platform.Frame{}, nil
-	}
-	return painter.repaintAfterInput()
+	return painter.scrollX != beforeX || painter.scrollY != beforeY || focusChanged || response.Repaint
 }
 
 // initialTextInput is the native editor the first paint already calls for: a
@@ -887,27 +912,16 @@ func (painter *painter) deliverPointer(event gfx.PointerEvent) bool {
 // repaint reruns the paint callback with current interaction state and
 // synchronizes the result with the retained renderer.
 func (painter *painter) repaint() (platform.Frame, error) {
+	if touchRuntime.advance != nil {
+		if frame, done, err := touchRuntime.advance(painter); done {
+			return frame, err
+		}
+	}
 	if painter.noteFrameStart != nil {
 		painter.noteFrameStart()
 	}
 	painter.paintCanvas()
-	if !painter.focus.PendingFocus().IsZero() || painter.focus.Carries() || !painter.canvas.FocusOnce().IsZero() {
-		before, beforeVisible := painter.focus.Focused(), painter.focus.KeyboardFocus()
-		painter.focus.Sync(painter.canvas)
-		if painter.focus.Focused() != before || painter.focus.KeyboardFocus() != beforeVisible {
-			painter.paintCanvas()
-		}
-	}
-	if painter.paint != nil && painter.canvas.TrappedFocusScope() != painter.focus.Router().ActiveScope() {
-		// A modal just opened or closed, which moves focus into it or back
-		// out. Settle that now and paint once more so this frame already
-		// shows the new focus instead of lagging a repaint behind.
-		before := painter.focus.Focused()
-		painter.focus.Sync(painter.canvas)
-		if painter.focus.Focused() != before {
-			painter.paintCanvas()
-		}
-	}
+	painter.settleFocus()
 	frame, err := painter.publish()
 	if err != nil {
 		return platform.Frame{}, err
@@ -930,7 +944,56 @@ func (painter *painter) repaintAfterInput() (platform.Frame, error) {
 	return painter.repaint()
 }
 
+// titlebarInsets is how much of the titlebar strip the page draws the window
+// buttons cover now: none for a window whose titlebar is the system's, and none
+// in full screen, where the buttons are not shown on the strip.
+func (painter *painter) titlebarInsets() (leading, trailing float32) {
+	if !painter.customTitlebar || painter.fullscreen {
+		return 0, 0
+	}
+	return platformTitlebarInsets()
+}
+
+// maxFocusPasses bounds the paints settleFocus adds to one frame: a page whose
+// every paint moves the focus somewhere new shows the last move.
+const maxFocusPasses = 2
+
+// settleFocus applies the focus changes the paint itself made, by an Autofocus
+// hit that appeared, a focus request or release, a returning scope that closed,
+// a modal that opened or closed, or a request carried from the event, and paints
+// again when the focus moved, so the frame shows the focus it routes keys to.
+func (painter *painter) settleFocus() {
+	if painter.paint == nil {
+		return
+	}
+	for range maxFocusPasses {
+		if !painter.regionsNeedSync() {
+			return
+		}
+		before, beforeVisible := painter.focus.Focused(), painter.focus.KeyboardFocus()
+		painter.focus.Sync(painter.canvas)
+		painter.focusSynced = true
+		if painter.focus.Focused() == before && painter.focus.KeyboardFocus() == beforeVisible {
+			return
+		}
+		painter.paintCanvas()
+	}
+}
+
+// regionsNeedSync reports whether the canvas as painted asks for something the
+// focus and the input regions do not reflect yet. A paint that asks to take the
+// focus away changes routing without changing a hit. The regions are built from
+// a subset of the hit fields: a label, value or description change feeds the
+// semantic payload but leaves every region as it was, so it needs no sync.
+func (painter *painter) regionsNeedSync() bool {
+	if !painter.canvas.FocusRelease().IsZero() || !painter.canvas.FocusOnce().IsZero() || painter.focus.Carries() {
+		return true
+	}
+	return !painter.hitStructuresUnchanged() && !painter.regionStructuresUnchanged()
+}
+
 func (painter *painter) paintCanvas() {
+	painter.hitsSame, painter.focusSynced = 0, false
 	if painter.paint == nil {
 		return
 	}
@@ -942,6 +1005,7 @@ func (painter *painter) paintCanvas() {
 	painter.canvas.SetInteraction(painter.pointer.Hovered(), painter.pointer.Pressed(), focused, visible)
 	painter.canvas.SetHoveredRole(painter.pointer.HoveredRole())
 	painter.canvas.SetPointerOnSurface(painter.onSurface)
+	painter.canvas.SetTitlebarInsets(painter.titlebarInsets())
 	painter.canvas.SetScroll(painter.scrollX, painter.scrollY)
 	painter.canvas.BeginFrame()
 	painter.paint(painter.canvas, painter.size)
@@ -976,17 +1040,14 @@ func (painter *painter) publish() (platform.Frame, error) {
 		frame.NativeViews = views
 	}
 
-	// A paint that asks to take the focus away changes routing without changing a hit.
-	// The regions the router keeps are built from a subset of the hit fields: a label,
-	// value or description change feeds the semantic payload but leaves every region
-	// as it was, so it must not rebuild them.
+	// A repaint settled the focus already; a publish of a canvas painted outside
+	// repaint syncs it here.
 	hitStructuresUnchanged := painter.hitStructuresUnchanged()
-	regionsUnchanged := (hitStructuresUnchanged || painter.regionStructuresUnchanged()) &&
-		painter.canvas.FocusRelease().IsZero() && painter.canvas.FocusOnce().IsZero() && !painter.focus.Carries()
-	if regionsUnchanged {
-		painter.reusedHits++
-	} else {
+	if !painter.focusSynced && painter.regionsNeedSync() {
 		painter.focus.Sync(painter.canvas)
+		painter.focusSynced = true
+	} else if !painter.focusSynced {
+		painter.reusedHits++
 	}
 	if err := painter.syncCursor(); err != nil {
 		return platform.Frame{}, err
@@ -1000,10 +1061,9 @@ func (painter *painter) publish() (platform.Frame, error) {
 	// keeps the payload from the previous publish.
 	structuresUnchanged := painter.structuresUnchanged()
 	if !hitStructuresUnchanged || !structuresUnchanged {
-		painter.syncSemantics(!hitStructuresUnchanged && structuresUnchanged)
+		changed := painter.syncSemantics(!hitStructuresUnchanged && structuresUnchanged)
 		painter.recordHitStructures()
-		if !sameAccessibility(painter.accessibility, painter.lastAccess) {
-			painter.lastAccess = append(painter.lastAccess[:0], painter.accessibility...)
+		if changed {
 			frame.Accessibility = painter.accessibility
 		}
 	}
@@ -1077,28 +1137,19 @@ func sameNativeView(a, b platform.NativeView) bool {
 // the frame that was just returned remains valid; its old arrays are released
 // once the platform has consumed it.
 func (painter *painter) trim() {
-	// A scene and semantic tree keep their free slots for reuse. That is right
-	// for a page that stays large, but after a large page is replaced by a
-	// small one the slots are pure retention. Rebuild both from the small
-	// frame instead of carrying the peak for the rest of the session.
+	// The frame's scene keeps its free slots for reuse; after a large page is
+	// replaced by a small one it rebuilds from the small frame (Builder.Trim).
 	painter.frame.Trim()
-	const trimAt, trimRatio = 4096, 4
-	if slots := painter.semantics.Slots(); slots > trimAt && painter.semantics.Len()*trimRatio < slots {
-		painter.semantics = semantic.NewWithCapacity("Viva", len(painter.hitScratch)+1)
-		painter.semanticIDs = painter.semanticIDs[:0]
-		painter.semanticChanges = painter.semanticChanges[:0]
-		painter.semanticsDirty = true
-	}
 	painter.canvas.Trim()
 	painter.focus.Trim()
+	framebuild.ReleaseTail(painter.hitScratch, &painter.tails.hitScratch)
+	framebuild.ReleaseTail(painter.publishedHits, &painter.tails.publishedHits)
+	framebuild.ReleaseTail(painter.accessibility, &painter.tails.accessibility)
 	painter.hitScratch = framebuild.TrimCapacity(painter.hitScratch)
 	painter.publishedHits = framebuild.TrimCapacity(painter.publishedHits)
 	painter.semanticDirty = framebuild.TrimCapacity(painter.semanticDirty)
 	painter.publishedReturns = framebuild.TrimCapacity(painter.publishedReturns)
 	painter.accessibility = framebuild.TrimCapacity(painter.accessibility)
-	painter.lastAccess = framebuild.TrimCapacity(painter.lastAccess)
-	painter.semanticChanges = framebuild.TrimCapacity(painter.semanticChanges)
-	painter.semanticIDs = framebuild.TrimCapacity(painter.semanticIDs)
 	if painter.labelNamePeak > 4096 && len(painter.labelNames)*4 < painter.labelNamePeak {
 		painter.labelNames = nil
 		painter.labelNamePeak = 0
@@ -1447,11 +1498,13 @@ func (painter *painter) hitStructuresUnchanged() bool {
 	if !painter.structuresUnchanged() {
 		return false
 	}
-	hits := painter.canvas.Hits()
-	if len(hits) != len(painter.publishedHits) {
-		return false
+	if painter.hitsSame == 0 {
+		painter.hitsSame = 2
+		if hits := painter.canvas.Hits(); len(hits) == len(painter.publishedHits) && sameHits(painter.publishedHits, hits) {
+			painter.hitsSame = 1
+		}
 	}
-	return sameHits(painter.publishedHits, hits)
+	return painter.hitsSame == 1
 }
 
 // regionStructuresUnchanged reports whether the paint produced the same input
@@ -1513,7 +1566,7 @@ func sameRegionHit(published, current *gfx.Hit) bool {
 // publish uses it for the second check, after syncTextInput has had its say;
 // the hits cannot change in between, so the expensive memcmp runs once.
 func (painter *painter) structuresUnchanged() bool {
-	if !painter.hitsPublished || painter.semanticsDirty || !painter.focus.PendingFocus().IsZero() {
+	if !painter.hitsPublished || !painter.focus.PendingFocus().IsZero() {
 		return false
 	}
 	if painter.focus.Focused() != painter.publishedFocus ||
@@ -1553,6 +1606,7 @@ func sameHits(published, current []gfx.Hit) bool {
 // region and semantic mirror when nothing that feeds them changed.
 func (painter *painter) recordHitStructures() {
 	painter.publishedHits = append(painter.publishedHits[:0], painter.canvas.Hits()...)
+	painter.hitsSame = 1
 	painter.publishedFocus = painter.focus.Focused()
 	painter.publishedTrap = painter.canvas.TrappedFocusScope()
 	painter.publishedInitial = painter.canvas.InitialFocus()
@@ -1567,13 +1621,11 @@ func (painter *painter) recordHitStructures() {
 		painter.publishedComposing = painter.activeText.State.Composing
 	}
 	painter.hitsPublished = true
-	painter.semanticsDirty = false
 }
 
-// syncSemantics mirrors the canvas hit list into the retained semantic tree
-// and the flattened accessibility payload.
-func (painter *painter) syncSemantics(incremental bool) {
-	root := painter.semantics.Root()
+// syncSemantics mirrors the canvas hit list into the accessibility payload, entry
+// by entry, and reports whether any entry changed: the payload to publish.
+func (painter *painter) syncSemantics(incremental bool) (changed bool) {
 	// Blocks are occluders, not targets: they have no accessible meaning. Labels
 	// are no nodes either; their words name the control they label.
 	hits := painter.hitScratch[:0]
@@ -1685,7 +1737,7 @@ func (painter *painter) syncSemantics(incremental bool) {
 	if fast && labelled && (needsLabelMap || pendingCount > 0) {
 		fast = false
 	}
-	if fast && len(hits) != len(painter.semanticIDs) {
+	if fast && len(hits) != len(painter.accessibility) {
 		fast = false
 	}
 	if fast {
@@ -1707,21 +1759,16 @@ func (painter *painter) syncSemantics(incremental bool) {
 				continue
 			}
 			painter.accessibility[index] = node
-			painter.semantics.Set(painter.semanticIDs[index], semanticNode(hits[index], focused))
+			changed = true
 		}
-		painter.semanticChanges = painter.semantics.DrainChanges(painter.semanticChanges[:0])
-		return
-	}
-	common := len(painter.semanticIDs)
-	if len(hits) < common {
-		common = len(hits)
+		return changed
 	}
 	// The accessible payload is compared entry by entry: a repaint that changes
-	// one label must not rewrite the semantic tree or a thousand identical
-	// accessibility nodes. The retained payload is also the previous entry's
-	// copy, so an equal node means neither structure has anything to update.
+	// one label rewrites one node, not a thousand identical ones, and one that
+	// changes none publishes nothing.
 	focused := painter.focus.Focused()
 	previous := painter.accessibility
+	changed = len(hits) != len(previous)
 	if len(hits) < len(previous) {
 		clear(previous[len(hits):])
 	}
@@ -1731,29 +1778,15 @@ func (painter *painter) syncSemantics(incremental bool) {
 		painter.accessibility = make([]platform.AccessibilityNode, len(hits))
 		copy(painter.accessibility, previous)
 	}
-	for index := 0; index < common; index++ {
+	for index := range hits {
 		node := painter.accessibilityNode(&hits[index], focused)
 		if index < len(previous) && previous[index] == node {
 			continue
 		}
 		painter.accessibility[index] = node
-		painter.semantics.Set(painter.semanticIDs[index], semanticNode(hits[index], focused))
+		changed = true
 	}
-	for index := common; index < len(hits); index++ {
-		node := painter.accessibilityNode(&hits[index], focused)
-		painter.accessibility[index] = node
-		id, _ := painter.semantics.Add(root, semanticNode(hits[index], focused))
-		painter.semanticIDs = append(painter.semanticIDs, id)
-	}
-	if len(hits) < len(painter.semanticIDs) {
-		for _, id := range painter.semanticIDs[len(hits):] {
-			painter.semantics.Remove(id)
-		}
-		painter.semanticIDs = painter.semanticIDs[:len(hits)]
-	}
-	// The tree is only mirrored natively below; reusing the scratch avoids
-	// allocating a discarded change list every time the hit set changes.
-	painter.semanticChanges = painter.semantics.DrainChanges(painter.semanticChanges[:0])
+	return changed
 }
 
 // accessibilityNode is the payload entry for one hit.
@@ -1833,27 +1866,6 @@ func (painter *painter) nameFromLabels(controls []gfx.Hit) {
 	}
 }
 
-func semanticNode(hit gfx.Hit, focused gfx.ID) semantic.Node {
-	return semantic.Node{
-		Role:      semanticRole(hit.Role),
-		Label:     hit.Label,
-		Value:     hit.Value,
-		Hint:      hit.Hint,
-		Bounds:    semantic.Rect{X: hit.Bounds.X, Y: hit.Bounds.Y, Width: hit.Bounds.Width, Height: hit.Bounds.Height},
-		Focusable: hit.Focusable,
-		Focused:   !hit.ID.IsZero() && hit.ID == focused,
-		Disabled:  hit.Disabled,
-		Checked:   hit.Checked,
-		Mixed:     hit.Mixed,
-		Selected:  hit.Selected,
-		Expanded:  hit.Expanded,
-		Multiline: hit.Multiline,
-		ReadOnly:  hit.ReadOnly,
-		Invalid:   hit.Invalid,
-		Secure:    hit.Secure,
-	}
-}
-
 func semanticRole(role gfx.Role) semantic.Role {
 	switch role {
 	case gfx.RoleLink:
@@ -1901,18 +1913,6 @@ func semanticRole(role gfx.Role) semantic.Role {
 	default:
 		return semantic.RoleButton
 	}
-}
-
-func sameAccessibility(left, right []platform.AccessibilityNode) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }
 
 // windowActions makes the set of operations the window buttons need, for the
