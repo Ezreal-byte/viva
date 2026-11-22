@@ -266,4 +266,9 @@ func (item nativeStatusItem) SetMenuOnHover(enabled bool) bool {
 	return ok && host.SetMenuOnHover(enabled)
 }
 func (item nativeStatusItem) SetTooltip(tooltip string) { item.item.SetTooltip(tooltip) }
-func (item nativeStatusItem) Remove()                   { item.item.Remove() }
+func (item nativeStatusItem) RefreshMenu() {
+	if host, ok := item.item.(interface{ RefreshMenu() }); ok {
+		host.RefreshMenu()
+	}
+}
+func (item nativeStatusItem) Remove() { item.item.Remove() }

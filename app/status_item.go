@@ -134,6 +134,17 @@ func (item *StatusItem) SetTooltip(tooltip string) {
 	}
 }
 
+// RefreshMenu publishes changes to a dynamic menu to hosts that cache it.
+// Call on the application's event-loop thread after changing menu state.
+func (item *StatusItem) RefreshMenu() {
+	if item == nil || item.removed.Load() {
+		return
+	}
+	if host, ok := item.control.(interface{ RefreshMenu() }); ok {
+		host.RefreshMenu()
+	}
+}
+
 // SetMenuOnHover asks the desktop to open the item's existing menu when the
 // pointer rests on its icon. Call on the event-loop thread. It returns false
 // on hosts such as Linux StatusNotifier that own hover presentation.

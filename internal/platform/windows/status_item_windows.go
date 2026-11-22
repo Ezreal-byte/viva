@@ -130,6 +130,7 @@ var processStart = time.Now()
 func monotonicNow() int64 { return int64(time.Since(processStart)) }
 
 const panelDismissWindow = 350 * time.Millisecond
+const statusHoverTimer = 1
 
 // statusState is what the application keeps for its status items: one hidden
 // window that receives their messages.
@@ -139,6 +140,7 @@ type statusState struct {
 	taskbarCreated uint32
 	nextID         uint32
 	items          map[uint32]*statusItem
+	hovered        uint32
 }
 
 type statusItem struct {
@@ -382,6 +384,9 @@ func statusProc(window, kind, first, second uintptr) (result uintptr) {
 	case kind == wmStatusNotify:
 		status.notified(window, first, second)
 		return 0
+	case kind == wmTimer && first == statusHoverTimer:
+		status.openHoveredMenu()
+		return 0
 	case kind == wmStatusRemove:
 		if item := status.items[uint32(first)]; item != nil {
 			item.delete()
@@ -416,14 +421,23 @@ func (status *statusState) notified(window, anchor, packed uintptr) {
 	const ninPopupOpen = 0x0406
 	if event == ninPopupOpen {
 		if item.hoverMenu && !item.menuOpen {
+			killTimer.Call(window, statusHoverTimer)
 			item.popMenu(window, item.anchor(window, anchor))
 		}
+		return
+	}
+	// Explorer can keep tooltips in charge of a hidden overflow icon. It
+	// still reports pointer motion there, so do not rely on NIN_POPUPOPEN.
+	if event == wmMouseMove && item.hoverMenu && !item.menuOpen {
+		status.hovered = item.id
+		setTimer.Call(window, statusHoverTimer, 500, 0)
 		return
 	}
 	button, ok := statusButton(event)
 	if !ok {
 		return
 	}
+	killTimer.Call(window, statusHoverTimer)
 	// A primary activation belongs to the application when it supplied a
 	// callback (for example, to restore its window). Keep menu-only icons
 	// clickable, and reserve secondary activation for the context menu.
@@ -433,6 +447,21 @@ func (status *statusState) notified(window, anchor, packed uintptr) {
 	}
 	dismissed := time.Duration(monotonicNow()-panelDismissedAt.Load()) < panelDismissWindow
 	item.onClick(platform.StatusClick{Button: button, Anchor: item.anchor(window, anchor), PanelDismissed: dismissed})
+}
+
+func (status *statusState) openHoveredMenu() {
+	killTimer.Call(status.window, statusHoverTimer)
+	item := status.items[status.hovered]
+	if item == nil || item.removed.Load() || !item.hoverMenu || item.menuOpen {
+		return
+	}
+	bounds := item.anchor(status.window, 0)
+	var cursor point
+	ok, _, _ := getCursorPos.Call(uintptr(unsafe.Pointer(&cursor)))
+	x, y := float32(cursor.X), float32(cursor.Y)
+	if ok != 0 && x >= bounds.X && x < bounds.X+bounds.Width && y >= bounds.Y && y < bounds.Y+bounds.Height {
+		item.popMenu(status.window, bounds)
+	}
 }
 
 // statusButton is the click a notification-icon message stands for, if it is one.
