@@ -103,6 +103,8 @@ type windowState struct {
 	maximized                              bool
 	lastFrame                              gfx.Rect
 	scale                                  float32
+	hoverStatus                            *statusState
+	placingNotification                    bool
 	scaleFixed                             bool // VIVA_SCALE set it: the display's own scale is ignored
 	err                                    error
 	pointerEvents, resizeEvents, keyEvents uint64
@@ -436,15 +438,7 @@ func (application *windowsApplication) OpenWindow(config platform.Config) (platf
 		postMessage.Call(state.window, wmRedraw, 0, 0)
 	}
 	if config.WindowMode == platform.WindowNotification {
-		// Moving onto a monitor can synchronously resize the popup for its DPI.
-		// Anchor again using the resulting native size before revealing it.
-		if config.HasOrigin {
-			state.placeAtOrigin(config.Origin)
-			state.placeAtOrigin(config.Origin)
-		} else {
-			state.placePanel()
-			state.placePanel()
-		}
+		state.placeNotification()
 		showWindow.Call(state.window, swShowNoActivate)
 	} else if config.WindowMode == platform.WindowPanel {
 		state.placePanel()
@@ -872,7 +866,7 @@ func windowProc(window, kind, first, second uintptr) (result uintptr) {
 		resizes := state.resizeEvents
 		if state.fullscreen.Load() {
 			state.fitFullscreenMonitor()
-		} else {
+		} else if !state.placingNotification {
 			setWindowPosition.Call(window, 0, uintptr(bounds.Left), uintptr(bounds.Top), uintptr(bounds.Right-bounds.Left), uintptr(bounds.Bottom-bounds.Top), 0x14)
 		}
 		if state.sizingMove || state.sizing {
@@ -916,6 +910,9 @@ func windowProc(window, kind, first, second uintptr) (result uintptr) {
 			track := trackMouse{Size: uint32(unsafe.Sizeof(trackMouse{})), Flags: 2, Window: window}
 			trackMouseEvent.Call(uintptr(unsafe.Pointer(&track)))
 			state.tracking = true
+			if status := state.hoverStatus; status != nil {
+				status.cancelHoverGap()
+			}
 		}
 		eventKind := platform.PointerMove
 		button := gfx.PointerButtonNone
@@ -969,8 +966,15 @@ func windowProc(window, kind, first, second uintptr) (result uintptr) {
 			return 1 // the side-button messages ask for TRUE, unlike the others
 		}
 		return 0
+	case wmPointerDown, wmPointerUpdate, wmPointerUp, wmPointerCaptureChanged:
+		if state.touchPointer(kind, first) {
+			return 0
+		}
 	case wmMouseLeave, wmKillFocus:
 		state.tracking = false
+		if kind == wmMouseLeave && state.hoverStatus != nil {
+			state.hoverStatus.startHoverGap()
+		}
 		if kind == wmMouseLeave && state.web != nil && state.web.pointerOverCover() {
 			return 0 // the pointer went onto a window that hands it back, not out of this one
 		}

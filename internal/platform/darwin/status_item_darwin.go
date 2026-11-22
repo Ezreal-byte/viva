@@ -27,6 +27,7 @@ type nativeStatusItem struct {
 	onClick        func(platform.StatusClick)
 	menu           func() []platform.MenuItem
 	hoverPanel     func(platform.ScreenRect) platform.Window
+	hoverWindow    *nativeWindow
 	currentEntries []platform.MenuEntry
 }
 
@@ -127,9 +128,20 @@ func vivaStatusItemHover(handle C.uintptr_t, x, y, width, height C.float) unsafe
 	}
 	anchor := platform.ScreenRect{X: float32(x), Y: float32(y), Width: float32(width), Height: float32(height)}
 	if panel, ok := item.hoverPanel(anchor).(*nativeWindow); ok && panel != nil && !panel.closed.Load() {
+		item.hoverWindow = panel
 		return panel.token
 	}
 	return nil
+}
+
+//export vivaStatusItemEndHover
+func vivaStatusItemEndHover(handle C.uintptr_t, closeWindow C.int) {
+	item := cgo.Handle(handle).Value().(*nativeStatusItem)
+	panel := item.hoverWindow
+	item.hoverWindow = nil
+	if closeWindow != 0 {
+		panel.Close()
+	}
 }
 
 //export vivaStatusItemUpdateMenu

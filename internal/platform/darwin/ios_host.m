@@ -19,6 +19,11 @@ extern void vivaTouchEvent(uintptr_t callbackHandle, void *view, int kind, int i
 extern int vivaIOSKeyEvent(uintptr_t callbackHandle, void *view, int usage, int modifiers, int repeat,
                            const unsigned char *utf8, size_t utf8Length);
 extern void vivaIOSVisibility(uintptr_t callbackHandle, void *view, int visible);
+extern void vivaIOSLifecycle(uintptr_t callbackHandle, void *view, int kind);
+extern void vivaIOSAppearanceChanged(void);
+extern void vivaIOSSafeArea(uintptr_t callbackHandle, void *view, double top, double left, double bottom, double right);
+extern int vivaAccessibilityAction(uintptr_t callbackHandle, void *view, uint64_t node, int action, double number,
+                                   const unsigned char *utf8, size_t utf8Length, int start, int end);
 extern void vivaIOSTextOp(uintptr_t callbackHandle, void *view, int operation, const unsigned char *utf8, size_t utf8Length,
                           int64_t first, int64_t last);
 extern void vivaRedrawRequested(uintptr_t callbackHandle, void *view);
@@ -127,7 +132,132 @@ enum {
 @end
 
 
+/* The accessibility roles, in the numbering of platform.A11yRole*. */
+enum {
+    VIVA_A11Y_GROUP = 2, VIVA_A11Y_BUTTON = 3, VIVA_A11Y_TEXT = 4, VIVA_A11Y_TEXT_FIELD = 5, VIVA_A11Y_CHECKBOX = 6,
+    VIVA_A11Y_SLIDER = 7, VIVA_A11Y_IMAGE = 8, VIVA_A11Y_LINK = 9, VIVA_A11Y_RADIO = 10, VIVA_A11Y_TAB = 11,
+    VIVA_A11Y_MENU_ITEM = 12, VIVA_A11Y_SWITCH = 14, VIVA_A11Y_OPTION = 18, VIVA_A11Y_GRID_CELL = 20,
+    VIVA_A11Y_HEADING = 21, VIVA_A11Y_STATUS = 22, VIVA_A11Y_PROGRESS = 24,
+};
+
+/* One node of the program's accessibility tree, as VoiceOver reads it. It holds what the
+ * node said when it was last sent; VoiceOver's requests go back to the program by the
+ * node's identity. */
+@interface VivaIOSAccessibleElement : UIAccessibilityElement {
+    uint64_t _identity;
+    int _role;
+    BOOL _operable;
+    uintptr_t _callbackHandle;
+    void *_surface;
+    double _rangeNow;
+    double _rangeMin;
+    double _rangeMax;
+}
+- (instancetype)initWithNode:(const viva_accessibility_node *)node container:(UIView *)container handle:(uintptr_t)handle;
+@end
+
+@implementation VivaIOSAccessibleElement
+
+static NSString *viva_string(const char *chars, size_t length) {
+    if (chars == NULL || length == 0) {
+        return nil;
+    }
+    return [[[NSString alloc] initWithBytes:chars length:length encoding:NSUTF8StringEncoding] autorelease];
+}
+
+- (instancetype)initWithNode:(const viva_accessibility_node *)node container:(UIView *)container handle:(uintptr_t)handle {
+    self = [super initWithAccessibilityContainer:container];
+    if (self == nil) {
+        return nil;
+    }
+    _identity = node->id;
+    _role = node->role;
+    _callbackHandle = handle;
+    _surface = container;
+    _rangeNow = node->range_now;
+    _rangeMin = node->range_min;
+    _rangeMax = node->range_max;
+    _operable = !node->disabled;
+    self.accessibilityLabel = viva_string(node->label, node->label_length);
+    NSString *value = viva_string(node->value, node->value_length);
+    if (_role == VIVA_A11Y_CHECKBOX || _role == VIVA_A11Y_SWITCH || _role == VIVA_A11Y_RADIO) {
+        value = node->mixed ? @"2" : node->checked ? @"1" : @"0";
+    } else if (node->range_set && value == nil) {
+        double span = node->range_max - node->range_min;
+        value = span > 0 ? [NSString stringWithFormat:@"%.0f%%", (node->range_now - node->range_min) / span * 100] : nil;
+    }
+    self.accessibilityValue = value;
+    NSString *hint = viva_string(node->hint, node->hint_length);
+    if (hint == nil) {
+        hint = viva_string(node->description, node->description_length);
+    }
+    self.accessibilityHint = hint;
+    self.accessibilityFrameInContainerSpace = CGRectMake(node->x, node->y, node->width, node->height);
+    UIAccessibilityTraits traits = UIAccessibilityTraitNone;
+    switch (_role) {
+    case VIVA_A11Y_BUTTON:
+    case VIVA_A11Y_MENU_ITEM:
+    case VIVA_A11Y_TAB:
+    case VIVA_A11Y_OPTION:
+    case VIVA_A11Y_RADIO:
+    case VIVA_A11Y_GRID_CELL:
+    case VIVA_A11Y_CHECKBOX:
+    case VIVA_A11Y_SWITCH:
+        traits |= UIAccessibilityTraitButton;
+        break;
+    case VIVA_A11Y_LINK:
+        traits |= UIAccessibilityTraitLink;
+        break;
+    case VIVA_A11Y_SLIDER:
+        traits |= UIAccessibilityTraitAdjustable;
+        break;
+    case VIVA_A11Y_HEADING:
+        traits |= UIAccessibilityTraitHeader | UIAccessibilityTraitStaticText;
+        break;
+    case VIVA_A11Y_TEXT:
+    case VIVA_A11Y_STATUS:
+        traits |= UIAccessibilityTraitStaticText;
+        break;
+    case VIVA_A11Y_IMAGE:
+        traits |= UIAccessibilityTraitImage;
+        break;
+    default:
+        break;
+    }
+    if (node->selected) {
+        traits |= UIAccessibilityTraitSelected;
+    }
+    if (node->disabled) {
+        traits |= UIAccessibilityTraitNotEnabled;
+    }
+    if (node->live != 0) {
+        traits |= UIAccessibilityTraitUpdatesFrequently;
+    }
+    self.accessibilityTraits = traits;
+    // A group only holds others; what it contains is what is read.
+    self.isAccessibilityElement = _role != 1 && _role != VIVA_A11Y_GROUP && (self.accessibilityLabel != nil || value != nil || traits != UIAccessibilityTraitNone);
+    return self;
+}
+
+- (BOOL)accessibilityActivate {
+    if (!_operable) {
+        return NO;
+    }
+    return vivaAccessibilityAction(_callbackHandle, _surface, _identity, 1, 0, NULL, 0, 0, 0) != 0;
+}
+
+- (void)accessibilityIncrement {
+    vivaAccessibilityAction(_callbackHandle, _surface, _identity, 3, 0, NULL, 0, 0, 0);
+}
+
+- (void)accessibilityDecrement {
+    vivaAccessibilityAction(_callbackHandle, _surface, _identity, 4, 0, NULL, 0, 0, 0);
+}
+
+@end
+
 @interface VivaIOSView : UIView {
+    NSMutableArray *_accessibleElements;
     VivaIOSEditor *_editor;
     VivaRenderer *_renderer;
     uintptr_t _callbackHandle;
@@ -135,8 +265,13 @@ enum {
     BOOL _closed;
     CGSize _lastReportedSize;
     BOOL _reportedSize;
+    UIEdgeInsets _safeArea;
+    UIEdgeInsets _lastReportedSafeArea;
 }
 @property(nonatomic, readonly) uintptr_t callbackHandle;
+/* How far the system covers each edge (status bar, sensor housing, home indicator), which
+ * the view controller sets; the next layout tells the application. */
+@property(nonatomic) UIEdgeInsets safeArea;
 @property(nonatomic, readonly) BOOL closed;
 @property(nonatomic, readonly) VivaIOSEditor *editor;
 - (instancetype)initWithFrame:(CGRect)frame
@@ -157,6 +292,7 @@ enum {
                 rebuild:(BOOL)rebuild
                  render:(BOOL)render;
 - (int)updateLabels:(const viva_text_label *)labels count:(NSUInteger)count;
+- (int)updateAccessibility:(const viva_accessibility_node *)nodes count:(NSUInteger)count;
 - (void)closeWindow;
 @end
 
@@ -165,6 +301,7 @@ enum {
 @synthesize callbackHandle = _callbackHandle;
 @synthesize closed = _closed;
 @synthesize editor = _editor;
+@synthesize safeArea = _safeArea;
 
 + (Class)layerClass {
     return [CAMetalLayer class];
@@ -220,6 +357,7 @@ enum {
 }
 
 - (void)dealloc {
+    [_accessibleElements release];
     [_editor release];
     [_renderer release];
     [super dealloc];
@@ -244,9 +382,13 @@ enum {
     }
     [self updateDrawableSize];
     CGSize size = self.bounds.size;
-    if (_resizeEventsEnabled && (!_reportedSize || !CGSizeEqualToSize(size, _lastReportedSize))) {
+    if (_resizeEventsEnabled && (!_reportedSize || !CGSizeEqualToSize(size, _lastReportedSize) ||
+                                 !UIEdgeInsetsEqualToEdgeInsets(_safeArea, _lastReportedSafeArea))) {
         _reportedSize = YES;
         _lastReportedSize = size;
+        _lastReportedSafeArea = _safeArea;
+        // The insets come first: the resize that follows lays the page out inside them.
+        vivaIOSSafeArea(_callbackHandle, self, _safeArea.top, _safeArea.left, _safeArea.bottom, _safeArea.right);
         vivaViewResized(_callbackHandle, self, size.width, size.height);
     }
 }
@@ -318,6 +460,33 @@ enum {
     }
     _closed = YES;
     vivaWindowClosed(_callbackHandle);
+}
+
+#pragma mark Accessibility
+
+// updateAccessibility makes the program's tree what VoiceOver reads. The surface is the
+// container of the elements: it is not itself read.
+- (int)updateAccessibility:(const viva_accessibility_node *)nodes count:(NSUInteger)count {
+    NSMutableArray *elements = [[NSMutableArray alloc] initWithCapacity:count];
+    for (NSUInteger index = 0; index < count; index++) {
+        VivaIOSAccessibleElement *element = [[VivaIOSAccessibleElement alloc] initWithNode:&nodes[index] container:self handle:_callbackHandle];
+        if (element != nil) {
+            [elements addObject:element];
+            [element release];
+        }
+    }
+    [_accessibleElements release];
+    _accessibleElements = elements;
+    UIAccessibilityPostNotification(UIAccessibilityLayoutChangedNotification, nil);
+    return 0;
+}
+
+- (BOOL)isAccessibilityElement {
+    return NO;
+}
+
+- (NSArray *)accessibilityElements {
+    return _accessibleElements;
 }
 
 #pragma mark Touches
@@ -689,6 +858,7 @@ enum {
 
 @end
 
+
 @interface VivaIOSViewController : UIViewController {
     VivaIOSView *_surface;
 }
@@ -729,26 +899,45 @@ enum {
     } completion:nil];
 }
 
-// viewDidLayoutSubviews puts the surface inside what the system covers: the status
-// bar and the sensor housing, the home indicator, and the keyboard. A program that
-// wants the whole screen asks for it (ADR 0095).
+// viewDidLayoutSubviews makes the surface the whole window, as far as the keyboard
+// allows, and tells it how far the system covers each edge: the status bar and the
+// sensor housing, the home indicator. The application draws under them and keeps what
+// matters inside them (ADR 0096). The keyboard shrinks the surface from the bottom, and
+// with it up nothing covers the bottom edge but the keyboard itself.
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
-    CGRect bounds = UIEdgeInsetsInsetRect(self.view.bounds, self.view.safeAreaInsets);
+    CGRect bounds = self.view.bounds;
+    UIEdgeInsets safe = self.view.safeAreaInsets;
     CGFloat keyboardTop = CGRectGetMinY(self.view.keyboardLayoutGuide.layoutFrame);
-    if (keyboardTop < CGRectGetMaxY(bounds)) {
+    // With no keyboard the guide's top is the safe area's bottom edge, the home indicator's
+    // line; the keyboard is up when it is higher than that.
+    if (keyboardTop < CGRectGetMaxY(bounds) - safe.bottom - 0.5) {
         bounds.size.height = MAX(keyboardTop - bounds.origin.y, 0);
+        safe.bottom = 0;
     }
+    _surface.safeArea = safe;
     _surface.frame = bounds;
+    [_surface setNeedsLayout];
 }
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
     return UIInterfaceOrientationMaskAll;
 }
 
+// traitCollectionDidChange tells the application when the system switches between
+// its light and dark looks.
+- (void)traitCollectionDidChange:(UITraitCollection *)previous {
+    [super traitCollectionDidChange:previous];
+    if (previous != nil && previous.userInterfaceStyle != self.traitCollection.userInterfaceStyle) {
+        vivaIOSAppearanceChanged();
+    }
+}
+
 @end
 
-@interface VivaIOSAppDelegate : UIResponder <UIApplicationDelegate>
+@interface VivaIOSAppDelegate : UIResponder <UIApplicationDelegate> {
+    BOOL _inBackground;
+}
 @end
 
 /* The one window an iPhone application shows (see viva_application_open_window). */
@@ -762,17 +951,33 @@ static VivaIOSView *viva_ios_view;
     return YES;
 }
 
-// The application goes behind another and comes back: it is told, and on the way
-// back asks for a frame, since what the layer shows may not be what it should.
+// The application goes behind another and comes back: it is told. The window is drawn
+// again only once the application is active, as the system gives no GPU to one that
+// has only begun to return; what the layer shows may not be what it should.
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     if (viva_ios_view != nil && !viva_ios_view.closed) {
+        _inBackground = YES;
+        vivaIOSLifecycle(viva_ios_view.callbackHandle, viva_ios_view, 1); // Background
         vivaIOSVisibility(viva_ios_view.callbackHandle, viva_ios_view, 0);
     }
 }
 
 - (void)applicationWillEnterForeground:(UIApplication *)application {
     if (viva_ios_view != nil && !viva_ios_view.closed) {
+        vivaIOSLifecycle(viva_ios_view.callbackHandle, viva_ios_view, 2); // Foreground
+    }
+}
+
+- (void)applicationDidBecomeActive:(UIApplication *)application {
+    if (_inBackground && viva_ios_view != nil && !viva_ios_view.closed) {
+        _inBackground = NO;
         vivaIOSVisibility(viva_ios_view.callbackHandle, viva_ios_view, 1);
+    }
+}
+
+- (void)applicationDidReceiveMemoryWarning:(UIApplication *)application {
+    if (viva_ios_view != nil && !viva_ios_view.closed) {
+        vivaIOSLifecycle(viva_ios_view.callbackHandle, viva_ios_view, 3); // MemoryWarning
     }
 }
 
@@ -839,6 +1044,9 @@ void *viva_application_open_window(viva_window_config config) {
         if (view == nil) {
             viva_application_status = VIVA_IOS_STATUS_NO_VIEW;
             return NULL;
+        }
+        if (config.accessibility_count > 0) {
+            [view updateAccessibility:config.accessibility count:config.accessibility_count];
         }
         VivaIOSViewController *controller = [[VivaIOSViewController alloc] init];
         [controller loadViewIfNeeded];
@@ -961,7 +1169,12 @@ void viva_view_close_confirmed(void *view) {
  * accessibility tree and the web views come with their own work packages. They
  * accept what the application sends and show nothing of it. */
 int viva_view_update_accessibility(void *view, const viva_accessibility_node *nodes, size_t count) {
-    return 0;
+    if (view == NULL) {
+        return 1;
+    }
+    @autoreleasepool {
+        return [(VivaIOSView *)view updateAccessibility:nodes count:count];
+    }
 }
 
 int viva_view_update_text(

@@ -383,7 +383,7 @@ jobs:
       - name: Non-activating desktop notification
         env:
           VIVA_TEST_NOTIFICATION_DESKTOP: '1'
-        run: go test ./internal/platform/windows -run '^TestNotificationNativeWindows$' -count=1 -v
+        run: go test ./internal/platform/windows -run '^(TestNotificationNativeWindows|TestStatusHoverNativeMenu)$' -count=1 -v
       - name: Native Windows global shortcut
         env:
           VIVA_NATIVE_GLOBAL_SHORTCUT_TEST: '1'

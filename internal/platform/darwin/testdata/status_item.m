@@ -2,6 +2,12 @@
 
 #include "../status_item_darwin.h"
 
+@interface VivaStatusItem : NSObject
+- (void)trackHoverPanel:(NSView *)view;
+- (void)scheduleHoverPanelClose;
+- (void)closeHoverPanel;
+@end
+
 double viva_panel_dismissed_at = 0.0;
 static void (*status_remove_hook)(void *item);
 static void (*status_clear_hook)(void);
@@ -20,13 +26,14 @@ void *vivaStatusItemHover(uintptr_t handle, float x, float y, float width, float
     return NULL;
 }
 
-int viva_application_status_panel_frame(void *window, double *out) {
-    (void)window; (void)out;
-    return 0;
+void *viva_application_window_view(void *token) {
+    return token;
 }
 
-void viva_application_close_window(void *window) {
-    (void)window;
+static int panel_close_calls;
+void vivaStatusItemEndHover(uintptr_t handle, int closeWindow) {
+    (void)handle;
+    if (closeWindow) panel_close_calls++;
 }
 
 void vivaStatusItemClicked(uintptr_t callbackHandle, int button, float x, float y, float width, float height, int panelDismissed) {
@@ -130,7 +137,16 @@ int main(void) {
         check(trackingAreasOwnedBy(statusItem.button, (id)item) == 1, "custom panel registers one tracking area");
         check(statusItem.button.toolTip == nil, "custom panel owns hover presentation");
         viva_status_item_set_tooltip(item, "Updated Tooltip");
+        NSView *panelView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 180, 90)];
+        [(VivaStatusItem *)item trackHoverPanel:panelView];
+        check(trackingAreasOwnedBy(panelView, (id)item) == 1, "the popup has one native tracking area");
+        [(VivaStatusItem *)item scheduleHoverPanelClose];
         viva_status_item_set_hover_panel(item, 0);
+        check(trackingAreasOwnedBy(panelView, (id)item) == 0, "closing detaches popup tracking");
+        check(panel_close_calls == 1, "the popup closes through its Go owner");
+        [(VivaStatusItem *)item closeHoverPanel];
+        check(panel_close_calls == 1, "closing is idempotent");
+        [panelView release];
         check(trackingAreasOwnedBy(statusItem.button, (id)item) == 0, "custom panel removes its tracking area");
         check([statusItem.button.toolTip isEqualToString:@"Updated Tooltip"], "disabling the panel restores the latest tooltip");
 

@@ -102,16 +102,42 @@ func TestStatusHoverUsesThePointerWhenTheShellReportsTheChevron(t *testing.T) {
 	}
 }
 
-func TestStatusHoverPanelKeepsThePointerPathFromTheIconOpen(t *testing.T) {
-	icon := platform.ScreenRect{X: 280, Y: 750, Width: 18, Height: 18}
-	region := hoverPanelRegion(icon, rect{Left: 160, Top: 610, Right: 402, Bottom: 742})
-	for _, cursor := range []point{{288, 758}, {288, 746}, {270, 680}} {
-		if !hoverContains(region, cursor) {
-			t.Fatalf("cursor %+v must be able to reach the panel", cursor)
-		}
+func TestStatusHoverWaitsForActualLeaveBeforeReopening(t *testing.T) {
+	const id = 2
+	opens := 0
+	item := &statusItem{id: id, hoverPanel: func(platform.ScreenRect) platform.Window {
+		opens++
+		return nil
+	}}
+	status := &statusState{items: map[uint32]*statusItem{id: item}}
+	cursor := point{250, 720}
+	status.beginHover(item, cursor, true)
+	status.beginHover(item, point{251, 721}, false)
+	status.beginHover(item, cursor, true)
+	if opens != 1 || status.hover.dwellUntil != 0 {
+		t.Fatalf("hover reopened without leaving: opens=%d pending=%v", opens, status.hover.dwellUntil != 0)
 	}
-	if hoverContains(region, point{500, 680}) {
-		t.Fatal("a pointer outside both the panel and icon should close it")
+	status.leaveHover()
+	status.beginHover(item, cursor, true)
+	if opens != 2 {
+		t.Fatalf("hover did not reopen after re-entry: opens=%d", opens)
+	}
+}
+
+func TestStatusHoverGapIsOneShot(t *testing.T) {
+	status := &statusState{}
+	panel := &nativeWindow{state: &windowState{hoverStatus: status}}
+	status.hover.panel = panel
+	panel.closed.Store(true)
+	status.startHoverGap()
+	status.finishHoverGap()
+	if status.hover.panel != panel {
+		t.Fatal("a queued timer closed a new hover session before its grace period")
+	}
+	status.hover.gapUntil = monotonicNow() - 1
+	status.finishHoverGap()
+	if status.hover.panel != nil || status.hover.gapUntil != 0 || panel.state.hoverStatus != nil {
+		t.Fatal("a closed panel or its leave timer remained attached")
 	}
 }
 

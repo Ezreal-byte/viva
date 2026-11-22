@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/internal/platform"
 )
 
@@ -119,6 +120,34 @@ func TestNotificationNativeWindows(t *testing.T) {
 		}
 		if after, _, _ := focus.Call(); after != handle {
 			t.Fatal("opening an anchored hover panel stole focus")
+		}
+
+		var monitorWork monitorInfo
+		monitorWork.Size = uint32(unsafe.Sizeof(monitorWork))
+		monitor, _, _ := monitorFromWindow.Call(hwnd, monitorNearest)
+		if ok, _, _ := getMonitorInfo.Call(monitor, uintptr(unsafe.Pointer(&monitorWork))); ok == 0 {
+			t.Fatal("missing monitor monitorWork area")
+		}
+		width, height := native.Right-native.Left, native.Bottom-native.Top
+		for _, test := range []struct {
+			name         string
+			origin, want point
+		}{
+			{"restore", point{native.Left, native.Top}, point{native.Left, native.Top}},
+			{"edge", point{monitorWork.Work.Right - 1, monitorWork.Work.Bottom - 1}, point{monitorWork.Work.Right - width, monitorWork.Work.Bottom - height}},
+		} {
+			window, err := app.OpenWindow(platform.Config{
+				Width: 336, Height: 136, WindowMode: platform.WindowNotification, HasOrigin: true,
+				Origin: gfx.Point{X: float32(test.origin.X), Y: float32(test.origin.Y)},
+			})
+			if err != nil {
+				return err
+			}
+			frame, ok := window.Frame()
+			window.Close()
+			if !ok || frame.X != float32(test.want.X) || frame.Y != float32(test.want.Y) {
+				t.Errorf("%s notification frame = %+v (ok=%v), want origin %+v", test.name, frame, ok, test.want)
+			}
 		}
 		return nil
 	})

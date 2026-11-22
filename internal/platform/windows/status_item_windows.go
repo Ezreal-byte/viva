@@ -226,8 +226,7 @@ func (application *windowsApplication) closeStatus() {
 	if status == nil {
 		return
 	}
-	status.cancelHover()
-	status.closeHoverPanel()
+	status.resetHover()
 	for _, item := range status.items {
 		item.delete()
 	}
@@ -280,6 +279,9 @@ func (item *statusItem) SetMenuOnHover(enabled bool) bool {
 		if err := item.notify(notifyModify); err != nil {
 			item.hoverMenu = !enabled
 			return false
+		}
+		if !enabled && item.hoverPanel == nil {
+			item.application.status.stopItemHover(item.id)
 		}
 	}
 	return true
@@ -392,8 +394,18 @@ func statusProc(window, kind, first, second uintptr) (result uintptr) {
 	case kind == wmTimer && first == statusHoverTimer:
 		status.finishHover()
 		return 0
-	case kind == wmTimer && first == statusHoverPanelTimer:
-		status.checkHoverPanel()
+	case kind == wmTimer && first == statusHoverGapTimer:
+		status.finishHoverGap()
+		return 0
+	case kind == wmStatusHoverLeave:
+		if status.hover.iconID == uint32(first) && status.hover.postedLeave {
+			status.leaveHover()
+		}
+		return 0
+	case kind == wmStatusHoverDismissMenu:
+		if status.hover.menuID == uint32(first) {
+			status.dismissHoverMenuAt(second)
+		}
 		return 0
 	case kind == wmStatusRemove:
 		if item := status.items[uint32(first)]; item != nil {
@@ -404,8 +416,7 @@ func statusProc(window, kind, first, second uintptr) (result uintptr) {
 		return 0
 	case status.taskbarCreated != 0 && uint32(kind) == status.taskbarCreated:
 		// The shell started again: its notification area is empty.
-		status.cancelHover()
-		status.closeHoverPanel()
+		status.resetHover()
 		invalidateNotificationIcon()
 		for _, item := range status.items {
 			if !item.removed.Load() {
@@ -429,39 +440,39 @@ func (status *statusState) notified(window, anchor, packed uintptr) {
 	if item == nil || item.removed.Load() {
 		return
 	}
-	if event == ninPopupOpen {
-		if !item.canHover() {
-			return
-		}
-		cursor := point{X: int32(int16(anchor)), Y: int32(int16(anchor >> 16))}
-		if status.hover.pendingID == item.id {
-			cursor = status.hover.pointer
-		}
-		// A hidden icon's registered rectangle can be the chevron instead
-		// of the button in the open overflow. NIN_POPUPOPEN can also be the
-		// very first notification for a dwell, with no pending mouse move.
-		bounds := hoverAnchor(item.anchor(window, anchor), cursor)
-		status.cancelHover()
-		status.openHover(item, bounds)
+	switch event {
+	case ninPopupOpen:
+		status.beginHover(item, point{X: int32(int16(anchor)), Y: int32(int16(anchor >> 16))}, true)
 		return
-	}
-	// Explorer can keep tooltips in charge of a hidden overflow icon. It
-	// still reports pointer motion there, so do not rely on NIN_POPUPOPEN.
-	if event == wmMouseMove {
-		status.beginHover(item)
+	case ninPopupClose:
+		var cursor point
+		if status.hover.iconID == item.id {
+			if ok, _, _ := getCursorPos.Call(uintptr(unsafe.Pointer(&cursor))); ok != 0 && !hoverContains(status.hover.anchor, cursor) {
+				status.leaveHover()
+			}
+		}
+		return
+	case wmMouseMove:
+		// The shell may only report motion for an icon in its overflow.
+		var cursor point
+		if item.canHover() {
+			if ok, _, _ := getCursorPos.Call(uintptr(unsafe.Pointer(&cursor))); ok != 0 {
+				status.beginHover(item, cursor, false)
+			}
+		}
 		return
 	}
 	button, ok := statusButton(event)
 	if !ok {
 		return
 	}
-	status.cancelHover()
+	status.cancelHoverDwell()
 	status.closeHoverPanel()
 	// A primary activation belongs to the application when it supplied a
 	// callback (for example, to restore its window). Keep menu-only icons
 	// clickable, and reserve secondary activation for the context menu.
 	if item.menu != nil && (button == gfx.PointerButtonSecondary || item.onClick == nil) {
-		item.popMenu(window, item.anchor(window, anchor))
+		item.popMenu(window, item.anchor(window, anchor), true)
 		return
 	}
 	dismissed := time.Duration(monotonicNow()-panelDismissedAt.Load()) < panelDismissWindow
@@ -552,13 +563,6 @@ func (state *windowState) placePanel() {
 		}
 		x := float32(info.Work.Left) + (float32(info.Work.Right-info.Work.Left)-width)/2
 		y := float32(info.Work.Top) + (float32(info.Work.Bottom-info.Work.Top)-height)/2
-		if config.WindowMode == platform.WindowNotification {
-			area := platform.ScreenRect{X: float32(info.Work.Left), Y: float32(info.Work.Top), Width: float32(info.Work.Right - info.Work.Left), Height: float32(info.Work.Bottom - info.Work.Top)}
-			x, y = platform.PlaceNotification(width, height, 12*state.scale, area)
-			left, top, fittedWidth, fittedHeight := placedFrame(info.Work, int32(x), int32(y), int32(width), int32(height))
-			setWindowPosition.Call(state.window, hwndTopmost, uintptr(left), uintptr(top), uintptr(fittedWidth), uintptr(fittedHeight), 0x10) // NOACTIVATE
-			return
-		}
 		setWindowPosition.Call(state.window, hwndTopmost, uintptr(int32(x)), uintptr(int32(y)), 0, 0, 0x11) // NOSIZE | NOACTIVATE
 		return
 	}
@@ -639,8 +643,8 @@ func (state *windowState) placeAtOrigin(origin gfx.Point) {
 	setWindowPosition.Call(state.window, 0, uintptr(x), uintptr(y), uintptr(width), uintptr(height), 0x14)
 }
 
-// Frame is the content area in screen coordinates, in the logical pixels of the
-// window's own display. It reads the system's state, so any goroutine may call it.
+// Frame reads the system's state, so any goroutine may call it. Notification
+// origins stay in physical desktop pixels across monitor DPI changes.
 func (window *nativeWindow) Frame() (gfx.Rect, bool) {
 	if window == nil || window.closed.Load() || window.state == nil || window.state.window == 0 {
 		return gfx.Rect{}, false
@@ -660,8 +664,12 @@ func (window *nativeWindow) Frame() (gfx.Rect, bool) {
 			scale = float32(dpi) / 96
 		}
 	}
+	x, y := float32(origin.X), float32(origin.Y)
+	if window.state.config.WindowMode != platform.WindowNotification {
+		x, y = x/scale, y/scale
+	}
 	return gfx.Rect{
-		X: float32(origin.X) / scale, Y: float32(origin.Y) / scale,
+		X: x, Y: y,
 		Width: float32(client.Right-client.Left) / scale, Height: float32(client.Bottom-client.Top) / scale,
 	}, true
 }
