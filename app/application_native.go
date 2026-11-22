@@ -261,5 +261,33 @@ type nativeStatusItem struct{ item platform.StatusItem }
 func (item nativeStatusItem) SetIcon(icon StatusIcon) error {
 	return item.item.SetIcon(icon.platform())
 }
+func (item nativeStatusItem) SetMenuOnHover(enabled bool) bool {
+	host, ok := item.item.(interface{ SetMenuOnHover(bool) bool })
+	return ok && host.SetMenuOnHover(enabled)
+}
+func (item nativeStatusItem) SetHoverPanel(open func(StatusAnchor) *Window) bool {
+	host, ok := item.item.(interface {
+		SetHoverPanel(func(platform.ScreenRect) platform.Window) bool
+	})
+	if !ok {
+		return false
+	}
+	if open == nil {
+		return host.SetHoverPanel(nil)
+	}
+	return host.SetHoverPanel(func(rect platform.ScreenRect) platform.Window {
+		if window := open(StatusAnchor{rect: rect, set: true}); window != nil {
+			if control, ok := window.control.(resultWindow); ok {
+				return control.WindowControl
+			}
+		}
+		return nil
+	})
+}
 func (item nativeStatusItem) SetTooltip(tooltip string) { item.item.SetTooltip(tooltip) }
-func (item nativeStatusItem) Remove()                   { item.item.Remove() }
+func (item nativeStatusItem) RefreshMenu() {
+	if host, ok := item.item.(interface{ RefreshMenu() }); ok {
+		host.RefreshMenu()
+	}
+}
+func (item nativeStatusItem) Remove() { item.item.Remove() }

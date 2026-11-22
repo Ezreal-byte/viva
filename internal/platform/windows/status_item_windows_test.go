@@ -75,6 +75,46 @@ func BenchmarkStatusPrimaryNotification(b *testing.B) {
 	}
 }
 
+func TestStatusHoverCallsPanelWithoutOpeningContextMenu(t *testing.T) {
+	var anchor platform.ScreenRect
+	item := &statusItem{
+		id:        2,
+		hoverMenu: true,
+		menu:      func() []platform.MenuItem { t.Error("context menu opened on hover"); return nil },
+		hoverPanel: func(bounds platform.ScreenRect) platform.Window {
+			anchor = bounds
+			return nil
+		},
+	}
+	status := &statusState{items: map[uint32]*statusItem{2: item}}
+	status.notified(0, 250|720<<16, 2<<16|ninPopupOpen)
+	if anchor.Width == 0 || !hoverContains(anchor, point{250, 720}) {
+		t.Fatalf("unexpected shell anchor: %+v", anchor)
+	}
+}
+
+func TestStatusHoverUsesThePointerWhenTheShellReportsTheChevron(t *testing.T) {
+	chevron := platform.ScreenRect{X: 100, Y: 750, Width: 20, Height: 20}
+	pointer := point{250, 720}
+	anchor := hoverAnchor(chevron, pointer)
+	if !hoverContains(anchor, pointer) || hoverContains(anchor, point{110, 760}) {
+		t.Fatalf("overflow icon anchored to the chevron instead of the pointer: %+v", anchor)
+	}
+}
+
+func TestStatusHoverPanelKeepsThePointerPathFromTheIconOpen(t *testing.T) {
+	icon := platform.ScreenRect{X: 280, Y: 750, Width: 18, Height: 18}
+	region := hoverPanelRegion(icon, rect{Left: 160, Top: 610, Right: 402, Bottom: 742})
+	for _, cursor := range []point{{288, 758}, {288, 746}, {270, 680}} {
+		if !hoverContains(region, cursor) {
+			t.Fatalf("cursor %+v must be able to reach the panel", cursor)
+		}
+	}
+	if hoverContains(region, point{500, 680}) {
+		t.Fatal("a pointer outside both the panel and icon should close it")
+	}
+}
+
 // A single click arrives as several messages; exactly one of them may count, or
 // a panel that a click opens is closed again by the same click.
 func TestStatusMessagesOfOneClickCountOnce(t *testing.T) {
@@ -251,5 +291,16 @@ func TestNotificationCarrierRecoversAfterAModifyAndAddFailure(t *testing.T) {
 	defer notificationMu.Unlock()
 	if !notificationAdded || notificationWindow != host {
 		t.Fatalf("the carrier did not recover: added=%v window=%#x", notificationAdded, notificationWindow)
+	}
+}
+
+func TestHoverMenuUsesShellPopupNotifications(t *testing.T) {
+	item := &statusItem{application: &windowsApplication{status: &statusState{}}}
+	if item.data().Flags&notifyShowTip == 0 {
+		t.Fatal("regular tooltip disabled")
+	}
+	item.hoverMenu = true
+	if item.data().Flags&notifyShowTip != 0 {
+		t.Fatal("shell tooltip suppresses rich hover")
 	}
 }

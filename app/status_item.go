@@ -134,6 +134,44 @@ func (item *StatusItem) SetTooltip(tooltip string) {
 	}
 }
 
+// RefreshMenu publishes changes to a dynamic menu to hosts that cache it.
+// Call on the application's event-loop thread after changing menu state.
+func (item *StatusItem) RefreshMenu() {
+	if item == nil || item.removed.Load() {
+		return
+	}
+	if host, ok := item.control.(interface{ RefreshMenu() }); ok {
+		host.RefreshMenu()
+	}
+}
+
+// SetMenuOnHover asks the desktop to open the item's existing menu when the
+// pointer rests on its icon. Call on the event-loop thread. It returns false
+// on hosts such as Linux StatusNotifier that own hover presentation.
+func (item *StatusItem) SetMenuOnHover(enabled bool) bool {
+	if item == nil || item.removed.Load() {
+		return false
+	}
+	host, ok := item.control.(interface{ SetMenuOnHover(bool) bool })
+	return ok && host.SetMenuOnHover(enabled)
+}
+
+// SetHoverPanel opens a non-activating panel when the pointer rests on this
+// status item. The callback runs on the event-loop thread. Open a
+// WindowNotification with the supplied Anchor and return it so the host can
+// close it when the pointer leaves both the icon and the panel. A nil callback
+// disables the panel. It takes precedence over SetMenuOnHover. Hosts such as
+// Linux StatusNotifier that own hover presentation return false.
+func (item *StatusItem) SetHoverPanel(open func(StatusAnchor) *Window) bool {
+	if item == nil || item.removed.Load() {
+		return false
+	}
+	host, ok := item.control.(interface {
+		SetHoverPanel(func(StatusAnchor) *Window) bool
+	})
+	return ok && host.SetHoverPanel(open)
+}
+
 // Remove takes the icon away. It is idempotent and, unlike the setters, may be
 // called from any goroutine.
 func (item *StatusItem) Remove() {

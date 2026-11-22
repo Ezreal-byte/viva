@@ -688,6 +688,17 @@ func (item *linuxStatusItem) handleMenu(call *dbus.Message) {
 		return
 	}
 	conn.Reply(call, result.Signature, result.Body)
+	item.emitMenuUpdate(result)
+}
+
+func (item *linuxStatusItem) RefreshMenu() {
+	if item.menu != nil && !item.removed.Load() {
+		item.emitMenuUpdate(item.menu.Refresh())
+	}
+}
+
+func (item *linuxStatusItem) emitMenuUpdate(result dbusmenu.Result) {
+	conn := item.notifier.conn
 	if result.LayoutUpdated != 0 {
 		// A host that kept the ids of the last layout is told, the way the
 		// interface says, that the menu it is showing was rebuilt and that its
