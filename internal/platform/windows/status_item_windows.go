@@ -452,7 +452,12 @@ func (status *statusState) notified(window, anchor, packed uintptr) {
 	}
 	switch event {
 	case ninPopupOpen:
-		status.beginHover(item, point{X: int32(int16(anchor)), Y: int32(int16(anchor >> 16))}, true)
+		// Explorer's overflow flyout can report icon-local coordinates in
+		// wParam. Read the physical pointer, as for WM_MOUSEMOVE, before
+		// choosing between the icon rectangle and the pointer fallback.
+		cursor := point{X: int32(int16(anchor)), Y: int32(int16(anchor >> 16))}
+		getCursorPos.Call(uintptr(unsafe.Pointer(&cursor)))
+		status.beginHover(item, cursor, true)
 		return
 	case ninPopupClose:
 		var cursor point
