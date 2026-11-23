@@ -270,6 +270,14 @@ func RunApplication(start platform.ApplicationStart) error {
 			break
 		}
 		timeout := application.pollTimeout()
+		// A synchronous XCB reply (including renderer setup) can move events
+		// out of the socket into libxcb's queue. poll cannot see those bytes.
+		// Dispatch them before sleeping, without polling an idle application.
+		for _, state := range states {
+			if state != nil && state.bufferedEvent() {
+				timeout = 0
+			}
+		}
 		ready := fds
 		loop := application.trayGTK
 		if loop != nil {
@@ -294,10 +302,13 @@ func RunApplication(start platform.ApplicationStart) error {
 			application.checkInputMethod()
 		}
 		for index, descriptor := range fds {
-			if descriptor.REvents == 0 {
+			state := states[index]
+			if state != nil && !application.contains(state) {
 				continue
 			}
-			state := states[index]
+			if descriptor.REvents == 0 && (state == nil || !state.bufferedEvent()) {
+				continue
+			}
 			if state == nil {
 				switch {
 				case application.inputMethod != nil && int(descriptor.FD) == application.inputMethod.FD():
@@ -523,6 +534,18 @@ func (application *linuxApplication) pollTimeout() int32 {
 		}
 	}
 	return timeout
+}
+
+// bufferedEvent peeks only at events already read from the socket. Preserve
+// their order with any input held by motion/configure coalescing.
+func (state *linuxWindowState) bufferedEvent() bool {
+	if state.held != nil {
+		return true
+	}
+	if poll := state.win.api.pollForQueuedEvent; poll != nil {
+		state.held = poll(state.win.connection)
+	}
+	return state.held != nil
 }
 
 // takeHeld returns the event read ahead, once.
