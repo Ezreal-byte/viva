@@ -3,6 +3,7 @@ package windows
 import (
 	"syscall"
 	"testing"
+	"unsafe"
 
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/internal/platform"
@@ -87,8 +88,15 @@ func TestStatusHoverCallsPanelWithoutOpeningContextMenu(t *testing.T) {
 		},
 	}
 	status := &statusState{items: map[uint32]*statusItem{2: item}}
-	status.notified(0, 250|720<<16, 2<<16|ninPopupOpen)
-	if anchor.Width == 0 || !hoverContains(anchor, point{250, 720}) {
+	var cursor point
+	if ok, _, _ := getCursorPos.Call(uintptr(unsafe.Pointer(&cursor))); ok == 0 {
+		t.Skip("desktop pointer unavailable")
+	}
+	// A flyout can report (37, 36) even when its icon is at the bottom
+	// of the monitor. Supply a position far from the physical pointer.
+	reported := uintptr(uint16(cursor.X+3000)) | uintptr(uint16(cursor.Y+3000))<<16
+	status.notified(0, reported, 2<<16|ninPopupOpen)
+	if anchor.Width == 0 || !hoverContains(anchor, cursor) {
 		t.Fatalf("unexpected shell anchor: %+v", anchor)
 	}
 }
