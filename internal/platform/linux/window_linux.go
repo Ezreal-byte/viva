@@ -168,7 +168,8 @@ type linuxWindowState struct {
 	// margin before its matching ConfigureNotify supplied the final dimensions.
 	frameGeometryDirty bool
 	// hidden records the application's request, independently of the asynchronous
-	// MapNotify/UnmapNotify events. The first Expose after a map paints in full.
+	// MapNotify/UnmapNotify events. exposed records that a mapped frame was shown;
+	// it must not suppress later server requests to restore lost pixels.
 	hidden  bool
 	exposed bool
 	// visible is the last visibility reported to OnVisibility; a window starts as visible.
@@ -669,13 +670,14 @@ func (state *linuxWindowState) coalesceMotions(event unsafe.Pointer) unsafe.Poin
 func (state *linuxWindowState) coalesceConfigures(event unsafe.Pointer) unsafe.Pointer {
 	configure := (*xcbConfigureEvent)(event)
 	var heldSync unsafe.Pointer
+	var heldExpose unsafe.Pointer
 	var heldPointers []unsafe.Pointer
 	finish := func(boundary unsafe.Pointer) unsafe.Pointer {
 		if len(heldPointers) == 0 {
-			state.holdEvents(heldSync, boundary)
+			state.holdEvents(heldExpose, heldSync, boundary)
 		} else {
-			replay := make([]unsafe.Pointer, 0, len(heldPointers)+2)
-			replay = append(replay, heldSync)
+			replay := make([]unsafe.Pointer, 0, len(heldPointers)+3)
+			replay = append(replay, heldExpose, heldSync)
 			replay = append(replay, heldPointers...)
 			replay = append(replay, boundary)
 			state.holdEvents(replay...)
@@ -715,8 +717,17 @@ func (state *linuxWindowState) coalesceConfigures(event unsafe.Pointer) unsafe.P
 			state.win.api.free(next)
 		case xcbExpose:
 			expose := (*xcbExposeEvent)(next)
-			if expose.Window == state.win.id && (state.hidden || state.exposed) {
-				state.win.api.free(next)
+			if expose.Window == state.win.id {
+				if state.hidden {
+					state.win.api.free(next)
+				} else {
+					// A position-only Configure does not repaint. Preserve one
+					// exposure after the final geometry instead of losing damage.
+					if heldExpose != nil {
+						state.win.api.free(heldExpose)
+					}
+					heldExpose = next
+				}
 				continue
 			}
 			return finish(next)
@@ -1275,7 +1286,7 @@ func (state *linuxWindowState) handleEvent(event unsafe.Pointer) (bool, error) {
 			return true, nil
 		}
 	case xcbExpose:
-		if !state.hidden && !state.exposed && (*xcbExposeEvent)(event).Count == 0 {
+		if expose := (*xcbExposeEvent)(event); !state.hidden && expose.Window == win.id && expose.Count == 0 {
 			state.exposed = true
 			return false, renderer.presentFull()
 		}
