@@ -167,6 +167,16 @@ func (a *gtkApplication) OpenWindow(config platform.Config) (platform.Window, er
 		g.windowSetTypeHint(w.toplevel, 8) // GDK_WINDOW_TYPE_HINT_POPUP_MENU
 		g.windowSkipTaskbar(w.toplevel, 1)
 		g.windowKeepAbove(w.toplevel, 1)
+		if config.HasAnchor && !a.wayland {
+			anchor := config.Anchor
+			if monitor := g.gdkMonitorAtPoint(display, int32(anchor.X), int32(anchor.Y)); monitor != 0 {
+				var r [4]int32
+				g.gdkMonitorWorkarea(monitor, &r)
+				area := platform.ScreenRect{X: float32(r[0]), Y: float32(r[1]), Width: float32(r[2]), Height: float32(r[3])}
+				x, y := platform.PlacePanel(anchor, float32(config.Width)*w.ratio, float32(config.Height)*w.ratio, area)
+				g.windowMove(w.toplevel, int32(x), int32(y))
+			}
+		}
 	}
 	w.setIcon()
 	w.placeAtOrigin()

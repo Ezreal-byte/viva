@@ -205,6 +205,8 @@ When a `Menu` is set, a press opens the system's own native menu, built by calli
 
 `StatusItem.SetIcon`, `SetTooltip` and `Remove` change or remove the icon later.
 
+For an interactive hover panel, set `PreferHoverPanel: true` when creating the icon, then call `SetHoverPanel`. Windows, macOS and directly embedded X11 tray icons support this. The X11 backend uses system GTK 3 for pointer events on embedded icons. StatusNotifier-only desktops draw their own tooltip and `SetHoverPanel` returns `false`. Use `StatusClick.Anchor` in `OnClick` to open the same content.
+
 ## What differs between platforms
 
 The same call can only say what the platform can say. A status icon reports its rectangle on macOS and Windows but only the click point on Linux. A panel is dismissed by losing key status, by deactivation or by `FocusOut` respectively. A new icon in a full macOS menu bar can be hidden by the system, notably next to the notch, and Windows 11 shows a new icon in the overflow flyout until the user promotes it. `docs/conformance.md` in the repository lists these, and what must be checked by hand on each platform.

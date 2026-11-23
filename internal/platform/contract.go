@@ -349,10 +349,11 @@ type StatusClick struct {
 // OnClick then runs only for a press the system does not turn into the menu: a
 // primary press, which a Linux host reports as an activation of the item.
 type StatusItemConfig struct {
-	Tooltip string
-	Icon    StatusIcon
-	OnClick func(StatusClick)
-	Menu    func() []MenuItem
+	PreferHoverPanel bool
+	Tooltip          string
+	Icon             StatusIcon
+	OnClick          func(StatusClick)
+	Menu             func() []MenuItem
 }
 
 // MenuItem is one entry of a status item's menu. A separator has no other
