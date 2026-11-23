@@ -226,6 +226,7 @@ func (application *windowsApplication) closeStatus() {
 	if status == nil {
 		return
 	}
+	status.hover.watchEntry = false
 	status.resetHover()
 	for _, item := range status.items {
 		item.delete()
@@ -397,6 +398,9 @@ func statusProc(window, kind, first, second uintptr) (result uintptr) {
 	case kind == wmTimer && first == statusHoverGapTimer:
 		status.finishHoverGap()
 		return 0
+	case kind == wmStatusProbeIcon:
+		status.probeIcon()
+		return 0
 	case kind == wmStatusHoverLeave:
 		if status.hover.iconID == uint32(first) && status.hover.postedLeave {
 			status.leaveHover()
@@ -412,6 +416,7 @@ func statusProc(window, kind, first, second uintptr) (result uintptr) {
 			status.stopItemHover(item.id)
 			item.delete()
 			delete(status.items, item.id)
+			status.updateEntryWatch()
 		}
 		return 0
 	case status.taskbarCreated != 0 && uint32(kind) == status.taskbarCreated:
@@ -436,6 +441,11 @@ func statusProc(window, kind, first, second uintptr) (result uintptr) {
 func (status *statusState) notified(window, anchor, packed uintptr) {
 	event := uint32(packed) & 0xffff
 	id := uint32(packed>>16) & 0xffff
+	// Older shells report the ID in wParam when NIM_SETVERSION failed.
+	legacy := id == 0
+	if legacy {
+		id = uint32(anchor)
+	}
 	item := status.items[id]
 	if item == nil || item.removed.Load() {
 		return
@@ -462,6 +472,19 @@ func (status *statusState) notified(window, anchor, packed uintptr) {
 		}
 		return
 	}
+	if legacy {
+		switch event {
+		case wmLeftUp:
+			event = ninSelect
+		case wmRightUp:
+			event = wmContextMenu
+		default:
+			return
+		}
+		var p point
+		getCursorPos.Call(uintptr(unsafe.Pointer(&p)))
+		anchor = uintptr(uint16(p.X)) | uintptr(uint16(p.Y))<<16
+	}
 	button, ok := statusButton(event)
 	if !ok {
 		return
@@ -475,7 +498,8 @@ func (status *statusState) notified(window, anchor, packed uintptr) {
 		item.popMenu(window, item.anchor(window, anchor), true)
 		return
 	}
-	dismissed := time.Duration(monotonicNow()-panelDismissedAt.Load()) < panelDismissWindow
+	stamp := panelDismissedAt.Load()
+	dismissed := stamp != 0 && time.Duration(monotonicNow()-stamp) < panelDismissWindow
 	if item.onClick != nil {
 		item.onClick(platform.StatusClick{Button: button, Anchor: item.anchor(window, anchor), PanelDismissed: dismissed})
 	}
@@ -501,7 +525,7 @@ func statusButton(event uint32) (gfx.PointerButton, bool) {
 func (item *statusItem) anchor(window, click uintptr) platform.ScreenRect {
 	identifier := notifyIconIdentifier{Size: uint32(unsafe.Sizeof(notifyIconIdentifier{})), Window: window, ID: item.id}
 	var bounds rect
-	if status, _, _ := notifyIconGetRect.Call(uintptr(unsafe.Pointer(&identifier)), uintptr(unsafe.Pointer(&bounds))); int32(uint32(status)) >= 0 && bounds.Right > bounds.Left {
+	if status, _, _ := notifyIconGetRect.Call(uintptr(unsafe.Pointer(&identifier)), uintptr(unsafe.Pointer(&bounds))); uint32(status) == 0 && bounds.Right > bounds.Left && bounds.Bottom > bounds.Top {
 		return platform.ScreenRect{X: float32(bounds.Left), Y: float32(bounds.Top), Width: float32(bounds.Right - bounds.Left), Height: float32(bounds.Bottom - bounds.Top)}
 	}
 	return platform.ScreenRect{X: float32(int16(click)), Y: float32(int16(click >> 16))}

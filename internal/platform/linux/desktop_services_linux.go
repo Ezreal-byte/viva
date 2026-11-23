@@ -3,6 +3,8 @@
 package linux
 
 import (
+	"math"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -53,7 +55,37 @@ func (application *linuxApplication) refreshText() {
 }
 
 func (application *linuxApplication) AddStatusItem(config platform.StatusItemConfig) (platform.StatusItem, error) {
+	if !config.PreferHoverPanel || !config.Icon.Valid() {
+		return application.services().AddStatusItem(config)
+	}
+	if usesTrayProxy(os.Getenv("XDG_CURRENT_DESKTOP")) {
+		item, err := application.services().AddStatusItem(config)
+		if err == nil {
+			return item, nil
+		}
+		if embedded := application.addEmbeddedTray(config); embedded != nil {
+			return embedded, nil
+		}
+		return nil, err
+	}
+	if item := application.addEmbeddedTray(config); item != nil {
+		return item, nil
+	}
 	return application.services().AddStatusItem(config)
+}
+
+// StatusNotifier hosts can send Qt logical coordinates or (0,0). Read the
+// screen pointer for those activations; preserve a distinct keyboard anchor.
+func (application *linuxApplication) trayClickAnchor(x, y int32) platform.ScreenRect {
+	if len(application.windows) > 0 {
+		win := application.windows[0].win
+		px, py, ok := win.pointerPosition()
+		scale := win.displayScale()
+		if ok && (x == 0 && y == 0 || math.Abs(float64(float32(x)*scale)-float64(px)) <= 4 && math.Abs(float64(float32(y)*scale)-float64(py)) <= 4) {
+			x, y = int32(px), int32(py)
+		}
+	}
+	return platform.ScreenRect{X: float32(x), Y: float32(y)}
 }
 func (application *linuxApplication) syncDesktopWatch()         { application.services().syncDesktopWatch() }
 func (application *linuxApplication) retryDesktopWatch()        { application.services().retryDesktopWatch() }

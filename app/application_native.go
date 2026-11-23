@@ -217,9 +217,10 @@ func (host nativeHost) AddStatusItem(config StatusItemConfig) (StatusItemControl
 		menu = func() []platform.MenuItem { return platformMenu(config.Menu()) }
 	}
 	item, err := host.native.AddStatusItem(platform.StatusItemConfig{
-		Tooltip: config.Tooltip,
-		Icon:    config.Icon.platform(),
-		Menu:    menu,
+		PreferHoverPanel: config.PreferHoverPanel,
+		Tooltip:          config.Tooltip,
+		Icon:             config.Icon.platform(),
+		Menu:             menu,
 		OnClick: func(click platform.StatusClick) {
 			if config.OnClick != nil {
 				config.OnClick(StatusClick{

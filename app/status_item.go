@@ -55,6 +55,9 @@ type StatusClick struct {
 
 // StatusItemConfig describes a status item.
 type StatusItemConfig struct {
+	// PreferHoverPanel selects an embedded X11 tray when one is available so the
+	// application can receive hover events. StatusNotifier-only hosts own their tooltip.
+	PreferHoverPanel bool
 	// Tooltip is shown while the pointer rests on the icon.
 	Tooltip string
 	Icon    StatusIcon

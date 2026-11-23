@@ -93,6 +93,43 @@ func TestStatusHoverCallsPanelWithoutOpeningContextMenu(t *testing.T) {
 	}
 }
 
+func TestStatusProbeRequiresVisibleIconWithActivePanel(t *testing.T) {
+	panel := func(platform.ScreenRect) platform.Window { return nil }
+	first := &statusItem{id: 2, hoverPanel: panel}
+	second := &statusItem{id: 3, hoverPanel: panel}
+	menu := &statusItem{id: 4, hoverMenu: true}
+	state := &statusState{items: map[uint32]*statusItem{2: first, 3: second, 4: menu}}
+	bounds := func(item *statusItem) platform.ScreenRect {
+		if item == first {
+			return platform.ScreenRect{}
+		} // Explorer reports a hidden icon
+		return platform.ScreenRect{X: float32(item.id) * 24, Y: 700, Width: 24, Height: 24}
+	}
+	if state.panelAt(point{0, 0}, bounds) != nil || state.panelAt(point{98, 710}, bounds) != nil {
+		t.Fatal("probe matched a hidden icon or a menu-only icon")
+	}
+	if state.panelAt(point{73, 710}, bounds) != second {
+		t.Fatal("visible unread icon was missed without a shell callback")
+	}
+	second.removed.Store(true)
+	if state.panelAt(point{73, 710}, bounds) != nil {
+		t.Fatal("removed icon answered a probe")
+	}
+}
+
+func TestStatusLegacyActivationUsesWParamOnce(t *testing.T) {
+	clicks := 0
+	item := &statusItem{id: 7, onClick: func(platform.StatusClick) { clicks++ }}
+	status := &statusState{items: map[uint32]*statusItem{7: item}}
+	status.notified(0, 7, wmLeftDown)
+	status.notified(0, 7, wmLeftUp)
+	status.notified(0, 7, ninSelect)
+	status.notified(0, 1, wmLeftUp)
+	if clicks != 1 {
+		t.Fatalf("legacy activation fired %d times", clicks)
+	}
+}
+
 func TestStatusHoverUsesThePointerWhenTheShellReportsTheChevron(t *testing.T) {
 	chevron := platform.ScreenRect{X: 100, Y: 750, Width: 20, Height: 20}
 	pointer := point{250, 720}

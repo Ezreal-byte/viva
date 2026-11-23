@@ -18,6 +18,7 @@ const (
 
 	wmStatusHoverLeave       = 0x8014
 	wmStatusHoverDismissMenu = 0x8015
+	wmStatusProbeIcon        = 0x8016
 )
 
 var (
@@ -25,19 +26,22 @@ var (
 	endStatusMenu           = user.NewProc("EndMenu")
 	statusWindowClassName   = user.NewProc("GetClassNameW")
 	statusWindowThread      = user.NewProc("GetWindowThreadProcessId")
+	statusAncestor          = user.NewProc("GetAncestor")
 )
 
 type statusHover struct {
-	iconID      uint32
-	anchor      platform.ScreenRect
-	opened      bool
-	dwellUntil  int64
-	postedLeave bool
-	hook        uintptr
-	menuID      uint32
-	panelID     uint32
-	panel       *nativeWindow
-	gapUntil    int64
+	iconID       uint32
+	anchor       platform.ScreenRect
+	opened       bool
+	dwellUntil   int64
+	postedLeave  bool
+	probePending bool
+	watchEntry   bool
+	hook         uintptr
+	menuID       uint32
+	panelID      uint32
+	panel        *nativeWindow
+	gapUntil     int64
 }
 
 func (item *statusItem) SetHoverPanel(open func(platform.ScreenRect) platform.Window) bool {
@@ -58,6 +62,7 @@ func (item *statusItem) SetHoverPanel(open func(platform.ScreenRect) platform.Wi
 		item.hoverPanel = previous
 		return false
 	}
+	item.application.status.updateEntryWatch()
 	// TaskbarCreated reapplies the desired flags if Explorer is restarting.
 	return true
 }
@@ -230,11 +235,11 @@ func (status *statusState) resetHover() {
 }
 
 // The shell owns the icon's window. It reports NIN_POPUPCLOSE in the main
-// tray, but can omit it in overflow. Watch mouse input only during a hover
-// session. The panel itself uses TrackMouseEvent on its own window.
+// tray, but can omit it in overflow. Watch only while a panel is requested
+// or a native menu is tracking a hover. The panel tracks its own mouse leave.
 func (status *statusState) syncHoverMouseHook() {
 	h := &status.hover
-	needed := status.window != 0 && (h.iconID != 0 || h.menuID != 0)
+	needed := status.window != 0 && (h.watchEntry || h.iconID != 0 || h.menuID != 0)
 	if needed && h.hook == 0 {
 		module, _, _ := getModule.Call(0)
 		h.hook, _, _ = setWindowsHookEx.Call(14, statusMouseHookCallback, module, 0) // WH_MOUSE_LL
@@ -252,6 +257,10 @@ func statusMouseHook(code, kind, data uintptr) uintptr {
 			h := &status.hover
 			switch kind {
 			case wmMouseMove:
+				if h.watchEntry && h.iconID == 0 && !h.probePending && statusTrayAt(cursor) {
+					posted, _, _ := postMessage.Call(status.window, wmStatusProbeIcon, 0, 0)
+					h.probePending = posted != 0
+				}
 				if h.iconID != 0 && !h.postedLeave && !hoverContains(h.anchor, cursor) {
 					posted, _, _ := postMessage.Call(status.window, wmStatusHoverLeave, uintptr(h.iconID), 0)
 					h.postedLeave = posted != 0
@@ -266,6 +275,62 @@ func statusMouseHook(code, kind, data uintptr) uintptr {
 	}
 	result, _, _ := callNextHookEx.Call(0, code, kind, data)
 	return result
+}
+
+// Some Explorer taskbars do not send popup or motion callbacks until activation.
+// Observe movement only while an item requests a panel. Query Explorer for the
+// exact icon outside the input hook, and only over a notification-area surface.
+func (status *statusState) updateEntryWatch() {
+	status.hover.watchEntry = false
+	for _, item := range status.items {
+		if item.hoverPanel != nil && !item.removed.Load() {
+			status.hover.watchEntry = true
+			break
+		}
+	}
+	status.syncHoverMouseHook()
+	if status.hover.watchEntry {
+		status.probeIcon()
+	}
+}
+
+func statusTrayAt(p point) bool {
+	hwnd, _, _ := windowFromPoint.Call(uintptr(uint32(p.X)) | uintptr(uint32(p.Y))<<32)
+	if hwnd == 0 {
+		return false
+	}
+	root, _, _ := statusAncestor.Call(hwnd, 2) // GA_ROOT
+	var name [64]uint16
+	if n, _, _ := statusWindowClassName.Call(root, uintptr(unsafe.Pointer(&name[0])), uintptr(len(name))); n == 0 {
+		return false
+	}
+	switch syscall.UTF16ToString(name[:]) {
+	case "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "NotifyIconOverflowWindow", "TopLevelWindowForOverflowXamlIsland":
+		return true
+	}
+	return false
+}
+func (status *statusState) probeIcon() {
+	status.hover.probePending = false
+	if !status.hover.watchEntry || status.hover.iconID != 0 || status.hover.menuID != 0 {
+		return
+	}
+	var p point
+	if ok, _, _ := getCursorPos.Call(uintptr(unsafe.Pointer(&p))); ok == 0 || !statusTrayAt(p) {
+		return
+	}
+	if item := status.panelAt(p, func(item *statusItem) platform.ScreenRect { return item.anchor(status.window, 0) }); item != nil {
+		status.beginHover(item, p, false)
+	}
+}
+
+func (status *statusState) panelAt(p point, bounds func(*statusItem) platform.ScreenRect) *statusItem {
+	for _, item := range status.items {
+		if item.hoverPanel != nil && item.canHover() && hoverContains(bounds(item), p) {
+			return item
+		}
+	}
+	return nil
 }
 
 func (status *statusState) dismissHoverMenuAt(packed uintptr) {

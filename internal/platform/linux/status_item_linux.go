@@ -87,7 +87,7 @@ func (win *window) panelOrigin(config platform.Config) (x, y int16) {
 	width, height := float32(win.width), float32(win.height)
 	area := platform.ScreenRect{Width: float32(win.screen.WidthPixels), Height: float32(win.screen.HeightPixels)}
 	focusX, focusY := int(area.Width)/2, int(area.Height)/2
-	if config.WindowMode == platform.WindowPanel && config.HasAnchor {
+	if config.HasAnchor {
 		focusX, focusY = int(config.Anchor.X+config.Anchor.Width/2), int(config.Anchor.Y+config.Anchor.Height/2)
 	} else if pointerX, pointerY, ok := win.pointerPosition(); ok {
 		focusX, focusY = pointerX, pointerY
@@ -98,10 +98,10 @@ func (win *window) panelOrigin(config platform.Config) (x, y int16) {
 		area = platform.ScreenRect{X: float32(usable.x), Y: float32(usable.y), Width: float32(usable.width), Height: float32(usable.height)}
 	}
 	var fx, fy float32
-	if config.WindowMode == platform.WindowNotification {
-		fx, fy = platform.PlaceNotification(width, height, 12*win.displayScale(), area)
-	} else if config.HasAnchor {
+	if config.HasAnchor {
 		fx, fy = platform.PlacePanel(config.Anchor, width, height, area)
+	} else if config.WindowMode == platform.WindowNotification {
+		fx, fy = platform.PlaceNotification(width, height, 12*win.displayScale(), area)
 	} else {
 		fx, fy = area.X+(area.Width-width)/2, area.Y+(area.Height-height)/2
 	}
@@ -355,9 +355,10 @@ var dialStatus = func() (statusConnection, error) { return dbus.DialSession() }
 // statusNotifier is the application's connection to the session bus and the
 // icons it has registered with the desktop's StatusNotifier host.
 type statusNotifier struct {
-	conn  statusConnection
-	items map[string]*linuxStatusItem // by the bus name each is registered under
-	post  func(command uint32)        // wakes the event loop from another goroutine
+	clickAnchor func(int32, int32) platform.ScreenRect
+	conn        statusConnection
+	items       map[string]*linuxStatusItem // by the bus name each is registered under
+	post        func(command uint32)        // wakes the event loop from another goroutine
 	// pending is the registration call in flight to each watcher, by the serial
 	// the call was sent with. The host may answer it long after it was sent,
 	// while the icon already serves the properties the host asks for.
@@ -404,6 +405,11 @@ func (services *desktopServices) AddStatusItem(config platform.StatusItemConfig)
 		}
 		services.status = &statusNotifier{
 			conn: conn, items: make(map[string]*linuxStatusItem), pending: make(map[uint32]pendingRegistration), post: services.host.post,
+		}
+		if host, ok := services.host.(interface {
+			trayClickAnchor(int32, int32) platform.ScreenRect
+		}); ok {
+			services.status.clickAnchor = host.trayClickAnchor
 		}
 		services.host.rebuildPoll()
 	}
@@ -733,11 +739,16 @@ func (item *linuxStatusItem) handleMethod(call *dbus.Message) {
 	if item.removed.Load() || item.onClick == nil {
 		return
 	}
-	dismissed := time.Duration(monotonicNow()-panelDismissedAt.Load()) < panelDismissWindow
+	stamp := panelDismissedAt.Load()
+	dismissed := stamp != 0 && time.Duration(monotonicNow()-stamp) < panelDismissWindow
+	anchor := platform.ScreenRect{X: float32(x), Y: float32(y)}
+	if item.notifier.clickAnchor != nil {
+		anchor = item.notifier.clickAnchor(x, y)
+	}
 	// The host reports where the click was, not the icon's rectangle.
 	item.onClick(platform.StatusClick{
 		Button:         button,
-		Anchor:         platform.ScreenRect{X: float32(x), Y: float32(y)},
+		Anchor:         anchor,
 		PanelDismissed: dismissed,
 	})
 }
