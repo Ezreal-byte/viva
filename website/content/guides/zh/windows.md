@@ -171,7 +171,7 @@ func addTray(application *app.Application, window *app.Window, icon app.StatusIc
 
 之后可以用 `StatusItem.SetIcon`、`SetTooltip` 和 `Remove` 修改或移除图标。
 
-需要可交互的悬停浮层时，在创建图标时设置 `PreferHoverPanel: true`，再调用 `SetHoverPanel`。Windows、macOS 和直接嵌入图标的 X11 托盘支持此操作。X11 后端使用系统 GTK 3 接收嵌入式图标的指针事件。仅使用 StatusNotifier 的桌面自行绘制提示，`SetHoverPanel` 返回 `false`，应用可在 `OnClick` 中用 `StatusClick.Anchor` 打开同一内容。
+在 Windows 可见任务栏图标和 macOS 菜单栏上，应用可以用 `SetHoverPanel` 打开不抢焦点的窗口。Windows 的折叠托盘和缺少成对弹出事件的 Shell 走点击入口。悬停打开原生菜单由 macOS 支持。Linux 默认使用 StatusNotifier，桌面负责文字提示，应用可在 `OnClick` 中打开交互浮层。直接嵌入 X11 托盘需明确指定 `LinuxTrayBackend: app.LinuxTrayXEmbed`，要求使用 `vivaxembed` 构建标签、XCB 后端、托盘管理器及系统 GTK 3；后端不可用时返回 `app.ErrNoStatusArea`。麒麟 UKUI 等代理托盘由桌面持有指针，应用无法收到图标悬停事件。
 
 ## 各平台的差异
 

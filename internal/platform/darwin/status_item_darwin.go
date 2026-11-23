@@ -87,6 +87,10 @@ func (item *nativeStatusItem) SetHoverPanel(open func(platform.ScreenRect) platf
 	C.viva_status_item_set_hover_panel(item.token, C.int(boolInt(open != nil)))
 	return true
 }
+
+// AppKit rebuilds this menu each time it opens.
+func (*nativeStatusItem) RefreshMenu() {}
+
 func (item *nativeStatusItem) SetTooltip(tooltip string) {
 	if item.removed.Load() {
 		return

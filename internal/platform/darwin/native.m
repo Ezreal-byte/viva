@@ -4089,15 +4089,6 @@ static void viva_set_secure_event_input(BOOL on) {
     if (screen == nil) {
         screen = NSScreen.mainScreen ?: NSScreen.screens.firstObject;
     }
-    if (_windowMode == VIVA_WINDOW_NOTIFICATION) {
-        NSRect area = screen.visibleFrame;
-        frame.size.width = MIN(frame.size.width, area.size.width);
-        frame.size.height = MIN(frame.size.height, area.size.height);
-        frame.origin.x = MIN(MAX(NSMinX(area), frame.origin.x), NSMaxX(area) - frame.size.width);
-        frame.origin.y = MIN(MAX(NSMinY(area), frame.origin.y), NSMaxY(area) - frame.size.height);
-        [_window setFrame:frame display:NO];
-        return;
-    }
     [_window setFrame:[_window constrainFrameRect:frame toScreen:screen] display:NO];
 }
 
@@ -4159,11 +4150,11 @@ static void viva_set_secure_event_input(BOOL on) {
  * the menu bar at the top of the screen, and kept inside the visible part of the
  * screen the anchor is on. Without an anchor it is centered on the screen. */
 - (void)placePanel {
-    if (_windowMode == VIVA_WINDOW_NOTIFICATION && _hasOrigin) {
-        [self placeAtOrigin];
-        return;
-    }
     if (_windowMode == VIVA_WINDOW_NOTIFICATION && !_hasAnchor) {
+        if (_hasOrigin) {
+            [self placeAtOrigin];
+            return;
+        }
         NSPoint point = NSEvent.mouseLocation;
         NSScreen *screen = NSScreen.mainScreen ?: NSScreen.screens.firstObject;
         for (NSScreen *candidate in NSScreen.screens) {

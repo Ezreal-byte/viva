@@ -3,7 +3,6 @@ package windows
 import (
 	"syscall"
 	"testing"
-	"unsafe"
 
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/internal/platform"
@@ -76,52 +75,18 @@ func BenchmarkStatusPrimaryNotification(b *testing.B) {
 	}
 }
 
-func TestStatusHoverCallsPanelWithoutOpeningContextMenu(t *testing.T) {
-	var anchor platform.ScreenRect
-	item := &statusItem{
-		id:        2,
-		hoverMenu: true,
-		menu:      func() []platform.MenuItem { t.Error("context menu opened on hover"); return nil },
-		hoverPanel: func(bounds platform.ScreenRect) platform.Window {
-			anchor = bounds
-			return nil
-		},
+func TestStatusHoverDeclinesOverflowAndLegacyShells(t *testing.T) {
+	for _, class := range []string{"NotifyIconOverflowWindow", "TopLevelWindowForOverflowXamlIsland", ""} {
+		if taskbarSupportsHover(class) {
+			t.Fatalf("accepted %q", class)
+		}
 	}
-	status := &statusState{items: map[uint32]*statusItem{2: item}}
-	var cursor point
-	if ok, _, _ := getCursorPos.Call(uintptr(unsafe.Pointer(&cursor))); ok == 0 {
-		t.Skip("desktop pointer unavailable")
+	if !taskbarSupportsHover("Shell_TrayWnd") || !taskbarSupportsHover("Shell_SecondaryTrayWnd") {
+		t.Fatal("visible taskbar does not support hover")
 	}
-	// A flyout can report (37, 36) even when its icon is at the bottom
-	// of the monitor. Supply a position far from the physical pointer.
-	reported := uintptr(uint16(cursor.X+3000)) | uintptr(uint16(cursor.Y+3000))<<16
-	status.notified(0, reported, 2<<16|ninPopupOpen)
-	if anchor.Width == 0 || !hoverContains(anchor, cursor) {
-		t.Fatalf("unexpected shell anchor: %+v", anchor)
-	}
-}
-
-func TestStatusProbeRequiresVisibleIconWithActivePanel(t *testing.T) {
-	panel := func(platform.ScreenRect) platform.Window { return nil }
-	first := &statusItem{id: 2, hoverPanel: panel}
-	second := &statusItem{id: 3, hoverPanel: panel}
-	menu := &statusItem{id: 4, hoverMenu: true}
-	state := &statusState{items: map[uint32]*statusItem{2: first, 3: second, 4: menu}}
-	bounds := func(item *statusItem) platform.ScreenRect {
-		if item == first {
-			return platform.ScreenRect{}
-		} // Explorer reports a hidden icon
-		return platform.ScreenRect{X: float32(item.id) * 24, Y: 700, Width: 24, Height: 24}
-	}
-	if state.panelAt(point{0, 0}, bounds) != nil || state.panelAt(point{98, 710}, bounds) != nil {
-		t.Fatal("probe matched a hidden icon or a menu-only icon")
-	}
-	if state.panelAt(point{73, 710}, bounds) != second {
-		t.Fatal("visible unread icon was missed without a shell callback")
-	}
-	second.removed.Store(true)
-	if state.panelAt(point{73, 710}, bounds) != nil {
-		t.Fatal("removed icon answered a probe")
+	item := &statusItem{}
+	if item.SetMenuOnHover(true) || item.SetHoverPanel(func(platform.ScreenRect) platform.Window { return nil }) {
+		t.Fatal("legacy shell accepted hover")
 	}
 }
 
@@ -138,34 +103,26 @@ func TestStatusLegacyActivationUsesWParamOnce(t *testing.T) {
 	}
 }
 
-func TestStatusHoverUsesThePointerWhenTheShellReportsTheChevron(t *testing.T) {
-	chevron := platform.ScreenRect{X: 100, Y: 750, Width: 20, Height: 20}
-	pointer := point{250, 720}
-	anchor := hoverAnchor(chevron, pointer)
-	if !hoverContains(anchor, pointer) || hoverContains(anchor, point{110, 760}) {
-		t.Fatalf("overflow icon anchored to the chevron instead of the pointer: %+v", anchor)
-	}
-}
-
-func TestStatusHoverWaitsForActualLeaveBeforeReopening(t *testing.T) {
+func TestStatusHoverWaitsForShellCloseBeforeReopening(t *testing.T) {
 	const id = 2
 	opens := 0
-	item := &statusItem{id: id, hoverPanel: func(platform.ScreenRect) platform.Window {
-		opens++
-		return nil
-	}}
+	item := &statusItem{id: id, hoverPanel: func(platform.ScreenRect) platform.Window { opens++; return nil }}
 	status := &statusState{items: map[uint32]*statusItem{id: item}}
-	cursor := point{250, 720}
-	status.beginHover(item, cursor, true)
-	status.beginHover(item, point{251, 721}, false)
-	status.beginHover(item, cursor, true)
-	if opens != 1 || status.hover.dwellUntil != 0 {
-		t.Fatalf("hover reopened without leaving: opens=%d pending=%v", opens, status.hover.dwellUntil != 0)
+	bounds := platform.ScreenRect{Width: 20, Height: 20}
+	status.notified(0, 0, id<<16|wmMouseMove)
+	if opens != 0 {
+		t.Fatal("motion opened a panel without a shell popup")
 	}
-	status.leaveHover()
-	status.beginHover(item, cursor, true)
+	status.openHover(item, bounds)
+	status.notified(0, 0, 3<<16|ninPopupClose)
+	status.openHover(item, bounds)
+	if opens != 1 {
+		t.Fatal("reopened without leaving the item")
+	}
+	status.notified(0, 0, id<<16|ninPopupClose)
+	status.openHover(item, bounds)
 	if opens != 2 {
-		t.Fatalf("hover did not reopen after re-entry: opens=%d", opens)
+		t.Fatal("failed to reopen after a new entry")
 	}
 }
 
@@ -365,12 +322,12 @@ func TestNotificationCarrierRecoversAfterAModifyAndAddFailure(t *testing.T) {
 	}
 }
 
-func TestHoverMenuUsesShellPopupNotifications(t *testing.T) {
+func TestHoverPanelUsesShellPopupNotifications(t *testing.T) {
 	item := &statusItem{application: &windowsApplication{status: &statusState{}}}
 	if item.data().Flags&notifyShowTip == 0 {
 		t.Fatal("regular tooltip disabled")
 	}
-	item.hoverMenu = true
+	item.hoverPanel = func(platform.ScreenRect) platform.Window { return nil }
 	if item.data().Flags&notifyShowTip != 0 {
 		t.Fatal("shell tooltip suppresses rich hover")
 	}

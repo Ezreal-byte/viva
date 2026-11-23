@@ -3,8 +3,8 @@
 package linux
 
 import (
+	"errors"
 	"math"
-	"os"
 	"sync/atomic"
 	"time"
 
@@ -55,21 +55,11 @@ func (application *linuxApplication) refreshText() {
 }
 
 func (application *linuxApplication) AddStatusItem(config platform.StatusItemConfig) (platform.StatusItem, error) {
-	if !config.PreferHoverPanel || !config.Icon.Valid() {
-		return application.services().AddStatusItem(config)
-	}
-	if usesTrayProxy(os.Getenv("XDG_CURRENT_DESKTOP")) {
-		item, err := application.services().AddStatusItem(config)
-		if err == nil {
-			return item, nil
+	if config.LinuxTrayBackend == platform.LinuxTrayXEmbed {
+		if !config.Icon.Valid() {
+			return nil, errors.New("linux: status icon pixels do not match its size")
 		}
-		if embedded := application.addEmbeddedTray(config); embedded != nil {
-			return embedded, nil
-		}
-		return nil, err
-	}
-	if item := application.addEmbeddedTray(config); item != nil {
-		return item, nil
+		return application.openEmbeddedTray(config)
 	}
 	return application.services().AddStatusItem(config)
 }

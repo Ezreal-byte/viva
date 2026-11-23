@@ -11,7 +11,7 @@ import (
 	"github.com/vivaui/viva/internal/platform"
 )
 
-func TestStatusHoverNativeMenu(t *testing.T) {
+func TestStatusHoverNativePanel(t *testing.T) {
 	if os.Getenv("VIVA_TEST_NOTIFICATION_DESKTOP") != "1" {
 		t.Skip("requires a private Windows desktop")
 	}
@@ -41,49 +41,42 @@ func TestStatusHoverNativeMenu(t *testing.T) {
 			return err
 		}
 		state := app.status
-		item := &statusItem{id: 2, application: app, hoverMenu: true, menu: func() []platform.MenuItem {
-			return []platform.MenuItem{{Title: "Conversation", OnSelect: func() { t.Error("outside click chose a menu item") }}}
-		}}
 		handle := owner.(*nativeWindow).state.window
 		getFocus := user.NewProc("GetFocus")
 		setFocus.Call(handle)
-		if focus, _, _ := getFocus.Call(); focus != handle {
-			t.Fatalf("initial focus = %x, want %x", focus, handle)
-		}
-
-		var sawMenu bool
-		packedOutside := uintptr(uint32(1)) | uintptr(uint32(1))<<32
-		var timer uintptr
-		callback := syscall.NewCallback(func(_ uintptr, _ uint32, _ uintptr, _ uint32) uintptr {
-			killTimer.Call(state.window, timer)
-			var gui struct {
-				size, flags uint32
-				windows     [6]uintptr
-				caret       rect
+		item := &statusItem{id: 2, hoverPanel: func(anchor platform.ScreenRect) platform.Window {
+			panel, err := app.OpenWindow(platform.Config{Width: 140, Height: 60, WindowMode: platform.WindowNotification, HasAnchor: true, Anchor: anchor})
+			if err != nil {
+				t.Error(err)
+				return nil
 			}
-			gui.size = uint32(unsafe.Sizeof(gui))
-			getGUIThreadInfo := user.NewProc("GetGUIThreadInfo")
-			ok, _, _ := getGUIThreadInfo.Call(thread, uintptr(unsafe.Pointer(&gui)))
-			sawMenu = ok != 0 && gui.flags&4 != 0 // GUI_INMENUMODE
-			if focus, _, _ := getFocus.Call(); focus != handle {
-				t.Errorf("hover menu changed keyboard focus to %x", focus)
-			}
-			statusProc(state.window, wmStatusHoverDismissMenu, uintptr(item.id), packedOutside)
-			return 0
-		})
-		timer, _, _ = setTimer.Call(state.window, 41, 100, callback)
-		if timer == 0 {
-			t.Fatal("could not schedule the outside-click fixture")
-		}
-		defer killTimer.Call(state.window, timer)
-		state.hover.menuID = item.id
-		item.popMenu(state.window, platform.ScreenRect{X: 100, Y: 400, Width: 20}, false)
-		state.hover.menuID = 0
-		if !sawMenu {
-			t.Error("the outside click did not run during the native menu loop")
+			return panel
+		}}
+		state.items[item.id] = item
+		defer delete(state.items, item.id)
+		state.openHover(item, platform.ScreenRect{X: 50, Y: 100, Width: 16, Height: 16})
+		panel := state.hover.panel
+		if panel == nil {
+			t.Fatal("no native panel")
 		}
 		if focus, _, _ := getFocus.Call(); focus != handle {
-			t.Errorf("menu dismissal changed keyboard focus to %x", focus)
+			t.Error("opening a hover panel stole keyboard focus")
+		}
+		state.notified(state.window, 0, uintptr(item.id)<<16|ninPopupClose)
+		if state.hover.gapUntil == 0 {
+			t.Error("shell close missed the grace period")
+		}
+		windowProc(panel.state.window, wmMouseMove, 0, 0)
+		if state.hover.gapUntil != 0 {
+			t.Error("entering the panel did not cancel its close")
+		}
+		windowProc(panel.state.window, wmMouseLeave, 0, 0)
+		if state.hover.gapUntil == 0 {
+			t.Error("leaving the panel did not schedule a close")
+		}
+		state.stopItemHover(item.id)
+		if state.hover.panel != nil || panel.state.hoverStatus != nil {
+			t.Error("panel still attached after disabling hover")
 		}
 		return nil
 	})

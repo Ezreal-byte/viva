@@ -205,7 +205,7 @@ When a `Menu` is set, a press opens the system's own native menu, built by calli
 
 `StatusItem.SetIcon`, `SetTooltip` and `Remove` change or remove the icon later.
 
-For an interactive hover panel, set `PreferHoverPanel: true` when creating the icon, then call `SetHoverPanel`. Windows, macOS and directly embedded X11 tray icons support this. The X11 backend uses system GTK 3 for pointer events on embedded icons. StatusNotifier-only desktops draw their own tooltip and `SetHoverPanel` returns `false`. Use `StatusClick.Anchor` in `OnClick` to open the same content.
+Use `SetHoverPanel` for a non-activating window next to a visible Windows taskbar icon or a macOS menu bar item. Windows Explorer overflow and shells without paired popup events fall back to activation. Native menus open on hover only on macOS. Linux uses StatusNotifier by default: the desktop draws the tooltip and can open the application's panel through `OnClick`. To request a direct X11 tray, specify `LinuxTrayBackend: app.LinuxTrayXEmbed`; this requires the `vivaxembed` build tag, the XCB backend, a tray manager and system GTK 3. If the backend is unavailable, creation returns `app.ErrNoStatusArea`. A proxy tray such as UKUI owns the pointer and cannot deliver direct icon hover.
 
 ## What differs between platforms
 

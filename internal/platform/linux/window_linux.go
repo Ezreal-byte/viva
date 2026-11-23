@@ -147,7 +147,7 @@ func Run(config platform.Config) error {
 }
 
 type linuxWindowState struct {
-	hoverItem               *embeddedTrayItem
+	trayWindow
 	application             *linuxApplication
 	config                  platform.Config
 	win                     *window
@@ -180,7 +180,7 @@ type linuxWindowState struct {
 }
 
 type linuxApplication struct {
-	trayGTK      *embeddedTrayLoop
+	trayApplication
 	lastUserTime uint32 // X server timestamp of the last user press in any of our windows
 	windows      []*linuxWindowState
 	pollFDs      []pollFD
@@ -246,6 +246,7 @@ func RunApplication(start platform.ApplicationStart) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	application := &linuxApplication{}
+	defer stopClipboardWatch()
 	defer application.closeEmbeddedTray()
 	defer application.closeStatus()
 	defer application.atspiClose()
@@ -279,11 +280,7 @@ func RunApplication(start platform.ApplicationStart) error {
 				timeout = 0
 			}
 		}
-		ready := fds
-		loop := application.trayGTK
-		if loop != nil {
-			ready, timeout = loop.prepare(fds, timeout)
-		}
+		ready, timeout := application.prepareTrayWait(fds, timeout)
 		result := application.windows[0].win.api.poll(&ready[0], uintptr(len(ready)), timeout)
 		if result < 0 {
 			// A signal that reaches the thread while it sleeps ends the wait
@@ -294,9 +291,7 @@ func RunApplication(start platform.ApplicationStart) error {
 			application.fail(fmt.Errorf("linux: poll X11 connections failed (errno %d)", *application.windows[0].win.api.errnoLocation()))
 			break
 		}
-		if loop != nil {
-			loop.dispatch(ready, fds)
-		}
+		application.dispatchTray(ready, fds)
 		if application.inputMethod != nil {
 			// A key the input method never answered gives up here, not before.
 			application.inputMethod.Expire()
@@ -455,11 +450,6 @@ func (application *linuxApplication) OpenWindow(config platform.Config) (platfor
 	application.wakePosts()
 	application.atspiOpened(state)
 	application.retryDesktopWatch()
-	// XCB may already have read the first Expose during renderer setup. Wake
-	// this connection after setup so its queued events run before any input.
-	if config.OnRedraw != nil {
-		win.postRedraw()
-	}
 	if !win.preview {
 		activeWindow.Store(win)
 	}
@@ -814,9 +804,7 @@ func (application *linuxApplication) closeWindow(target *linuxWindowState) {
 	copy(application.windows[index:], application.windows[index+1:])
 	application.windows[len(application.windows)-1] = nil
 	application.windows = application.windows[:len(application.windows)-1]
-	if item := target.hoverItem; item != nil {
-		item.detachPanel()
-	}
+	target.detachTrayPanel()
 	application.removeLive(target.win)
 	if target.config.Waker != nil && target.config.OnRedraw != nil {
 		target.config.Waker.Unbind()
@@ -1149,9 +1137,7 @@ func (state *linuxWindowState) handleEvent(event unsafe.Pointer) (bool, error) {
 			return false, router.pointer(platform.PointerUp, inputEvent)
 		}
 	case xcbMotionNotify, xcbEnterNotify:
-		if state.hoverItem != nil {
-			state.hoverItem.panelCrossing(true)
-		}
+		state.trayPanelCrossing(true)
 		consumed, cancelled := win.dragMotion((*xcbInputEvent)(event))
 		if cancelled {
 			if err := router.pointerExit(); err != nil {
@@ -1163,9 +1149,7 @@ func (state *linuxWindowState) handleEvent(event unsafe.Pointer) (bool, error) {
 		}
 		return false, router.pointer(platform.PointerMove, (*xcbInputEvent)(event))
 	case xcbLeaveNotify:
-		if state.hoverItem != nil {
-			state.hoverItem.panelCrossing(false)
-		}
+		state.trayPanelCrossing(false)
 		return false, router.pointerExit()
 	case xcbKeyPress:
 		inputEvent := (*xcbInputEvent)(event)

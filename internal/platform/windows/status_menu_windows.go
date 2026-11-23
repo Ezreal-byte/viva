@@ -104,7 +104,7 @@ func buildMenu(menu uintptr, entries []platform.MenuEntry, cursor *int, count in
 // chooses once the menu has closed. window is the one that receives the item's
 // messages; it must be the foreground window while the menu is up, or a click
 // elsewhere would not close it.
-func (item *statusItem) popMenu(window uintptr, anchor platform.ScreenRect, activate bool) {
+func (item *statusItem) popMenu(window uintptr, anchor platform.ScreenRect) {
 	if item.menuOpen {
 		return
 	}
@@ -122,9 +122,7 @@ func (item *statusItem) popMenu(window uintptr, anchor platform.ScreenRect, acti
 	defer destroyMenu.Call(menu)
 	cursor := 0
 	buildMenu(menu, entries, &cursor, platform.TopLevel(entries))
-	if activate {
-		setForegroundWindow.Call(window)
-	}
+	setForegroundWindow.Call(window)
 	x, y := int32(anchor.X+anchor.Width/2), int32(anchor.Y)
 	chosen, _, _ := trackPopupMenuEx.Call(menu, tpmRightButton|tpmNoNotify|tpmReturnCmd|tpmBottomAlign, uintptr(x), uintptr(y), window, 0)
 	// The documented way to end a menu that belongs to a notification icon.

@@ -53,11 +53,20 @@ type StatusClick struct {
 	PanelDismissed bool
 }
 
+// LinuxTrayBackend selects the host protocol on Linux. Other platforms ignore it.
+type LinuxTrayBackend uint8
+
+const (
+	// LinuxTrayStatusNotifier uses the desktop StatusNotifier host (the default).
+	LinuxTrayStatusNotifier LinuxTrayBackend = iota
+	// LinuxTrayXEmbed explicitly requests a direct X11 tray with pointer events.
+	// It requires the vivaxembed build tag, XCB, a tray manager and system GTK 3.
+	LinuxTrayXEmbed
+)
+
 // StatusItemConfig describes a status item.
 type StatusItemConfig struct {
-	// PreferHoverPanel selects an embedded X11 tray when one is available so the
-	// application can receive hover events. StatusNotifier-only hosts own their tooltip.
-	PreferHoverPanel bool
+	LinuxTrayBackend LinuxTrayBackend
 	// Tooltip is shown while the pointer rests on the icon.
 	Tooltip string
 	Icon    StatusIcon
@@ -110,6 +119,14 @@ type StatusItemControl interface {
 	Remove()
 }
 
+// StatusItemHoverControl is the optional extension a custom Host implements for
+// hover and dynamic menu changes. Hosts with a click-only icon can omit it.
+type StatusItemHoverControl interface {
+	SetMenuOnHover(bool) bool
+	SetHoverPanel(func(StatusAnchor) *Window) bool
+	RefreshMenu()
+}
+
 // StatusItem is one icon the application keeps in the system's status area: the
 // menu bar on macOS, the notification area on Windows, the StatusNotifier host
 // (the tray of most Linux desktops) elsewhere.
@@ -143,19 +160,19 @@ func (item *StatusItem) RefreshMenu() {
 	if item == nil || item.removed.Load() {
 		return
 	}
-	if host, ok := item.control.(interface{ RefreshMenu() }); ok {
+	if host, ok := item.control.(StatusItemHoverControl); ok {
 		host.RefreshMenu()
 	}
 }
 
 // SetMenuOnHover asks the desktop to open the item's existing menu when the
 // pointer rests on its icon. Call on the event-loop thread. It returns false
-// on hosts such as Linux StatusNotifier that own hover presentation.
+// on hosts without a non-activating native hover menu, including Windows and Linux.
 func (item *StatusItem) SetMenuOnHover(enabled bool) bool {
 	if item == nil || item.removed.Load() {
 		return false
 	}
-	host, ok := item.control.(interface{ SetMenuOnHover(bool) bool })
+	host, ok := item.control.(StatusItemHoverControl)
 	return ok && host.SetMenuOnHover(enabled)
 }
 
@@ -169,9 +186,7 @@ func (item *StatusItem) SetHoverPanel(open func(StatusAnchor) *Window) bool {
 	if item == nil || item.removed.Load() {
 		return false
 	}
-	host, ok := item.control.(interface {
-		SetHoverPanel(func(StatusAnchor) *Window) bool
-	})
+	host, ok := item.control.(StatusItemHoverControl)
 	return ok && host.SetHoverPanel(open)
 }
 

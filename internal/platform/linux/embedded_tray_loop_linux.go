@@ -1,11 +1,10 @@
-//go:build linux && !android
+//go:build linux && !android && vivaxembed
 
 package linux
 
 import (
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"unsafe"
 
@@ -122,6 +121,37 @@ var loadEmbeddedTray = sync.OnceValue(func() *embeddedTrayAPI {
 	return g
 })
 
+type trayApplication struct{ trayGTK *embeddedTrayLoop }
+type trayWindow struct{ hoverItem *embeddedTrayItem }
+
+func (s *trayWindow) detachTrayPanel() {
+	if s.hoverItem != nil {
+		s.hoverItem.detachPanel()
+	}
+}
+func (s *trayWindow) trayPanelCrossing(inside bool) {
+	if s.hoverItem != nil {
+		s.hoverItem.panelCrossing(inside)
+	}
+}
+func (a *trayApplication) prepareTrayWait(fds []pollFD, timeout int32) ([]pollFD, int32) {
+	if a.trayGTK == nil {
+		return fds, timeout
+	}
+	return a.trayGTK.prepare(fds, timeout)
+}
+func (a *trayApplication) dispatchTray(ready, fds []pollFD) {
+	if a.trayGTK != nil {
+		a.trayGTK.dispatch(ready, fds)
+	}
+}
+func (a *linuxApplication) openEmbeddedTray(config platform.StatusItemConfig) (platform.StatusItem, error) {
+	if item := a.addEmbeddedTray(config); item != nil {
+		return item, nil
+	}
+	return nil, platform.ErrStatusAreaUnavailable
+}
+
 type embeddedTrayLoop struct {
 	app      *linuxApplication
 	g        *embeddedTrayAPI
@@ -176,17 +206,6 @@ func (a *linuxApplication) addEmbeddedTray(config platform.StatusItemConfig) *em
 		a.closeEmbeddedTray()
 	}
 	return item
-}
-
-// These desktops normally proxy XEmbed icons offscreen. Their SNI button
-// owns the mouse and its geometry, even when an X11 tray selection exists.
-func usesTrayProxy(desktops string) bool {
-	for _, name := range strings.Split(desktops, ":") {
-		if strings.EqualFold(name, "UKUI") || strings.EqualFold(name, "KDE") {
-			return true
-		}
-	}
-	return false
 }
 
 // Merge GLib's descriptors and next deadline into the existing blocking poll.

@@ -1,4 +1,4 @@
-//go:build linux && !android
+//go:build linux && !android && vivaxembed
 
 package linux
 
@@ -37,52 +37,64 @@ func trayItem(id uintptr) *embeddedTrayItem {
 	return item
 }
 
-var trayEnter = purego.NewCallback(func(_, _, id uintptr) uintptr {
-	if i := trayItem(id); i != nil && !i.removed.Load() {
-		i.crossIcon(true)
-	}
-	return 0
-})
-var trayLeave = purego.NewCallback(func(_, _, id uintptr) uintptr {
-	if i := trayItem(id); i != nil && !i.removed.Load() {
-		i.crossIcon(false)
-	}
-	return 0
-})
-var trayActivate = purego.NewCallback(func(_, id uintptr) {
-	if i := trayItem(id); i != nil && !i.removed.Load() {
-		if i.config.OnClick != nil {
-			stamp := panelDismissedAt.Load()
-			i.config.OnClick(platform.StatusClick{Button: gfx.PointerButtonPrimary, Anchor: i.anchor(), PanelDismissed: stamp != 0 && time.Duration(monotonicNow()-stamp) < panelDismissWindow})
-		} else {
-			i.popupMenu(0, 0)
+var trayEnter = sync.OnceValue(func() uintptr {
+	return purego.NewCallback(func(_, _, id uintptr) uintptr {
+		if i := trayItem(id); i != nil && !i.removed.Load() {
+			i.crossIcon(true)
 		}
-	}
+		return 0
+	})
 })
-var trayContext = purego.NewCallback(func(_ uintptr, button, timestamp uint32, id uintptr) {
-	if i := trayItem(id); i != nil && !i.removed.Load() {
-		i.popupMenu(button, timestamp)
-	}
+var trayLeave = sync.OnceValue(func() uintptr {
+	return purego.NewCallback(func(_, _, id uintptr) uintptr {
+		if i := trayItem(id); i != nil && !i.removed.Load() {
+			i.crossIcon(false)
+		}
+		return 0
+	})
 })
-var trayAction = purego.NewCallback(func(widget, id uintptr) {
-	if i := trayItem(id); i != nil && !i.removed.Load() {
-		if fn := i.actions[widget]; fn != nil {
+var trayActivate = sync.OnceValue(func() uintptr {
+	return purego.NewCallback(func(_, id uintptr) {
+		if i := trayItem(id); i != nil && !i.removed.Load() {
+			if i.config.OnClick != nil {
+				stamp := panelDismissedAt.Load()
+				i.config.OnClick(platform.StatusClick{Button: gfx.PointerButtonPrimary, Anchor: i.anchor(), PanelDismissed: stamp != 0 && time.Duration(monotonicNow()-stamp) < panelDismissWindow})
+			} else {
+				i.popupMenu(0, 0)
+			}
+		}
+	})
+})
+var trayContext = sync.OnceValue(func() uintptr {
+	return purego.NewCallback(func(_ uintptr, button, timestamp uint32, id uintptr) {
+		if i := trayItem(id); i != nil && !i.removed.Load() {
+			i.popupMenu(button, timestamp)
+		}
+	})
+})
+var trayAction = sync.OnceValue(func() uintptr {
+	return purego.NewCallback(func(widget, id uintptr) {
+		if i := trayItem(id); i != nil && !i.removed.Load() {
+			if fn := i.actions[widget]; fn != nil {
+				i.loop.app.Post(func() {
+					if !i.removed.Load() {
+						fn()
+					}
+				})
+			}
+		}
+	})
+})
+var trayMenuDone = sync.OnceValue(func() uintptr {
+	return purego.NewCallback(func(menu, id uintptr) {
+		if i := trayItem(id); i != nil {
 			i.loop.app.Post(func() {
-				if !i.removed.Load() {
-					fn()
+				if i.menu == menu {
+					i.closeMenu()
 				}
 			})
 		}
-	}
-})
-var trayMenuDone = purego.NewCallback(func(menu, id uintptr) {
-	if i := trayItem(id); i != nil {
-		i.loop.app.Post(func() {
-			if i.menu == menu {
-				i.closeMenu()
-			}
-		})
-	}
+	})
 })
 
 func (l *embeddedTrayLoop) add(config platform.StatusItemConfig) *embeddedTrayItem {
@@ -106,10 +118,10 @@ func (l *embeddedTrayLoop) add(config platform.StatusItemConfig) *embeddedTrayIt
 	embeddedItems.Store(icon, i)
 	l.items[icon] = i
 	g.addEvents(widget, 1<<12|1<<13) // GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK
-	i.signal(widget, "enter-notify-event", trayEnter)
-	i.signal(widget, "leave-notify-event", trayLeave)
-	i.signal(icon, "activate", trayActivate)
-	i.signal(icon, "popup-menu", trayContext)
+	i.signal(widget, "enter-notify-event", trayEnter())
+	i.signal(widget, "leave-notify-event", trayLeave())
+	i.signal(icon, "activate", trayActivate())
+	i.signal(icon, "popup-menu", trayContext())
 	g.iconTitle(icon, &cString(config.Tooltip)[0])
 	i.SetTooltip(config.Tooltip)
 	g.iconVisible(icon, 1)
@@ -155,6 +167,10 @@ func (i *embeddedTrayItem) SetIcon(icon platform.StatusIcon) error {
 	g.iconPixels(i.icon, image)
 	return nil
 }
+
+// The XEmbed menu is rebuilt on the opening press.
+func (*embeddedTrayItem) RefreshMenu()             {}
+func (*embeddedTrayItem) SetMenuOnHover(bool) bool { return false }
 
 func (i *embeddedTrayItem) SetTooltip(value string) {
 	if i.removed.Load() {
@@ -208,6 +224,10 @@ func (i *embeddedTrayItem) scheduleOpen() {
 	if i.open != nil && i.panel == nil && i.menu == 0 {
 		i.after(350*time.Millisecond, func() {
 			if w, ok := i.open(i.anchor()).(*nativeWindow); ok && w != nil && !w.closed.Load() {
+				if i.removed.Load() || i.open == nil {
+					w.Close()
+					return
+				}
 				i.panel = w
 				w.state.hoverItem = i
 			}
@@ -276,7 +296,7 @@ func (i *embeddedTrayItem) popupMenu(button, timestamp uint32) {
 	i.menu = i.buildMenu(entries)
 	g := i.loop.g
 	g.refSink(i.menu)
-	i.signal(i.menu, "selection-done", trayMenuDone)
+	i.signal(i.menu, "selection-done", trayMenuDone())
 	g.showAll(i.menu)
 	g.popup(i.menu, 0, 0, g.positionMenu, i.icon, button, timestamp)
 }
@@ -303,7 +323,7 @@ func (i *embeddedTrayItem) buildMenu(entries []platform.MenuItem) uintptr {
 			g.submenu(w, i.buildMenu(entry.Submenu))
 		} else if entry.OnSelect != nil && !entry.Disabled {
 			i.actions[w] = entry.OnSelect
-			i.signal(w, "activate", trayAction)
+			i.signal(w, "activate", trayAction())
 		}
 	}
 	return menu
@@ -320,7 +340,12 @@ func (i *embeddedTrayItem) closeMenu() {
 
 func (i *embeddedTrayItem) Remove() {
 	if !i.removed.Swap(true) {
-		i.loop.app.Post(i.dispose)
+		i.loop.app.Post(func() {
+			i.dispose()
+			if i.loop.app.trayGTK == i.loop && len(i.loop.items) == 0 {
+				i.loop.app.closeEmbeddedTray()
+			}
+		})
 	}
 }
 

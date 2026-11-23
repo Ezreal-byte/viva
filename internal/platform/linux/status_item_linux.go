@@ -93,7 +93,7 @@ func (win *window) panelOrigin(config platform.Config) (x, y int16) {
 		focusX, focusY = pointerX, pointerY
 	}
 	monitor, ok := monitorAt(monitors, focusX, focusY)
-	if config.WindowMode == platform.WindowNotification && config.HasOrigin {
+	if config.WindowMode == platform.WindowNotification && !config.HasAnchor && config.HasOrigin {
 		scale := win.displayScale()
 		monitor, ok = notificationMonitorAt(monitors, int(config.Origin.X*scale), int(config.Origin.Y*scale))
 	}
@@ -103,13 +103,14 @@ func (win *window) panelOrigin(config platform.Config) (x, y int16) {
 		area = platform.ScreenRect{X: float32(usable.x), Y: float32(usable.y), Width: float32(usable.width), Height: float32(usable.height)}
 	}
 	var fx, fy float32
-	if config.WindowMode == platform.WindowNotification && config.HasOrigin {
-		scale := win.displayScale()
-		fx, fy = platform.RestoreNotification(config.Origin.X*scale, config.Origin.Y*scale, width, height, area)
-	} else if config.HasAnchor {
+	if config.HasAnchor {
 		fx, fy = platform.PlacePanel(config.Anchor, width, height, area)
 	} else if config.WindowMode == platform.WindowNotification {
 		fx, fy = platform.PlaceNotification(width, height, 12*win.displayScale(), area)
+		if config.HasOrigin {
+			scale := win.displayScale()
+			fx, fy = platform.RestoreNotification(config.Origin.X*scale, config.Origin.Y*scale, width, height, area)
+		}
 	} else {
 		fx, fy = area.X+(area.Width-width)/2, area.Y+(area.Height-height)/2
 	}
@@ -395,6 +396,9 @@ type linuxStatusItem struct {
 
 // AddStatusItem registers an icon with the desktop's StatusNotifier host.
 func (services *desktopServices) AddStatusItem(config platform.StatusItemConfig) (platform.StatusItem, error) {
+	if config.LinuxTrayBackend != platform.LinuxTrayStatusNotifier {
+		return nil, platform.ErrStatusAreaUnavailable
+	}
 	if !config.Icon.Valid() {
 		return nil, errors.New("linux: status icon pixels do not match its size")
 	}
@@ -695,6 +699,10 @@ func (item *linuxStatusItem) handleMenu(call *dbus.Message) {
 	conn.Reply(call, result.Signature, result.Body)
 	item.emitMenuUpdate(result)
 }
+
+// StatusNotifier has activation and menu requests, but no pointer crossing events.
+func (*linuxStatusItem) SetHoverPanel(func(platform.ScreenRect) platform.Window) bool { return false }
+func (*linuxStatusItem) SetMenuOnHover(bool) bool                                     { return false }
 
 func (item *linuxStatusItem) RefreshMenu() {
 	if item.menu != nil && !item.removed.Load() {

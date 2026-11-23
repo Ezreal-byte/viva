@@ -216,20 +216,18 @@ func (host nativeHost) AddStatusItem(config StatusItemConfig) (StatusItemControl
 	if config.Menu != nil {
 		menu = func() []platform.MenuItem { return platformMenu(config.Menu()) }
 	}
+	var onClick func(platform.StatusClick)
+	if config.OnClick != nil {
+		onClick = func(click platform.StatusClick) {
+			config.OnClick(StatusClick{Button: click.Button, Anchor: StatusAnchor{rect: click.Anchor, set: true}, PanelDismissed: click.PanelDismissed})
+		}
+	}
 	item, err := host.native.AddStatusItem(platform.StatusItemConfig{
-		PreferHoverPanel: config.PreferHoverPanel,
+		LinuxTrayBackend: platform.LinuxTrayBackend(config.LinuxTrayBackend),
 		Tooltip:          config.Tooltip,
 		Icon:             config.Icon.platform(),
 		Menu:             menu,
-		OnClick: func(click platform.StatusClick) {
-			if config.OnClick != nil {
-				config.OnClick(StatusClick{
-					Button:         click.Button,
-					Anchor:         StatusAnchor{rect: click.Anchor, set: true},
-					PanelDismissed: click.PanelDismissed,
-				})
-			}
-		},
+		OnClick:          onClick,
 	})
 	if err != nil {
 		return nil, err
@@ -263,20 +261,13 @@ func (item nativeStatusItem) SetIcon(icon StatusIcon) error {
 	return item.item.SetIcon(icon.platform())
 }
 func (item nativeStatusItem) SetMenuOnHover(enabled bool) bool {
-	host, ok := item.item.(interface{ SetMenuOnHover(bool) bool })
-	return ok && host.SetMenuOnHover(enabled)
+	return item.item.SetMenuOnHover(enabled)
 }
 func (item nativeStatusItem) SetHoverPanel(open func(StatusAnchor) *Window) bool {
-	host, ok := item.item.(interface {
-		SetHoverPanel(func(platform.ScreenRect) platform.Window) bool
-	})
-	if !ok {
-		return false
-	}
 	if open == nil {
-		return host.SetHoverPanel(nil)
+		return item.item.SetHoverPanel(nil)
 	}
-	return host.SetHoverPanel(func(rect platform.ScreenRect) platform.Window {
+	return item.item.SetHoverPanel(func(rect platform.ScreenRect) platform.Window {
 		if window := open(StatusAnchor{rect: rect, set: true}); window != nil {
 			if control, ok := window.control.(resultWindow); ok {
 				return control.WindowControl
@@ -287,8 +278,6 @@ func (item nativeStatusItem) SetHoverPanel(open func(StatusAnchor) *Window) bool
 }
 func (item nativeStatusItem) SetTooltip(tooltip string) { item.item.SetTooltip(tooltip) }
 func (item nativeStatusItem) RefreshMenu() {
-	if host, ok := item.item.(interface{ RefreshMenu() }); ok {
-		host.RefreshMenu()
-	}
+	item.item.RefreshMenu()
 }
 func (item nativeStatusItem) Remove() { item.item.Remove() }

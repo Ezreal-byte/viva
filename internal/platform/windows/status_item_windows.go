@@ -143,7 +143,7 @@ type statusState struct {
 }
 
 type statusItem struct {
-	hoverMenu   bool
+	version4    bool
 	hoverPanel  func(platform.ScreenRect) platform.Window
 	menuOpen    bool
 	application *windowsApplication
@@ -182,7 +182,8 @@ func (application *windowsApplication) AddStatusItem(config platform.StatusItemC
 	}
 	version := item.data()
 	version.Version = notifyVersion4
-	shellNotifyIcon.Call(notifySetVersion, uintptr(unsafe.Pointer(&version)))
+	ok, _, _ := shellNotifyIcon.Call(notifySetVersion, uintptr(unsafe.Pointer(&version)))
+	item.version4 = ok != 0
 	status.items[item.id] = item
 	return item, nil
 }
@@ -226,7 +227,7 @@ func (application *windowsApplication) closeStatus() {
 	if status == nil {
 		return
 	}
-	status.hover.watchEntry = false
+
 	status.resetHover()
 	for _, item := range status.items {
 		item.delete()
@@ -247,7 +248,7 @@ func (item *statusItem) data() notifyIconData {
 		CallbackMessage: wmStatusNotify,
 		Icon:            item.icon,
 	}
-	if item.hoverMenu || item.hoverPanel != nil {
+	if item.hoverPanel != nil {
 		data.Flags &^= notifyShowTip
 	}
 	copyUTF16(data.Tip[:], item.tooltip)
@@ -271,24 +272,11 @@ func (item *statusItem) delete() {
 	}
 }
 
-func (item *statusItem) SetMenuOnHover(enabled bool) bool {
-	if item.menu == nil || item.removed.Load() {
-		return false
-	}
-	if item.hoverMenu != enabled {
-		item.hoverMenu = enabled
-		if err := item.notify(notifyModify); err != nil {
-			item.hoverMenu = !enabled
-			return false
-		}
-		if !enabled && item.hoverPanel == nil {
-			item.application.status.stopItemHover(item.id)
-		}
-	}
-	return true
-}
+// A shell context menu needs a foreground owner to dismiss on an outside
+// click. Keep it on explicit activation; hover panels use a non-activating HWND.
+func (*statusItem) SetMenuOnHover(bool) bool { return false }
+func (*statusItem) RefreshMenu()             {} // built when opened
 
-// SetIcon replaces the icon. It must run on the event-loop thread.
 func (item *statusItem) SetIcon(icon platform.StatusIcon) error {
 	if !icon.Valid() {
 		return errors.New("windows: status icon pixels do not match its size")
@@ -392,31 +380,14 @@ func statusProc(window, kind, first, second uintptr) (result uintptr) {
 	case kind == wmStatusNotify:
 		status.notified(window, first, second)
 		return 0
-	case kind == wmTimer && first == statusHoverTimer:
-		status.finishHover()
-		return 0
 	case kind == wmTimer && first == statusHoverGapTimer:
 		status.finishHoverGap()
-		return 0
-	case kind == wmStatusProbeIcon:
-		status.probeIcon()
-		return 0
-	case kind == wmStatusHoverLeave:
-		if status.hover.iconID == uint32(first) && status.hover.postedLeave {
-			status.leaveHover()
-		}
-		return 0
-	case kind == wmStatusHoverDismissMenu:
-		if status.hover.menuID == uint32(first) {
-			status.dismissHoverMenuAt(second)
-		}
 		return 0
 	case kind == wmStatusRemove:
 		if item := status.items[uint32(first)]; item != nil {
 			status.stopItemHover(item.id)
 			item.delete()
 			delete(status.items, item.id)
-			status.updateEntryWatch()
 		}
 		return 0
 	case status.taskbarCreated != 0 && uint32(kind) == status.taskbarCreated:
@@ -428,7 +399,8 @@ func statusProc(window, kind, first, second uintptr) (result uintptr) {
 				item.notify(notifyAdd)
 				version := item.data()
 				version.Version = notifyVersion4
-				shellNotifyIcon.Call(notifySetVersion, uintptr(unsafe.Pointer(&version)))
+				ok, _, _ := shellNotifyIcon.Call(notifySetVersion, uintptr(unsafe.Pointer(&version)))
+				item.version4 = ok != 0
 			}
 		}
 		return 0
@@ -452,29 +424,17 @@ func (status *statusState) notified(window, anchor, packed uintptr) {
 	}
 	switch event {
 	case ninPopupOpen:
-		// Explorer's overflow flyout can report icon-local coordinates in
-		// wParam. Read the physical pointer, as for WM_MOUSEMOVE, before
-		// choosing between the icon rectangle and the pointer fallback.
-		cursor := point{X: int32(int16(anchor)), Y: int32(int16(anchor >> 16))}
-		getCursorPos.Call(uintptr(unsafe.Pointer(&cursor)))
-		status.beginHover(item, cursor, true)
+		if !legacy && item.hoverPanel != nil {
+			if bounds, ok := item.hoverBounds(); ok {
+				var cursor point
+				if valid, _, _ := getCursorPos.Call(uintptr(unsafe.Pointer(&cursor))); valid != 0 && hoverContains(bounds, cursor) {
+					status.openHover(item, bounds)
+				}
+			}
+		}
 		return
 	case ninPopupClose:
-		var cursor point
-		if status.hover.iconID == item.id {
-			if ok, _, _ := getCursorPos.Call(uintptr(unsafe.Pointer(&cursor))); ok != 0 && !hoverContains(status.hover.anchor, cursor) {
-				status.leaveHover()
-			}
-		}
-		return
-	case wmMouseMove:
-		// The shell may only report motion for an icon in its overflow.
-		var cursor point
-		if item.canHover() {
-			if ok, _, _ := getCursorPos.Call(uintptr(unsafe.Pointer(&cursor))); ok != 0 {
-				status.beginHover(item, cursor, false)
-			}
-		}
+		status.leaveHover(item.id)
 		return
 	}
 	if legacy {
@@ -494,13 +454,12 @@ func (status *statusState) notified(window, anchor, packed uintptr) {
 	if !ok {
 		return
 	}
-	status.cancelHoverDwell()
 	status.closeHoverPanel()
 	// A primary activation belongs to the application when it supplied a
 	// callback (for example, to restore its window). Keep menu-only icons
 	// clickable, and reserve secondary activation for the context menu.
 	if item.menu != nil && (button == gfx.PointerButtonSecondary || item.onClick == nil) {
-		item.popMenu(window, item.anchor(window, anchor), true)
+		item.popMenu(window, item.anchor(window, anchor))
 		return
 	}
 	stamp := panelDismissedAt.Load()
