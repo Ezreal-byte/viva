@@ -124,18 +124,20 @@ func (state *linuxWindowState) handleDragMessage(message *xcbClientEvent) error 
 		return err
 	case atoms.drop:
 		source := clientLong(message, 0)
+		timestamp := clientLong(message, 2)
 		drag := state.drag
 		state.drag = xdndDrag{}
 		if source != drag.source || !drag.wantsURIs {
 			win.sendDragReply(source, atoms.finished, false, 0)
 			return nil
 		}
-		text, ok, err := win.readDropSelection()
+		text, ok, readErr := win.readDropSelection(timestamp)
 		paths := []string(nil)
-		if err == nil && ok {
+		if readErr == nil && ok {
 			paths = parseURIList(text)
 		}
 		accepted := false
+		var err error
 		if len(paths) > 0 {
 			frame, taken, dropErr := config.OnFileDrop(platform.FileDropEvent{Phase: platform.FileDropDrop, X: drag.x, Y: drag.y, Paths: paths})
 			accepted = taken
@@ -143,6 +145,14 @@ func (state *linuxWindowState) handleDragMessage(message *xcbClientEvent) error 
 				dropErr = state.router.present(frame)
 			}
 			err = dropErr
+		} else {
+			// A timed-out or empty selection transfer from an external drag
+			// source must end the hover cleanly instead of closing the window.
+			frame, _, leaveErr := config.OnFileDrop(platform.FileDropEvent{Phase: platform.FileDropLeave})
+			if leaveErr == nil {
+				leaveErr = state.router.present(frame)
+			}
+			err = leaveErr
 		}
 		win.sendDragReply(source, atoms.finished, accepted, 0)
 		return err
@@ -150,7 +160,7 @@ func (state *linuxWindowState) handleDragMessage(message *xcbClientEvent) error 
 	return nil
 }
 
-func (win *window) readDropSelection() (string, bool, error) {
+func (win *window) readDropSelection(timestamp uint32) (string, bool, error) {
 	api, connection, requestor, selection, owner, err := openSelectionRequest("XdndSelection")
 	if err != nil {
 		return "", false, err
@@ -159,7 +169,12 @@ func (win *window) readDropSelection() (string, bool, error) {
 	if owner == xcbAtomNone {
 		return "", false, nil
 	}
-	return readSelection(api, connection, requestor, selection, win.xdnd.uriList, win.xdnd.dropProperty)
+	text, ok, err := readSelectionAt(api, connection, requestor, selection, win.xdnd.uriList, win.xdnd.dropProperty, timestamp)
+	if (err != nil || !ok) && timestamp != 0 {
+		// Fall back to CurrentTime for older sources that reject a stale drop timestamp.
+		return readSelectionAt(api, connection, requestor, selection, win.xdnd.uriList, win.xdnd.dropProperty, 0)
+	}
+	return text, ok, err
 }
 
 // dragTypeList reads the types the source offers when there are more than three.

@@ -516,7 +516,11 @@ func closeClipboardRequest() {
 // the property it wrote, with its type. accepted is false when the owner
 // refused the target. A property above limit bytes is ErrClipboardImageTooLarge.
 func readSelectionBytes(api *xcbAPI, connection uintptr, requestor, selection, target, property uint32, limit int) (data []byte, kind uint32, accepted bool, err error) {
-	api.convertSelection(connection, requestor, selection, target, property, 0)
+	return readSelectionBytesAt(api, connection, requestor, selection, target, property, 0, limit)
+}
+
+func readSelectionBytesAt(api *xcbAPI, connection uintptr, requestor, selection, target, property, timestamp uint32, limit int) (data []byte, kind uint32, accepted bool, err error) {
+	api.convertSelection(connection, requestor, selection, target, property, timestamp)
 	if api.flush(connection) <= 0 || api.connectionHasError(connection) != 0 {
 		return nil, 0, false, fmt.Errorf("linux: request clipboard data: XCB connection failed")
 	}
@@ -1203,18 +1207,22 @@ func readLegacySelection(api *xcbAPI, connection uintptr, requestor, selection, 
 // readSelection asks the owner for target as text. A text bigger than one property comes in
 // pieces (INCR), as readSelectionBytes collects them.
 func readSelection(api *xcbAPI, connection uintptr, requestor, selection, target, property uint32) (string, bool, error) {
-	return readSelectionText(api, connection, requestor, selection, target, property, false)
+	return readSelectionTextAt(api, connection, requestor, selection, target, property, 0, false)
+}
+
+func readSelectionAt(api *xcbAPI, connection uintptr, requestor, selection, target, property, timestamp uint32) (string, bool, error) {
+	return readSelectionTextAt(api, connection, requestor, selection, target, property, timestamp, false)
 }
 
 // readTypedSelection is readSelection for the clipboard text readers: an owner that answers
 // with another type than the one asked for (a binary payload from an unadvertised request)
 // is treated as having no text.
 func readTypedSelection(api *xcbAPI, connection uintptr, requestor, selection, target, property uint32) (string, bool, error) {
-	return readSelectionText(api, connection, requestor, selection, target, property, true)
+	return readSelectionTextAt(api, connection, requestor, selection, target, property, 0, true)
 }
 
-func readSelectionText(api *xcbAPI, connection uintptr, requestor, selection, target, property uint32, typed bool) (string, bool, error) {
-	data, kind, accepted, err := readSelectionBytes(api, connection, requestor, selection, target, property, maxClipboardBytes)
+func readSelectionTextAt(api *xcbAPI, connection uintptr, requestor, selection, target, property, timestamp uint32, typed bool) (string, bool, error) {
+	data, kind, accepted, err := readSelectionBytesAt(api, connection, requestor, selection, target, property, timestamp, maxClipboardBytes)
 	if errors.Is(err, platform.ErrClipboardImageTooLarge) {
 		return "", false, fmt.Errorf("linux: clipboard text exceeds 64 MiB")
 	}
