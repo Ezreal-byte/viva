@@ -14,7 +14,7 @@ import (
 )
 
 func TestURIListsBecomeLocalPaths(t *testing.T) {
-	got := parseURIList("# a comment\r\nfile:///tmp/a%20b.txt\r\nfile://localhost/tmp/dir\nhttp://example.com/x\nfile://other-host/tmp/y\nfile:relative\n\nfile:///tmp/caf%C3%A9\n")
+	got := parseURIList("# a comment\r\nfile:///tmp/a%20b.txt\r\nfile://localhost/tmp/dir\nhttp://example.com/x\nfile://other-host/tmp/y\nfile:relative\n\nfile:///tmp/caf%C3%A9\n\x00")
 	want := []string{"/tmp/a b.txt", "/tmp/dir", "/tmp/café"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("paths = %q, want %q", got, want)
@@ -210,5 +210,168 @@ func TestAFileDragFromAnotherClientIsAcceptedAndDropped(t *testing.T) {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("the window did not close")
+	}
+}
+
+func TestDropSelectionFallbackToWindowAndPreservesQueuedEvents(t *testing.T) {
+	const (
+		sourceWin     uint32 = 10
+		targetWin     uint32 = 20
+		sharedReqWin  uint32 = 30
+		dropAtom      uint32 = 40
+		finishedAtom  uint32 = 41
+		selectionAtom uint32 = 42
+		actionCopy    uint32 = 43
+		uriListAtom   uint32 = 44
+		dropProperty  uint32 = 45
+		dropTimestamp uint32 = 777
+	)
+
+	selections.mu.Lock()
+	prevAPI, prevConn, prevReq := selections.api, selections.connection, selections.requestor
+	selections.mu.Unlock()
+	t.Cleanup(func() {
+		selections.mu.Lock()
+		selections.api, selections.connection, selections.requestor = prevAPI, prevConn, prevReq
+		selections.mu.Unlock()
+	})
+
+	refusal := xcbSelectionNotifyEvent{
+		ResponseType: xcbSelectionNotify,
+		Requestor:    sharedReqWin,
+		Selection:    selectionAtom,
+		Target:       xcbAtomNone,
+		Property:     xcbAtomNone,
+	}
+	selReplied := false
+	selAPI := &xcbAPI{
+		atoms:              map[string]uint32{"XdndSelection": selectionAtom},
+		connectionHasError: func(uintptr) int32 { return 0 },
+		flush:              func(uintptr) int32 { return 1 },
+		fileDescriptor:     func(uintptr) int32 { return 1 },
+		free:               func(unsafe.Pointer) {},
+		getSelectionOwner:  func(uintptr, uint32) xcbSelectionOwnerCookie { return xcbSelectionOwnerCookie{} },
+		selectionOwnerReply: func(uintptr, xcbSelectionOwnerCookie, *unsafe.Pointer) *xcbSelectionOwnerReply {
+			return &xcbSelectionOwnerReply{Owner: sourceWin}
+		},
+		convertSelection: func(uintptr, uint32, uint32, uint32, uint32, uint32) xcbVoidCookie {
+			selReplied = false
+			return xcbVoidCookie{}
+		},
+		pollForEvent: func(uintptr) unsafe.Pointer {
+			if selReplied {
+				return nil
+			}
+			selReplied = true
+			return unsafe.Pointer(&refusal)
+		},
+		poll: func(*pollFD, uintptr, int32) int32 {
+			t.Fatal("shared selection wait polled after Target=None, Property=None refusal")
+			return 0
+		},
+	}
+	selections.mu.Lock()
+	selections.api, selections.connection, selections.requestor = selAPI, 1, sharedReqWin
+	selections.mu.Unlock()
+
+	payload := []byte("file:///tmp/from-qt5.png\r\n")
+	queuedExpose := xcbExposeEvent{ResponseType: xcbExpose, Window: targetWin}
+	winNotify := xcbSelectionNotifyEvent{
+		ResponseType: xcbSelectionNotify,
+		Requestor:    targetWin,
+		Selection:    selectionAtom,
+		Target:       uriListAtom,
+		Property:     dropProperty,
+	}
+	winQueue := []unsafe.Pointer{unsafe.Pointer(&queuedExpose), unsafe.Pointer(&winNotify)}
+	var sentReply xcbClientEvent
+	var winReqTimestamp uint32
+	winAPI := &xcbAPI{
+		atoms:              map[string]uint32{"INCR": 99},
+		connectionHasError: func(uintptr) int32 { return 0 },
+		flush:              func(uintptr) int32 { return 1 },
+		fileDescriptor:     func(uintptr) int32 { return 2 },
+		free:               func(unsafe.Pointer) {},
+		getSelectionOwner:  func(uintptr, uint32) xcbSelectionOwnerCookie { return xcbSelectionOwnerCookie{} },
+		selectionOwnerReply: func(uintptr, xcbSelectionOwnerCookie, *unsafe.Pointer) *xcbSelectionOwnerReply {
+			return &xcbSelectionOwnerReply{Owner: sourceWin}
+		},
+		convertSelection: func(_ uintptr, requestor, _, _, _, timestamp uint32) xcbVoidCookie {
+			if requestor != targetWin {
+				t.Fatalf("fallback convertSelection requestor = %d, want %d", requestor, targetWin)
+			}
+			winReqTimestamp = timestamp
+			return xcbVoidCookie{}
+		},
+		pollForEvent: func(uintptr) unsafe.Pointer {
+			if len(winQueue) == 0 {
+				return nil
+			}
+			ev := winQueue[0]
+			winQueue = winQueue[1:]
+			return ev
+		},
+		poll: func(*pollFD, uintptr, int32) int32 {
+			t.Fatal("window selection fallback polled unexpectedly")
+			return 0
+		},
+		getProperty: func(uintptr, uint8, uint32, uint32, uint32, uint32, uint32) xcbPropertyCookie {
+			return xcbPropertyCookie{}
+		},
+		getPropertyReply: func(uintptr, xcbPropertyCookie, *unsafe.Pointer) *xcbPropertyReply {
+			return &xcbPropertyReply{Format: 8, Type: uriListAtom}
+		},
+		getPropertyLength: func(*xcbPropertyReply) int32 { return int32(len(payload)) },
+		getPropertyValue:  func(*xcbPropertyReply) unsafe.Pointer { return unsafe.Pointer(&payload[0]) },
+		sendEvent: func(_ uintptr, _ uint8, _ uint32, _ uint32, data *byte) xcbVoidCookie {
+			copy(unsafe.Slice((*byte)(unsafe.Pointer(&sentReply)), unsafe.Sizeof(sentReply)), unsafe.Slice(data, unsafe.Sizeof(sentReply)))
+			return xcbVoidCookie{}
+		},
+	}
+
+	var gotEvents []platform.FileDropEvent
+	state := &linuxWindowState{
+		win: &window{
+			api:        winAPI,
+			connection: 2,
+			id:         targetWin,
+			xdnd: xdndAtoms{
+				drop:         dropAtom,
+				finished:     finishedAtom,
+				selection:    selectionAtom,
+				actionCopy:   actionCopy,
+				uriList:      uriListAtom,
+				dropProperty: dropProperty,
+			},
+		},
+		config: platform.Config{
+			OnFileDrop: func(event platform.FileDropEvent) (platform.Frame, bool, error) {
+				gotEvents = append(gotEvents, event)
+				return platform.Frame{}, true, nil
+			},
+		},
+		router: eventRouter{present: func(platform.Frame) error { return nil }},
+		drag:   xdndDrag{source: sourceWin, wantsURIs: true, x: 12, y: 34},
+	}
+
+	msg := xcbClientEvent{ResponseType: xcbClientMessage, Format: 32, Window: targetWin, Type: dropAtom}
+	binary.LittleEndian.PutUint32(msg.Data[0:], sourceWin)
+	binary.LittleEndian.PutUint32(msg.Data[8:], dropTimestamp)
+
+	if err := state.handleDragMessage(&msg); err != nil {
+		t.Fatalf("handleDragMessage returned error: %v", err)
+	}
+	if winReqTimestamp != dropTimestamp {
+		t.Fatalf("fallback timestamp = %d, want %d", winReqTimestamp, dropTimestamp)
+	}
+	if len(gotEvents) != 1 || gotEvents[0].Phase != platform.FileDropDrop || !reflect.DeepEqual(gotEvents[0].Paths, []string{"/tmp/from-qt5.png"}) {
+		t.Fatalf("events = %+v, want one drop with /tmp/from-qt5.png", gotEvents)
+	}
+	if sentReply.Type != finishedAtom || clientLong(&sentReply, 1) != 1 || clientLong(&sentReply, 2) != actionCopy {
+		t.Fatalf("XdndFinished reply = type %d flags %d action %d, want accepted copy action in data[2]",
+			sentReply.Type, clientLong(&sentReply, 1), clientLong(&sentReply, 2))
+	}
+	if replayed := state.takeHeld(); replayed != unsafe.Pointer(&queuedExpose) {
+		t.Fatalf("replayed event = %p, want queued expose %p", replayed, &queuedExpose)
 	}
 }

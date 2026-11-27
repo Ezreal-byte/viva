@@ -134,7 +134,11 @@ type window struct {
 	shapeLibrary    uintptr
 }
 
-var activeWindow atomic.Pointer[window]
+var (
+	activeWindow   atomic.Pointer[window]
+	clipboardOwner atomic.Pointer[window]
+	primaryOwner   atomic.Pointer[window]
+)
 
 // displayScale is the device pixels per logical pixel of this window's display.
 func (win *window) displayScale() float32 {
@@ -852,6 +856,8 @@ func (application *linuxApplication) closeWindow(target *linuxWindowState) {
 	}
 	target.heldQueue = nil
 	target.win.saveClipboardToManager()
+	clipboardOwner.CompareAndSwap(target.win, nil)
+	primaryOwner.CompareAndSwap(target.win, nil)
 	target.renderer.close()
 	target.text.close()
 	target.win.close()

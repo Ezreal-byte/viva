@@ -53,11 +53,12 @@ const (
 	vkFenceSignaled                  = 1
 	vkFormatBGRA8                    = 44
 	vkColorSpaceSRGB                 = 0
-	vkSuccess                        = 0
-	vkSuboptimal                     = 1000001003
-	vkErrorOutOfDate                 = -1000001004
-	vkErrorInitializationFailed      = -3
-	vkErrorIncompatibleDriver        = -9
+	vkSuccess                   = 0
+	vkSuboptimal                = 1000001003
+	vkErrorOutOfDate            = -1000001004
+	vkErrorInitializationFailed = -3
+	vkErrorExtensionNotPresent  = -7
+	vkErrorIncompatibleDriver   = -9
 	// vkPropertiesSize is sizeof(VkPhysicalDeviceProperties); deviceType is
 	// the 32-bit field at offset 16.
 	vkPropertiesSize             = 824

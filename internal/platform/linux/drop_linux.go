@@ -132,6 +132,14 @@ func (state *linuxWindowState) handleDragMessage(message *xcbClientEvent) error 
 			return nil
 		}
 		text, ok, readErr := win.readDropSelection(timestamp)
+		if readErr == nil && !ok {
+			// Some XDND sources (such as Qt's QXcbDrag when XdndDrop carries
+			// timestamp 0) match ConvertSelection.requestor against the drop
+			// target window rather than the shared selection requestor. Retry
+			// on win.id while preserving any unrelated events queued on the
+			// window's connection.
+			text, ok, readErr = state.readWindowDropSelection(timestamp)
+		}
 		paths := []string(nil)
 		if readErr == nil && ok {
 			paths = parseURIList(text)
@@ -170,9 +178,37 @@ func (win *window) readDropSelection(timestamp uint32) (string, bool, error) {
 		return "", false, nil
 	}
 	text, ok, err := readSelectionAt(api, connection, requestor, selection, win.xdnd.uriList, win.xdnd.dropProperty, timestamp)
-	if (err != nil || !ok) && timestamp != 0 {
-		// Fall back to CurrentTime for older sources that reject a stale drop timestamp.
+	if err == nil && !ok && timestamp != 0 {
+		// Fall back to CurrentTime for sources that explicitly refuse a stale
+		// drop timestamp; do not retry after a timeout.
 		return readSelectionAt(api, connection, requestor, selection, win.xdnd.uriList, win.xdnd.dropProperty, 0)
+	}
+	return text, ok, err
+}
+
+// readWindowDropSelection reads XdndSelection with the drop target window as
+// requestor while holding any unrelated events arriving on win.connection so
+// redraws and other window messages are replayed in order after the transfer.
+func (state *linuxWindowState) readWindowDropSelection(timestamp uint32) (string, bool, error) {
+	win := state.win
+	if win == nil || win.connection == 0 || win.api == nil || win.api.convertSelection == nil || win.api.pollForEvent == nil {
+		return "", false, nil
+	}
+	if win.api.getSelectionOwner != nil && win.api.selectionOwnerReply != nil {
+		owner, err := selectionOwner(win.api, win.connection, win.xdnd.selection)
+		if err != nil || owner == xcbAtomNone {
+			return "", false, err
+		}
+	}
+	var deferred []unsafe.Pointer
+	defer func() {
+		if len(deferred) > 0 {
+			state.holdEvents(deferred...)
+		}
+	}()
+	text, ok, err := readSelectionTextWithEvents(win.api, win.connection, win.id, win.xdnd.selection, win.xdnd.uriList, win.xdnd.dropProperty, timestamp, false, &deferred)
+	if err == nil && !ok && timestamp != 0 {
+		return readSelectionTextWithEvents(win.api, win.connection, win.id, win.xdnd.selection, win.xdnd.uriList, win.xdnd.dropProperty, 0, false, &deferred)
 	}
 	return text, ok, err
 }
@@ -228,7 +264,13 @@ func (win *window) sendDragReply(source, kind uint32, accepted bool, _ uint32) {
 	binary.LittleEndian.PutUint32(event.Data[0:], win.id)
 	if accepted {
 		binary.LittleEndian.PutUint32(event.Data[4:], 1)
-		binary.LittleEndian.PutUint32(event.Data[16:], win.xdnd.actionCopy)
+		// XDND v5 places the performed action in data.l[2] of XdndFinished and
+		// the accepted action in data.l[4] of XdndStatus.
+		if kind == win.xdnd.finished {
+			binary.LittleEndian.PutUint32(event.Data[8:], win.xdnd.actionCopy)
+		} else {
+			binary.LittleEndian.PutUint32(event.Data[16:], win.xdnd.actionCopy)
+		}
 	}
 	win.api.sendEvent(win.connection, 0, source, 0, (*byte)(unsafe.Pointer(&event)))
 	win.api.flush(win.connection)
@@ -238,7 +280,7 @@ func (win *window) sendDragReply(source, kind uint32, accepted bool, _ uint32) {
 // this machine are taken; comments and anything else are ignored.
 func parseURIList(text string) []string {
 	var paths []string
-	for _, line := range strings.FieldsFunc(text, func(r rune) bool { return r == '\n' || r == '\r' }) {
+	for _, line := range strings.FieldsFunc(strings.TrimRight(text, "\x00"), func(r rune) bool { return r == '\n' || r == '\r' }) {
 		if len(paths) == maxDroppedURIs {
 			break
 		}

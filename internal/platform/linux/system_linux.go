@@ -34,7 +34,10 @@ const (
 	clipboardOwnerPoll = 15 * time.Millisecond
 )
 
-var ErrUnsupported = errors.New("linux: system integration is unsupported")
+var (
+	ErrUnsupported      = errors.New("linux: system integration is unsupported")
+	errSelectionTimeout = errors.New("clipboard owner did not respond")
+)
 
 type FileFilter struct {
 	Name    string
@@ -60,13 +63,23 @@ type SaveFileOptions struct {
 	Filters          []FileFilter
 }
 
+func currentClipboardOwner() *window {
+	if activeWindow.Load() == nil {
+		return nil
+	}
+	if win := clipboardOwner.Load(); win != nil {
+		return win
+	}
+	return activeWindow.Load()
+}
+
 func ClipboardText() (string, error) {
 	if hooks := shellHooks.Load(); hooks != nil {
 		return hooks.clipboardText()
 	}
-	if win := activeWindow.Load(); win != nil {
+	if win := currentClipboardOwner(); win != nil {
 		win.mu.Lock()
-		if activeWindow.Load() == win && win.clipboardOwnedLocked() {
+		if win.clipboardOwnedLocked() {
 			value := win.clipboard
 			win.mu.Unlock()
 			return value, nil
@@ -389,13 +402,13 @@ func ClipboardFiles() ([]string, error) {
 // ownsClipboardText reports whether this process's window is the CLIPBOARD
 // owner. The clipboard holds the window's text, files, picture, or several.
 func ownsClipboardText() bool {
-	win := activeWindow.Load()
+	win := currentClipboardOwner()
 	if win == nil {
 		return false
 	}
 	win.mu.Lock()
 	defer win.mu.Unlock()
-	return activeWindow.Load() == win && win.clipboardOwnedLocked()
+	return win.clipboardOwnedLocked()
 }
 
 // SelectionClear can still be queued when a background owner finishes a copy.
@@ -415,19 +428,20 @@ func (win *window) clipboardOwnedLocked() bool {
 	}
 	win.clipboard, win.clipboardHTML, win.clipboardFiles, win.clipboardImage = "", "", nil, nil
 	win.ownsClipboard = false
+	clipboardOwner.CompareAndSwap(win, nil)
 	return false
 }
 
 // ownedClipboardImage is the picture this window's clipboard holds, and whether
 // it holds one at all: it is the CLIPBOARD owner, with an image on it.
 func ownedClipboardImage() ([]byte, bool) {
-	win := activeWindow.Load()
+	win := currentClipboardOwner()
 	if win == nil {
 		return nil, false
 	}
 	win.mu.Lock()
 	defer win.mu.Unlock()
-	if activeWindow.Load() != win || !win.clipboardOwnedLocked() || len(win.clipboardImage) == 0 {
+	if !win.clipboardOwnedLocked() || len(win.clipboardImage) == 0 {
 		return nil, false
 	}
 	return append([]byte(nil), win.clipboardImage...), true
@@ -436,13 +450,13 @@ func ownedClipboardImage() ([]byte, bool) {
 // ownedClipboardFiles is the file list this window owns, and whether it owns
 // the clipboard at all (with text or files).
 func ownedClipboardFiles() ([]string, bool) {
-	win := activeWindow.Load()
+	win := currentClipboardOwner()
 	if win == nil {
 		return nil, false
 	}
 	win.mu.Lock()
 	defer win.mu.Unlock()
-	if activeWindow.Load() != win || !win.clipboardOwnedLocked() {
+	if !win.clipboardOwnedLocked() {
 		return nil, false
 	}
 	return append([]string(nil), win.clipboardFiles...), true
@@ -520,11 +534,15 @@ func readSelectionBytes(api *xcbAPI, connection uintptr, requestor, selection, t
 }
 
 func readSelectionBytesAt(api *xcbAPI, connection uintptr, requestor, selection, target, property, timestamp uint32, limit int) (data []byte, kind uint32, accepted bool, err error) {
+	return readSelectionBytesWithEvents(api, connection, requestor, selection, target, property, timestamp, limit, nil)
+}
+
+func readSelectionBytesWithEvents(api *xcbAPI, connection uintptr, requestor, selection, target, property, timestamp uint32, limit int, collect *[]unsafe.Pointer) (data []byte, kind uint32, accepted bool, err error) {
 	api.convertSelection(connection, requestor, selection, target, property, timestamp)
 	if api.flush(connection) <= 0 || api.connectionHasError(connection) != 0 {
 		return nil, 0, false, fmt.Errorf("linux: request clipboard data: XCB connection failed")
 	}
-	event, err := waitForSelection(api, connection, requestor, selection, target, clipboardWait)
+	event, err := waitForSelectionEvents(api, connection, requestor, selection, target, clipboardWait, collect)
 	if err != nil {
 		return nil, 0, false, err
 	}
@@ -550,7 +568,7 @@ func readSelectionBytesAt(api *xcbAPI, connection uintptr, requestor, selection,
 		// The first reply only announces a stream (and, in a CARD32, its size,
 		// which an owner may get wrong, so it is not trusted); reading it with
 		// delete set already told the owner to begin.
-		data, err := readIncrementally(api, connection, requestor, property, limit)
+		data, err := readIncrementallyWithEvents(api, connection, requestor, property, limit, collect)
 		return data, reply.Type, true, err
 	}
 	length := int(api.getPropertyLength(reply))
@@ -572,10 +590,14 @@ func readSelectionBytesAt(api *xcbAPI, connection uintptr, requestor, selection,
 // limit, so an owner that stalls or never stops costs a timeout or ErrTooLarge and
 // not memory.
 func readIncrementally(api *xcbAPI, connection uintptr, requestor, property uint32, limit int) ([]byte, error) {
+	return readIncrementallyWithEvents(api, connection, requestor, property, limit, nil)
+}
+
+func readIncrementallyWithEvents(api *xcbAPI, connection uintptr, requestor, property uint32, limit int, collect *[]unsafe.Pointer) ([]byte, error) {
 	var data []byte
 	file := pollFD{FD: api.fileDescriptor(connection), Events: xcbPollInput}
 	for {
-		if err := waitForNewValue(api, connection, requestor, property, &file); err != nil {
+		if err := waitForNewValueEvents(api, connection, requestor, property, &file, collect); err != nil {
 			return nil, err
 		}
 		cookie := api.getProperty(connection, 1, requestor, property, xcbAtomAny, 0, uint32(limit/4)+1)
@@ -617,14 +639,23 @@ func readIncrementally(api *xcbAPI, connection uintptr, requestor, property uint
 // waitForNewValue waits, up to clipboardWait, for the owner to write the next
 // chunk: a PropertyNotify on property of the requestor with state NewValue.
 func waitForNewValue(api *xcbAPI, connection uintptr, requestor, property uint32, file *pollFD) error {
+	return waitForNewValueEvents(api, connection, requestor, property, file, nil)
+}
+
+func waitForNewValueEvents(api *xcbAPI, connection uintptr, requestor, property uint32, file *pollFD, collect *[]unsafe.Pointer) error {
 	deadline := time.Now().Add(clipboardWait)
 	for {
 		for event := api.pollForEvent(connection); event != nil; event = api.pollForEvent(connection) {
 			notify := (*xcbPropertyEvent)(event)
 			match := notify.ResponseType&0x7f == xcbPropertyNotify && notify.Window == requestor && notify.Atom == property && notify.State == 0
-			api.free(event)
 			if match {
+				api.free(event)
 				return nil
+			}
+			if collect != nil {
+				*collect = append(*collect, event)
+			} else {
+				api.free(event)
 			}
 		}
 		remaining := time.Until(deadline)
@@ -1222,7 +1253,11 @@ func readTypedSelection(api *xcbAPI, connection uintptr, requestor, selection, t
 }
 
 func readSelectionTextAt(api *xcbAPI, connection uintptr, requestor, selection, target, property, timestamp uint32, typed bool) (string, bool, error) {
-	data, kind, accepted, err := readSelectionBytesAt(api, connection, requestor, selection, target, property, timestamp, maxClipboardBytes)
+	return readSelectionTextWithEvents(api, connection, requestor, selection, target, property, timestamp, typed, nil)
+}
+
+func readSelectionTextWithEvents(api *xcbAPI, connection uintptr, requestor, selection, target, property, timestamp uint32, typed bool, collect *[]unsafe.Pointer) (string, bool, error) {
+	data, kind, accepted, err := readSelectionBytesWithEvents(api, connection, requestor, selection, target, property, timestamp, maxClipboardBytes, collect)
 	if errors.Is(err, platform.ErrClipboardImageTooLarge) {
 		return "", false, fmt.Errorf("linux: clipboard text exceeds 64 MiB")
 	}
@@ -1242,19 +1277,31 @@ func readSelectionTextAt(api *xcbAPI, connection uintptr, requestor, selection, 
 }
 
 func waitForSelection(api *xcbAPI, connection uintptr, requestor, selection, target uint32, timeout time.Duration) (unsafe.Pointer, error) {
+	return waitForSelectionEvents(api, connection, requestor, selection, target, timeout, nil)
+}
+
+func waitForSelectionEvents(api *xcbAPI, connection uintptr, requestor, selection, target uint32, timeout time.Duration, collect *[]unsafe.Pointer) (unsafe.Pointer, error) {
 	deadline := time.Now().Add(timeout)
 	file := pollFD{FD: api.fileDescriptor(connection), Events: xcbPollInput}
 	for {
 		for event := api.pollForEvent(connection); event != nil; event = api.pollForEvent(connection) {
 			notify := (*xcbSelectionNotifyEvent)(event)
-			if notify.ResponseType&0x7f == xcbSelectionNotify && notify.Requestor == requestor && notify.Selection == selection && notify.Target == target {
+			// Some owners (including Qt's QXcbDrag) reply with Target=None and
+			// Property=None when refusing a request; treat that as this request's
+			// rejection rather than waiting out the full timeout.
+			if notify.ResponseType&0x7f == xcbSelectionNotify && notify.Requestor == requestor && notify.Selection == selection &&
+				(notify.Target == target || (notify.Target == xcbAtomNone && notify.Property == xcbAtomNone)) {
 				return event, nil
 			}
-			api.free(event)
+			if collect != nil {
+				*collect = append(*collect, event)
+			} else {
+				api.free(event)
+			}
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return nil, fmt.Errorf("linux: clipboard owner did not respond within %s", timeout)
+			return nil, fmt.Errorf("linux: %w within %s", errSelectionTimeout, timeout)
 		}
 		milliseconds := remaining.Milliseconds()
 		if milliseconds < 1 {
@@ -1268,7 +1315,7 @@ func waitForSelection(api *xcbAPI, connection uintptr, requestor, selection, tar
 			continue
 		}
 		if ready == 0 {
-			return nil, fmt.Errorf("linux: clipboard owner did not respond within %s", timeout)
+			return nil, fmt.Errorf("linux: %w within %s", errSelectionTimeout, timeout)
 		}
 		if ready < 0 {
 			return nil, fmt.Errorf("linux: wait for clipboard owner failed")

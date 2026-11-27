@@ -1,6 +1,12 @@
 package vulkan
 
-import "testing"
+import (
+	"errors"
+	"testing"
+	"unsafe"
+
+	"github.com/vivaui/viva/internal/platform"
+)
 
 // Windows draw with one Vulkan device: the second window makes no instance or
 // device of its own, closing one window leaves the others drawing, and the
@@ -65,5 +71,31 @@ func TestALostDeviceIsReplacedForEveryWindow(t *testing.T) {
 	}
 	if err := first.Present(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVulkanMissingExtensionFallsBackToNoGraphics(t *testing.T) {
+	instanceDevice := &vulkanDevice{
+		api: &vulkanAPI{
+			createInstance: func(*vkInstanceCreateInfo, unsafe.Pointer, *uintptr) int32 {
+				return vkErrorExtensionNotPresent
+			},
+		},
+	}
+	if err := instanceDevice.createInstance(nil); !errors.Is(err, platform.ErrNoGraphics) {
+		t.Fatalf("createInstance(-7) err = %v, want platform.ErrNoGraphics", err)
+	}
+
+	logicalDevice := &vulkanDevice{
+		physical: 1,
+		api: &vulkanAPI{
+			getPhysicalDeviceFeatures: func(uintptr, *[vkFeatureCount]uint32) {},
+			createDevice: func(uintptr, *vkDeviceCreateInfo, unsafe.Pointer, *uintptr) int32 {
+				return vkErrorExtensionNotPresent
+			},
+		},
+	}
+	if err := logicalDevice.createLogical(nil); !errors.Is(err, platform.ErrNoGraphics) {
+		t.Fatalf("createLogical(-7) err = %v, want platform.ErrNoGraphics", err)
 	}
 }

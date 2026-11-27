@@ -97,6 +97,7 @@ func SetPrimaryText(value string) error {
 		if win.selections.ownsPrimary {
 			win.api.setSelectionOwner(win.connection, xcbAtomNone, xcbAtomPrimary, 0)
 			win.selections.primary, win.selections.ownsPrimary = "", false
+			primaryOwner.CompareAndSwap(win, nil)
 			if win.api.flush(win.connection) <= 0 || win.api.connectionHasError(win.connection) != 0 {
 				return fmt.Errorf("linux: release selection: XCB connection failed")
 			}
@@ -115,7 +116,18 @@ func SetPrimaryText(value string) error {
 		return fmt.Errorf("linux: X server refused selection ownership")
 	}
 	win.selections.primary, win.selections.ownsPrimary = value, true
+	primaryOwner.Store(win)
 	return nil
+}
+
+func currentPrimaryOwner() *window {
+	if activeWindow.Load() == nil {
+		return nil
+	}
+	if win := primaryOwner.Load(); win != nil {
+		return win
+	}
+	return activeWindow.Load()
 }
 
 // PrimaryText is the PRIMARY selection's text, empty when nobody owns it.
@@ -123,9 +135,9 @@ func PrimaryText() (string, error) {
 	if hooks := shellHooks.Load(); hooks != nil {
 		return hooks.primaryText()
 	}
-	if win := activeWindow.Load(); win != nil {
+	if win := currentPrimaryOwner(); win != nil {
 		win.mu.Lock()
-		if activeWindow.Load() == win && win.connection != 0 && win.selections.ownsPrimary {
+		if win.connection != 0 && win.selections.ownsPrimary {
 			value := win.selections.primary
 			win.mu.Unlock()
 			return value, nil
@@ -310,9 +322,11 @@ func (win *window) handleSelectionClear(event *xcbSelectionClearEvent) {
 	case event.Selection == win.clipboardAtom && win.clipboardAtom != 0:
 		win.clipboard, win.clipboardHTML, win.clipboardFiles, win.clipboardImage = "", "", nil, nil
 		win.ownsClipboard = false
+		clipboardOwner.CompareAndSwap(win, nil)
 	case event.Selection == xcbAtomPrimary:
 		win.selections.primary = ""
 		win.selections.ownsPrimary = false
+		primaryOwner.CompareAndSwap(win, nil)
 	case event.Selection == win.xdnd.selection && win.xdnd.selection != 0:
 		// Another client took XdndSelection: this drag can deliver nothing.
 		win.cancelSourceDrag()

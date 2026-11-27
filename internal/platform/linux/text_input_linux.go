@@ -3,6 +3,7 @@
 package linux
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -485,8 +486,18 @@ func (state *linuxTextInput) key(event platform.KeyEvent) (platform.Frame, bool,
 	}
 	if action := platform.TextClipboardAction(event); action != 0 {
 		// A clipboard that cannot be read or written leaves the field as it is.
+		// When a text paste fails for a non-timeout reason (such as non-UTF-8
+		// bytes from a binary clipboard owner), still notify the field with
+		// TextPasteNoText so applications can inspect file or image targets.
 		clipboard, changed, err := platform.TextClipboardEvent(state.input.ClipboardState(action), state.input.Secure, action, ClipboardText, SetClipboardText)
-		if err != nil || !changed {
+		if err != nil {
+			if action == 'v' && !errors.Is(err, errSelectionTimeout) {
+				frame, textErr := state.textEvent(platform.TextEvent{Kind: platform.TextPasteNoText})
+				return frame, true, textErr
+			}
+			return platform.Frame{}, true, nil
+		}
+		if !changed {
 			return platform.Frame{}, true, nil
 		}
 		frame, err := state.textEvent(clipboard)

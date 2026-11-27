@@ -22,6 +22,7 @@ func TestFilesFromURIList(t *testing.T) {
 		{"other schemes are skipped", "http://example.com/a\nsmb://host/a\nfile:///tmp/b\n", []string{"/tmp/b"}},
 		{"a relative or empty path is skipped", "file:relative\nfile://\nfile:///tmp/b\n", []string{"/tmp/b"}},
 		{"a NUL cannot be part of a path", "file:///tmp/a%00b\nfile:///tmp/c\n", []string{"/tmp/c"}},
+		{"trailing NUL terminator is trimmed", "file:///tmp/a.png\r\n\x00", []string{"/tmp/a.png"}},
 		{"the word copy is an action only on the first line", "file:///tmp/a\ncopy\n", []string{"/tmp/a"}},
 		{"nothing", "", nil},
 	}

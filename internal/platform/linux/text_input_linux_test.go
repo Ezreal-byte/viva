@@ -3,6 +3,7 @@
 package linux
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -729,5 +730,51 @@ func TestLinuxCandidateWindowFollowsAlignmentWhenNativeOverlaysAreHidden(t *test
 				t.Fatalf("candidate x = %v, want inside the field and right of its left edge %v", x, inputState.X)
 			}
 		})
+	}
+}
+
+func TestLinuxTextInputPasteFallsBackToNoTextOnNonTimeoutError(t *testing.T) {
+	prevHooks := shellHooks.Load()
+	t.Cleanup(func() { shellHooks.Store(prevHooks) })
+
+	var events []platform.TextEvent
+	state := &linuxTextInput{config: &platform.Config{DynamicTextInput: true}, engine: fixedAdvanceEngine{advance: 10}}
+	inputState := platform.TextInput{
+		X: 10, Y: 20, Width: 120, Height: 30, FontSize: 16,
+		State: platform.TextState{Value: ""},
+		OnEvent: func(event platform.TextEvent) (platform.TextState, error) {
+			events = append(events, event)
+			return platform.TextState{}, nil
+		},
+	}
+	if _, _, err := state.prepare(platform.Frame{TextInput: platform.TextInputUpdate{Changed: true, Input: &inputState}}); err != nil {
+		t.Fatal(err)
+	}
+
+	pasteChord := platform.KeyEvent{Modifiers: input.ModifierControl, Text: "v"}
+
+	shellHooks.Store(&desktopHooks{
+		clipboardText: func() (string, error) {
+			return "", errors.New("linux: clipboard text is not valid UTF-8")
+		},
+	})
+	if _, handled, err := state.key(pasteChord); err != nil || !handled {
+		t.Fatalf("paste non-UTF-8: handled=%v err=%v", handled, err)
+	}
+	if len(events) != 1 || events[0].Kind != platform.TextPasteNoText {
+		t.Fatalf("non-timeout error events = %+v, want one TextPasteNoText", events)
+	}
+
+	events = nil
+	shellHooks.Store(&desktopHooks{
+		clipboardText: func() (string, error) {
+			return "", fmt.Errorf("linux: %w within 3s", errSelectionTimeout)
+		},
+	})
+	if _, handled, err := state.key(pasteChord); err != nil || !handled {
+		t.Fatalf("paste timeout: handled=%v err=%v", handled, err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("timeout error events = %+v, want none", events)
 	}
 }

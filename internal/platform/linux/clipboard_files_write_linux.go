@@ -70,5 +70,6 @@ func (win *window) claimClipboardLocked() error {
 	if owner != win.id {
 		return fmt.Errorf("linux: X server refused clipboard ownership")
 	}
+	clipboardOwner.Store(win)
 	return nil
 }

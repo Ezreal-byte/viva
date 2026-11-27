@@ -99,6 +99,126 @@ func TestClipboardInterruptedReplyRetainsDeadline(test *testing.T) {
 	}
 }
 
+func TestReadSelectionBytesAtForwardsTimestampAndHandlesNoneTargetRefusal(t *testing.T) {
+	refusal := xcbSelectionNotifyEvent{
+		ResponseType: xcbSelectionNotify,
+		Requestor:    2,
+		Selection:    3,
+		Target:       xcbAtomNone,
+		Property:     xcbAtomNone,
+	}
+	var gotTimestamp uint32
+	delivered := false
+	api := &xcbAPI{
+		convertSelection: func(_ uintptr, _, _, _, _, timestamp uint32) xcbVoidCookie {
+			gotTimestamp = timestamp
+			return xcbVoidCookie{}
+		},
+		flush:              func(uintptr) int32 { return 1 },
+		connectionHasError: func(uintptr) int32 { return 0 },
+		fileDescriptor:     func(uintptr) int32 { return 1 },
+		free:               func(unsafe.Pointer) {},
+		pollForEvent: func(uintptr) unsafe.Pointer {
+			if delivered {
+				return nil
+			}
+			delivered = true
+			return unsafe.Pointer(&refusal)
+		},
+		poll: func(*pollFD, uintptr, int32) int32 {
+			t.Fatal("wait polled after receiving a Target=None, Property=None refusal")
+			return 0
+		},
+	}
+	const dropTime uint32 = 98765
+	data, _, accepted, err := readSelectionBytesAt(api, 1, 2, 3, 4, 5, dropTime, 1024)
+	if err != nil || accepted || len(data) != 0 {
+		t.Fatalf("readSelectionBytesAt = (%q, accepted=%v, err=%v); want refusal without error", data, accepted, err)
+	}
+	if gotTimestamp != dropTime {
+		t.Fatalf("convertSelection timestamp = %d, want %d", gotTimestamp, dropTime)
+	}
+}
+
+func TestOwnedClipboardSurvivesActiveWindowChange(t *testing.T) {
+	prevActive := activeWindow.Load()
+	prevOwner := clipboardOwner.Load()
+	prevPrimary := primaryOwner.Load()
+	t.Cleanup(func() {
+		activeWindow.Store(prevActive)
+		clipboardOwner.Store(prevOwner)
+		primaryOwner.Store(prevPrimary)
+	})
+
+	const ownerID uint32 = 101
+	api := &xcbAPI{
+		atoms: map[string]uint32{
+			"CLIPBOARD":                   33,
+			"UTF8_STRING":                 34,
+			"TEXT":                        35,
+			"TARGETS":                     36,
+			"text/uri-list":               37,
+			"x-special/gnome-copied-files": 38,
+			"text/html":                   39,
+			"image/png":                   40,
+		},
+		setSelectionOwner:  func(uintptr, uint32, uint32, uint32) xcbVoidCookie { return xcbVoidCookie{} },
+		flush:              func(uintptr) int32 { return 1 },
+		connectionHasError: func(uintptr) int32 { return 0 },
+		getSelectionOwner:  func(uintptr, uint32) xcbSelectionOwnerCookie { return xcbSelectionOwnerCookie{} },
+		selectionOwnerReply: func(uintptr, xcbSelectionOwnerCookie, *unsafe.Pointer) *xcbSelectionOwnerReply {
+			return &xcbSelectionOwnerReply{Owner: ownerID}
+		},
+		free: func(unsafe.Pointer) {},
+	}
+	winA := &window{api: api, connection: 1, id: ownerID}
+	winB := &window{api: api, connection: 2, id: 202}
+
+	activeWindow.Store(winA)
+	if err := SetClipboardText("from-window-a"); err != nil {
+		t.Fatalf("SetClipboardText: %v", err)
+	}
+	if err := SetPrimaryText("primary-a"); err != nil {
+		t.Fatalf("SetPrimaryText: %v", err)
+	}
+	// Another window in the same process becomes active (for instance a
+	// notification or detached window receiving an X11 event).
+	activeWindow.Store(winB)
+
+	if !ownsClipboardText() {
+		t.Fatal("ownsClipboardText() = false after activeWindow moved to another window")
+	}
+	if got, err := ClipboardText(); err != nil || got != "from-window-a" {
+		t.Fatalf("ClipboardText() = (%q, %v); want (from-window-a, nil)", got, err)
+	}
+	if got, err := PrimaryText(); err != nil || got != "primary-a" {
+		t.Fatalf("PrimaryText() = (%q, %v); want (primary-a, nil)", got, err)
+	}
+
+	activeWindow.Store(winA)
+	wantFiles := []string{"/tmp/report.pdf"}
+	if err := SetClipboardFiles(wantFiles); err != nil {
+		t.Fatalf("SetClipboardFiles: %v", err)
+	}
+	activeWindow.Store(winB)
+	if got, err := ClipboardFiles(); err != nil || !reflect.DeepEqual(got, wantFiles) {
+		t.Fatalf("ClipboardFiles() = (%q, %v); want (%q, nil)", got, err, wantFiles)
+	}
+
+	activeWindow.Store(winA)
+	pngHeader := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}
+	if err := SetClipboardImage(pngHeader); err != nil {
+		t.Fatalf("SetClipboardImage: %v", err)
+	}
+	activeWindow.Store(winB)
+	if !HasClipboardImage() {
+		t.Fatal("HasClipboardImage() = false after activeWindow moved to another window")
+	}
+	if got, err := ClipboardImagePNG(); err != nil || !reflect.DeepEqual(got, pngHeader) {
+		t.Fatalf("ClipboardImagePNG() = (%x, %v); want (%x, nil)", got, err, pngHeader)
+	}
+}
+
 func TestClipboardHandoffWaitsOnlyJustAfterFocus(t *testing.T) {
 	win := &window{}
 	previous := activeWindow.Load()

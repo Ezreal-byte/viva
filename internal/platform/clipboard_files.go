@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"net/url"
@@ -27,7 +28,7 @@ const MaxClipboardFiles = 4096
 func FilesFromURIList(data []byte) []string {
 	var paths []string
 	first := true
-	for _, line := range strings.FieldsFunc(string(data), func(r rune) bool { return r == '\n' || r == '\r' }) {
+	for _, line := range strings.FieldsFunc(string(bytes.TrimRight(data, "\x00")), func(r rune) bool { return r == '\n' || r == '\r' }) {
 		line = strings.TrimSpace(line)
 		leading := first
 		first = false

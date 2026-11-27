@@ -140,7 +140,7 @@ func (device *vulkanDevice) createInstance(extensions []*byte) error {
 	switch status := device.api.createInstance(&instanceInfo, nil, &device.instance); status {
 	case vkSuccess:
 		return nil
-	case vkErrorIncompatibleDriver, vkErrorInitializationFailed:
+	case vkErrorIncompatibleDriver, vkErrorInitializationFailed, vkErrorExtensionNotPresent:
 		return noVulkan(fmt.Sprintf("Vulkan has no driver (result %d)", status), nil)
 	default:
 		return vkCheck(status, "create instance")
@@ -165,9 +165,14 @@ func (device *vulkanDevice) createLogical(extensions []*byte) error {
 	if len(extensions) > 0 {
 		deviceInfo.Extensions = uintptr(unsafe.Pointer(&extensions[0]))
 	}
-	if err := vkCheck(device.api.createDevice(device.physical, &deviceInfo, nil, &device.handle), "create device"); err != nil {
+	switch status := device.api.createDevice(device.physical, &deviceInfo, nil, &device.handle); status {
+	case vkSuccess:
+	case vkErrorIncompatibleDriver, vkErrorInitializationFailed, vkErrorExtensionNotPresent:
 		device.dualSource = false
-		return err
+		return noVulkan(fmt.Sprintf("Vulkan cannot present to the window system (result %d)", status), nil)
+	default:
+		device.dualSource = false
+		return vkCheck(status, "create device")
 	}
 	device.api.getDeviceQueue(device.handle, device.queueFamily, 0, &device.queue)
 	if device.queue == 0 {
